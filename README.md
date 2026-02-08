@@ -15,6 +15,16 @@ ShaderLab is a minimalist, high-performance toolkit for creating demoscene produ
 - **Tracker Interface**: Demoscene-inspired UI built with Dear ImGui
 - **Optimized Output**: Debug mode for editing, release mode for final demos
 
+### Editor UI Design
+
+The editor features a custom futuristic cyberpunk aesthetic:
+- **Custom Fonts**: Hacked (logo/headings), Orbitron (UI text), Erbos Draco (numbers)
+- **Color Scheme**: Dark blue-black backgrounds with bright cyan/teal accents
+- **Sharp Geometry**: Angular, industrial design with no rounded corners
+- **High Contrast**: Optimized for extended coding sessions in dark environments
+
+*Note: Custom fonts are editor-only and not included in runtime builds.*
+
 ## Technology Stack
 
 - **Language**: C++20
