@@ -200,6 +200,35 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
+    // Load custom fonts for editor
+    // Path to fonts relative to executable (in editor_assets/fonts/)
+    std::string fontPath = m_appRoot + "/editor_assets/fonts/";
+    
+    // Hacked font for logo (large)
+    m_fontHackedLogo = io.Fonts->AddFontFromFileTTF((fontPath + "Hacked-KerX.ttf").c_str(), 48.0f);
+    if (!m_fontHackedLogo) {
+        // Fallback to default if font doesn't load
+        m_fontHackedLogo = io.Fonts->AddFontDefault();
+    }
+    
+    // Hacked font for headings (medium)
+    m_fontHackedHeading = io.Fonts->AddFontFromFileTTF((fontPath + "Hacked-KerX.ttf").c_str(), 20.0f);
+    if (!m_fontHackedHeading) {
+        m_fontHackedHeading = io.Fonts->AddFontDefault();
+    }
+    
+    // Orbitron for regular text
+    m_fontOrbitronText = io.Fonts->AddFontFromFileTTF((fontPath + "OrbitronMedium-Bz9B.ttf").c_str(), 15.0f);
+    if (!m_fontOrbitronText) {
+        m_fontOrbitronText = io.Fonts->AddFontDefault();
+    }
+    
+    // Erbos Draco for numerical fields
+    m_fontErbosDracoNumbers = io.Fonts->AddFontFromFileTTF((fontPath + "ErbosDraco1StNbpRegular-99V5.ttf").c_str(), 14.0f);
+    if (!m_fontErbosDracoNumbers) {
+        m_fontErbosDracoNumbers = io.Fonts->AddFontDefault();
+    }
+
     // Build font atlas
     unsigned char* pixels;
     int width, height;
@@ -672,6 +701,16 @@ void UISystem::BeginFrame() {
 
 void UISystem::ShowMainMenuBar() {
     if (ImGui::BeginMenuBar()) {
+        // ShaderLab logo in top left using Hacked font
+        if (m_fontHackedHeading) {
+            ImGui::PushFont(m_fontHackedHeading);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.90f, 0.90f, 1.0f)); // Bright cyan
+            ImGui::Text("SHADERLAB");
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::Separator();
+        }
+        
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New")) {
                 m_scenes.clear();
