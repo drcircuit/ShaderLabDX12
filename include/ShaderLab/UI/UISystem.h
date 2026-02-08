@@ -15,6 +15,7 @@
 using Microsoft::WRL::ComPtr;
 
 struct ImGuiContext;
+struct ImFont;
 
 namespace ShaderLab {
 
@@ -153,6 +154,12 @@ private:
     ComPtr<ID3D12DescriptorHeap> m_srvHeap;
     ImGuiContext* m_context = nullptr;
     bool m_initialized = false;
+    
+    // Custom fonts for editor
+    ImFont* m_fontHackedLogo = nullptr;      // Large logo font
+    ImFont* m_fontHackedHeading = nullptr;   // Heading font
+    ImFont* m_fontOrbitronText = nullptr;    // Regular UI text
+    ImFont* m_fontErbosDracoNumbers = nullptr; // Numerical fields
     
     UIMode m_currentMode = UIMode::Demo;
     UIMode m_lastMode = UIMode::Demo;
