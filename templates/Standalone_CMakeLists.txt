@@ -1,0 +1,118 @@
+cmake_minimum_required(VERSION 3.20)
+project(ShaderLabPlayer VERSION 1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Platform check
+if(NOT WIN32)
+    message(FATAL_ERROR "ShaderLab currently supports Windows only")
+endif()
+
+option(SHADERLAB_ENABLE_DXC "Enable DXC shader compiler (requires dxcompiler.dll)" ON)
+option(SHADERLAB_STATIC_RUNTIME "Link MSVC runtime statically" OFF)
+
+if(MSVC AND SHADERLAB_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# Third-party dependencies
+add_subdirectory(third_party)
+
+# Core modules
+add_library(ShaderLabCore STATIC
+    src/graphics/Device.cpp
+    src/graphics/Swapchain.cpp
+    src/graphics/CommandQueue.cpp
+    src/graphics/PreviewRenderer.cpp
+    src/shader/ShaderCompiler.cpp
+    src/audio/AudioSystem.cpp
+    src/audio/BeatClock.cpp
+    src/ui/UISystem.cpp
+    src/core/Serializer.cpp
+    src/core/PackageManager.cpp
+    include/ShaderLab/Graphics/Device.h
+    include/ShaderLab/Graphics/Swapchain.h
+    include/ShaderLab/Graphics/CommandQueue.h
+    include/ShaderLab/Graphics/PreviewRenderer.h
+    include/ShaderLab/Shader/ShaderCompiler.h
+    include/ShaderLab/Audio/AudioSystem.h
+    include/ShaderLab/Audio/BeatClock.h
+    include/ShaderLab/UI/UISystem.h
+    include/ShaderLab/Core/Serializer.h
+    include/ShaderLab/Core/PackageManager.h
+    include/ShaderLab/Core/ShaderLabData.h
+    third_party/ImGuiColorTextEdit/TextEditor.cpp
+    third_party/ImGuiColorTextEdit/TextEditor.h
+)
+
+target_include_directories(ShaderLabCore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ImGuiColorTextEdit
+)
+
+# Link D3D12 and related Windows libraries
+target_link_libraries(ShaderLabCore PUBLIC
+    d3d12.lib
+    dxgi.lib
+    dxguid.lib
+    d3dcompiler.lib
+)
+
+if(SHADERLAB_ENABLE_DXC)
+    target_link_libraries(ShaderLabCore PUBLIC dxcompiler.lib)
+endif()
+
+# ImGui integration
+target_link_libraries(ShaderLabCore PUBLIC imgui)
+
+# Compiler flags
+if(MSVC)
+    target_compile_options(ShaderLabCore PRIVATE
+        /W4           # Warning level 4
+        /WX-          # Don't treat warnings as errors (for now)
+        /permissive-  # Standards conformance
+        /Zc:__cplusplus
+    )
+
+    if(SHADERLAB_ENABLE_DXC)
+        target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_ENABLE_DXC=1)
+    else()
+        target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_ENABLE_DXC=0)
+    endif()
+    
+    # Force Release optimization usage even in RelWithDebInfo if desired, 
+    # but sticking to defaults is safer.
+    target_compile_options(ShaderLabCore PRIVATE /O2 /GL)
+endif()
+
+# Player Executable
+add_executable(ShaderLabPlayer WIN32
+    src/app/runtime/main_player.cpp
+    src/app/runtime/DemoPlayer.cpp
+    include/ShaderLab/App/DemoPlayer.h
+)
+
+target_link_libraries(ShaderLabPlayer PRIVATE ShaderLabCore)
+
+target_include_directories(ShaderLabPlayer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+if(SHADERLAB_ENABLE_DXC)
+    # Copy DXC DLLs to output directory
+    # We assume the Distributor has placed the DLLs in the parent directory of this script (the app root)
+    add_custom_command(TARGET ShaderLabPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/../dxcompiler.dll"
+            $<TARGET_FILE_DIR:ShaderLabPlayer>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/../dxil.dll"
+            $<TARGET_FILE_DIR:ShaderLabPlayer>
+    )
+endif()

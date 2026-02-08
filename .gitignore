@@ -1,0 +1,58 @@
+# Build directories
+build/
+build_*/
+build-*/
+out/
+bin/
+lib/
+cmake-build-*/
+
+# IDE files
+.vs/
+.idea/
+.cache/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+*.filters
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.obj
+*.exp
+*.pdb
+*.ilk
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Shader compilation artifacts
+*.spv
+*.dxil
+*.cso
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Third-party (except for header-only or small libs)
+third_party/*
+!third_party/.gitkeep
+!third_party/README.md
+
+# Temporary files
+*.tmp
+*.bak
+*~
