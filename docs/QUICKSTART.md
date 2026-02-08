@@ -13,7 +13,7 @@ Before you begin:
 ## Step 1: Clone the Repository
 
 ```cmd
-git clone https://github.com/yourusername/ShaderLab.git
+git clone https://github.com/drcircuit/ShaderLabDX12.git
 cd ShaderLab
 ```
 
@@ -40,13 +40,16 @@ third_party/
     └── stb_image.h
 ```
 
-See [BUILD.md](docs/BUILD.md) for detailed dependency setup.
+See [BUILD.md](BUILD.md) and [third_party/README.md](../third_party/README.md) for detailed dependency setup.
 
 ## Step 3: Build
 
-Open "x64 Native Tools Command Prompt for VS 2022":
+Open "x64 Native Tools Command Prompt for VS 2022" or use PowerShell and load the toolchain:
 
-```cmd
+```powershell
+# If you are not in the VS Developer Prompt
+.\tools\dev_env.ps1
+
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ```
@@ -56,6 +59,8 @@ cmake --build build
 ```cmd
 build\bin\ShaderLabEditor.exe
 ```
+
+Run the editor from the repository root so it can find creative assets.
 
 The editor window will open with three main panels:
 - **Demo View**: Timeline and playback controls
@@ -135,10 +140,10 @@ uv.x *= width / height;
 
 ## Next Steps
 
-- Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) to understand the codebase
+- Read [ARCHITECTURE.md](ARCHITECTURE.md) to understand the codebase
 - Explore shader examples in `creative/shaders/`
 - Join the community and share your creations
-- Check [CONTRIBUTING.md](docs/CONTRIBUTING.md) to contribute
+- Check [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
 
 ## Troubleshooting
 
@@ -176,6 +181,6 @@ uv.x *= width / height;
 
 ---
 
-**Welcome to ShaderLab!** Let's make some awesome demos. 🎨🎵
+**Welcome to ShaderLab!** Let's make some awesome demos.
 
-For detailed build instructions, see [BUILD.md](docs/BUILD.md)
+For detailed build instructions, see [BUILD.md](BUILD.md)

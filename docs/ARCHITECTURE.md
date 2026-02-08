@@ -59,6 +59,14 @@ Design decisions:
 - No mixing or effects (keep it simple)
 - High-precision timing for beat synchronization
 
+### Core Module (`src/core/`)
+
+Project data and export services:
+
+- **Serializer**: Project load/save and package metadata
+- **BuildPipeline**: Self-contained build pipeline support
+- **RuntimeExporter**: Helpers for exporting runtime binaries
+
 ### UI Module (`src/ui/`)
 
 Dear ImGui-based interface with demoscene aesthetic:

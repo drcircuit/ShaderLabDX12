@@ -75,6 +75,7 @@ Closes #42
 
 - Test on your hardware before submitting
 - Verify in both Debug and Release configurations
+- If you are not using the VS Developer Console, run `.\tools\dev_env.ps1` first
 - Check for memory leaks (use debug tools if available)
 - Ensure backward compatibility with existing projects
 
@@ -83,6 +84,7 @@ Closes #42
 - Update README.md if adding major features
 - Add comments for complex algorithms
 - Update ARCHITECTURE.md for structural changes
+- Update BUILD.md or STRUCTURE.md when build steps or layout change
 - Include example shaders if adding rendering features
 
 ## Contribution Areas

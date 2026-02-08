@@ -91,4 +91,5 @@ if (Import-VcvarsEnv -VcvarsPath $vcvars) {
 }
 
 Add-PathEntriesFromCfg -PathFile $ConfigPath
+$env:SHADERLAB_CRINKLER = "C:\tools\crinkler23\Win64"
 Write-Host "Done." -ForegroundColor Cyan

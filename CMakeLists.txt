@@ -15,6 +15,8 @@ option(SHADERLAB_BUILD_EDITOR "Build the editor application" ON)
 option(SHADERLAB_BUILD_RUNTIME "Build the standalone runtime" ON)
 option(SHADERLAB_ENABLE_DXC "Enable DXC shader compiler (requires dxcompiler.dll)" ON)
 option(SHADERLAB_STATIC_RUNTIME "Link MSVC runtime statically" OFF)
+option(SHADERLAB_USE_CRINKLER "Use Crinkler as the linker (self-contained builds)" OFF)
+set(CRINKLER_PATH "" CACHE FILEPATH "Path to crinkler.exe")
 
 # Platform check
 if(NOT WIN32)
@@ -23,6 +25,16 @@ endif()
 
 if(MSVC AND SHADERLAB_STATIC_RUNTIME)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+if(MSVC AND SHADERLAB_USE_CRINKLER)
+    if(CRINKLER_PATH)
+        if(EXISTS "${CRINKLER_PATH}")
+            set(CMAKE_LINKER "${CRINKLER_PATH}" CACHE FILEPATH "Crinkler linker" FORCE)
+        else()
+            message(WARNING "CRINKLER_PATH does not exist: ${CRINKLER_PATH}")
+        endif()
+    endif()
 endif()
 
 # Third-party dependencies
@@ -109,10 +121,10 @@ if(MSVC)
             SHADERLAB_VALIDATION=1
         )
     else()
-        target_compile_options(ShaderLabCore PRIVATE
-            /O2       # Optimize for speed
-            /GL       # Whole program optimization
-        )
+        target_compile_options(ShaderLabCore PRIVATE /O2)
+        if(NOT SHADERLAB_USE_CRINKLER)
+            target_compile_options(ShaderLabCore PRIVATE /GL) # Whole program optimization
+        endif()
     endif()
 endif()
 

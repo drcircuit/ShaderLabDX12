@@ -58,6 +58,8 @@ ShaderLab/
 │   ├── ARCHITECTURE.md            # System architecture overview
 │   ├── BUILD.md                   # Build instructions
 │   ├── QUICKSTART.md              # Quick start guide
+│   ├── STRUCTURE.md               # Project structure guide
+│   ├── feature_time_offset.md     # Feature notes
 │   └── CONTRIBUTING.md            # Contribution guidelines
 │
 ├── third_party/                   # External dependencies
@@ -68,11 +70,15 @@ ShaderLab/
 │   ├── CMakeLists.txt             # Third-party build config
 │   └── README.md                  # Dependency instructions
 │
-├── tools/                         # Build and utility scripts (future)
+├── tools/                         # Build and utility scripts
 │
 ├── build/                         # Build output (gitignored)
 │   ├── bin/                       # Compiled executables
 │   └── lib/                       # Static libraries
+├── build_player/                  # Runtime-only build output (gitignored)
+├── build_selfcontained/           # Self-contained build output (gitignored)
+├── build_selfcontained_ninja/     # Ninja self-contained build output (gitignored)
+├── build_selfcontained_pack/      # Packaged assets output (gitignored)
 │
 ├── CMakeLists.txt                 # Top-level CMake configuration
 ├── .gitignore                     # Git ignore rules

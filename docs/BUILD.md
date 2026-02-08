@@ -87,7 +87,10 @@ third_party/stb/
 
 ### Option 1: Command Line Build
 
-1. Open "x64 Native Tools Command Prompt for VS 2022"
+1. Open "x64 Native Tools Command Prompt for VS 2022", or use PowerShell and load the toolchain:
+   ```powershell
+   .\tools\dev_env.ps1
+   ```
 
 2. Navigate to the ShaderLab directory:
    ```cmd
@@ -109,7 +112,7 @@ third_party/stb/
    cmake --build build
    ```
 
-5. Run the editor:
+5. Run the editor from the repository root:
    ```cmd
    build\bin\ShaderLabEditor.exe
    ```

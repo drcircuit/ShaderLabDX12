@@ -53,6 +53,30 @@ bool FindOnPath(const std::string& exeName) {
     return false;
 }
 
+bool FindOnPathFull(const std::string& exeName, std::string& outPath) {
+    DWORD size = GetEnvironmentVariableA("PATH", nullptr, 0);
+    if (size == 0) return false;
+    std::string buffer(size, '\0');
+    GetEnvironmentVariableA("PATH", buffer.data(), size);
+
+    size_t start = 0;
+    while (start < buffer.size()) {
+        size_t end = buffer.find(';', start);
+        if (end == std::string::npos) end = buffer.size();
+        std::string dir = buffer.substr(start, end - start);
+        dir = TrimString(dir);
+        if (!dir.empty()) {
+            fs::path candidate = fs::path(dir) / exeName;
+            if (FileExists(candidate)) {
+                outPath = candidate.string();
+                return true;
+            }
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
 bool FindVcVars(std::string& outPath) {
     const char* knownPaths[] = {
         "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
@@ -95,6 +119,22 @@ bool FindVcVars(std::string& outPath) {
     return false;
 }
 
+bool HasMsvcToolsetPrefix(const fs::path& vcvarsPath, const std::string& prefix) {
+    std::error_code ec;
+    fs::path vcDir = vcvarsPath.parent_path().parent_path().parent_path();
+    fs::path toolsDir = vcDir / "Tools" / "MSVC";
+    if (!fs::exists(toolsDir, ec) || ec) return false;
+
+    for (const auto& entry : fs::directory_iterator(toolsDir, ec)) {
+        if (ec || !entry.is_directory()) continue;
+        std::string name = entry.path().filename().string();
+        if (name.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool HasWindowsSdk(std::string& outPath) {
     fs::path base = "C:\\Program Files (x86)\\Windows Kits\\10\\Include";
     if (!FileExists(base)) return false;
@@ -111,11 +151,34 @@ bool HasWindowsSdk(std::string& outPath) {
     return false;
 }
 
-bool HasCrinkler(std::string& outPath) {
-    if (FindOnPath("crinkler.exe")) {
-        outPath = "PATH";
-        return true;
-    }
+bool ResolveCrinklerPath(std::string& outPath) {
+    auto envToPath = [&](const char* varName) -> bool {
+        char buffer[MAX_PATH] = {};
+        DWORD len = GetEnvironmentVariableA(varName, buffer, MAX_PATH);
+        if (len == 0 || len >= MAX_PATH) return false;
+        std::string value = TrimString(buffer);
+        if (value.empty()) return false;
+
+        fs::path candidate(value);
+        std::error_code ec;
+        if (fs::is_directory(candidate, ec) && !ec) {
+            fs::path exePath = candidate / "crinkler.exe";
+            if (FileExists(exePath)) {
+                outPath = exePath.string();
+                return true;
+            }
+        } else if (FileExists(candidate)) {
+            outPath = candidate.string();
+            return true;
+        }
+        return false;
+    };
+
+    if (envToPath("SHADERLAB_CRINKLER")) return true;
+    if (envToPath("CRINKLER_PATH")) return true;
+
+    if (FindOnPathFull("crinkler.exe", outPath)) return true;
+
     const char* knownPaths[] = {
         "C:\\Program Files\\Crinkler\\crinkler.exe",
         "C:\\Program Files (x86)\\Crinkler\\crinkler.exe"
@@ -377,8 +440,9 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot) {
     }
 
     std::string crinklerPath;
-    if (!HasCrinkler(crinklerPath)) {
+    if (!ResolveCrinklerPath(crinklerPath)) {
         optionalMissing.push_back("Crinkler (optional, for size-optimized builds)");
+        guidance.push_back("Set SHADERLAB_CRINKLER or CRINKLER_PATH to the Crinkler folder or crinkler.exe.");
     }
 
     std::ostringstream message;
@@ -403,6 +467,12 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot) {
         message << "Optional tools not found:\n";
         for (const auto& item : optionalMissing) {
             message << " - " << item << "\n";
+        }
+        if (!guidance.empty()) {
+            message << "\nSetup guidance:\n";
+            for (const auto& item : guidance) {
+                message << " - " << item << "\n";
+            }
         }
         message << "\nYou can still build, but output may be larger.";
         return { true, message.str() };
@@ -438,6 +508,15 @@ BuildResult BuildPipeline::BuildSelfContained(
     }
 
     const bool hasNinja = FindOnPath("ninja.exe");
+    std::string crinklerPath;
+    const bool hasCrinkler = ResolveCrinklerPath(crinklerPath);
+    const bool useCrinkler = hasNinja && hasCrinkler;
+
+    if (useCrinkler) {
+        log("Crinkler: enabled (" + crinklerPath + ")");
+    } else if (hasCrinkler && !hasNinja) {
+        log("Crinkler detected but Ninja not found; skipping Crinkler.");
+    }
     fs::path buildDir = hasNinja
         ? (fs::path(request.appRoot) / "build_selfcontained_ninja")
         : (fs::path(request.appRoot) / "build_selfcontained_vs2022");
@@ -450,13 +529,29 @@ BuildResult BuildPipeline::BuildSelfContained(
     cmd += " -DSHADERLAB_BUILD_RUNTIME=ON -DSHADERLAB_BUILD_EDITOR=OFF";
     cmd += " -DSHADERLAB_ENABLE_DXC=OFF -DSHADERLAB_STATIC_RUNTIME=ON";
 
+    if (useCrinkler) {
+        std::string crinklerArg = crinklerPath;
+        std::replace(crinklerArg.begin(), crinklerArg.end(), '\\', '/');
+        cmd += " -DSHADERLAB_USE_CRINKLER=ON";
+        cmd += " -DCRINKLER_PATH=\"" + crinklerArg + "\"";
+        cmd += " -DCMAKE_LINKER=\"" + crinklerArg + "\"";
+    }
+
     std::string vcvars;
     if (!FindVcVars(vcvars)) {
         log("Error: vcvars64.bat not found. Install Visual Studio Build Tools 2022.");
         return result;
     }
 
-    std::string cmdWithEnv = "call \"" + vcvars + "\" >nul && " + cmd;
+    std::string vcvarsArgs;
+    if (useCrinkler && HasMsvcToolsetPrefix(vcvars, "14.29")) {
+        vcvarsArgs = " -vcvars_ver=14.29";
+        log("Crinkler: using MSVC v142 toolset (14.29)");
+    } else if (useCrinkler) {
+        log("Crinkler: MSVC v142 toolset not found; using default toolset");
+    }
+
+    std::string cmdWithEnv = "call \"" + vcvars + "\"" + vcvarsArgs + " >nul && " + cmd;
 
     log("----------------------------------------");
     log("Step 1: Configuring CMake");
@@ -470,13 +565,13 @@ BuildResult BuildPipeline::BuildSelfContained(
     log("----------------------------------------");
     log("Step 2: Building Player Target");
     std::string buildCmd = "cmake --build \"" + buildDir.string() + "\" --target ShaderLabPlayer --config Release";
-    std::string buildCmdWithEnv = "call \"" + vcvars + "\" >nul && " + buildCmd;
+    std::string buildCmdWithEnv = "call \"" + vcvars + "\"" + vcvarsArgs + " >nul && " + buildCmd;
     log("Command: " + buildCmdWithEnv);
 
     if (!RunCommand(buildCmdWithEnv, log)) {
         log("Build Failed. Trying Debug Configuration...");
         buildCmd = "cmake --build \"" + buildDir.string() + "\" --target ShaderLabPlayer --config Debug";
-        buildCmdWithEnv = "call \"" + vcvars + "\" >nul && " + buildCmd;
+        buildCmdWithEnv = "call \"" + vcvars + "\"" + vcvarsArgs + " >nul && " + buildCmd;
         if (!RunCommand(buildCmdWithEnv, log)) {
             log("Build Failed.");
             return result;

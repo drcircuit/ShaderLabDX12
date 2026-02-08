@@ -22,7 +22,7 @@ ShaderLab is a minimalist, high-performance toolkit for creating demoscene produ
 - **Shaders**: HLSL 6.x with DXC compiler
 - **UI**: Dear ImGui
 - **Audio**: miniaudio
-- **Build**: CMake 3.20+ with Ninja
+- **Build**: CMake 3.20+ (Ninja optional)
 - **JSON**: nlohmann/json
 - **Image Loading**: stb_image
 
@@ -85,10 +85,13 @@ tools/          - Build and utility scripts
 
 ### Build Instructions
 
-```bash
+```powershell
 # Clone the repository
-git clone https://github.com/yourusername/ShaderLab.git
+git clone https://github.com/drcircuit/ShaderLabDX12.git
 cd ShaderLab
+
+# Open a VS Developer PowerShell or load the toolchain
+.\tools\dev_env.ps1
 
 # Configure with CMake
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -96,9 +99,11 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 # Build
 cmake --build build
 
-# Run the editor
-build/ShaderLabEditor.exe
+# Run the editor from the repository root
+build\bin\ShaderLabEditor.exe
 ```
+
+Third-party dependencies are listed in [third_party/README.md](third_party/README.md).
 
 ### Build Configurations
 
@@ -107,7 +112,7 @@ build/ShaderLabEditor.exe
 
 ## Usage
 
-1. **Launch Editor**: Run `ShaderLabEditor.exe`
+1. **Launch Editor**: Run `build\bin\ShaderLabEditor.exe` from the repo root
 2. **Load Audio**: Import a music track (WAV, MP3, OGG)
 3. **Set BPM**: Configure tempo for beat synchronization
 4. **Create Effect**: Write HLSL pixel shaders in the Effect View
@@ -178,8 +183,8 @@ Inspired by:
 
 ## Contact
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ShaderLab/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ShaderLab/discussions)
+- **Issues**: [GitHub Issues](https://github.com/drcircuit/ShaderLabDX12/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/drcircuit/ShaderLabDX12/discussions)
 - **Commercial Licensing**: Open an issue with tag [commercial-license]
 
 ---
