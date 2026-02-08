@@ -22,16 +22,18 @@ std::wstring ToWide(const std::string& value) {
         return std::wstring();
     }
 
-    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), (int)value.size(), nullptr, 0);
+    UINT codePage = CP_UTF8;
+    int size = MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS, value.data(), (int)value.size(), nullptr, 0);
     if (size == 0) {
-        size = MultiByteToWideChar(CP_ACP, 0, value.data(), (int)value.size(), nullptr, 0);
+        codePage = CP_ACP;
+        size = MultiByteToWideChar(codePage, 0, value.data(), (int)value.size(), nullptr, 0);
     }
     if (size == 0) {
         return std::wstring();
     }
 
     std::wstring wide(size, L'\0');
-    MultiByteToWideChar(size == 0 ? CP_ACP : CP_UTF8, 0, value.data(), (int)value.size(), wide.data(), size);
+    MultiByteToWideChar(codePage, 0, value.data(), (int)value.size(), wide.data(), size);
     return wide;
 }
 }
@@ -44,7 +46,7 @@ bool EditorApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
     m_height = height;
     m_hwnd = hwnd;
     
-    SetWindowTextW(m_hwnd, L"ShaderLab - untitled");
+    SetWindowTextW(m_hwnd, L"DrCiRCUiT's ShaderLab - For democoders, by a democoder - untitled");
 
     // Initialize graphics
     m_device = std::make_unique<Device>();
@@ -247,6 +249,10 @@ void EditorApp::OnResize(uint32_t width, uint32_t height) {
 
 
 LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_SETTEXT || msg == WM_GETTEXT || msg == WM_GETTEXTLENGTH) {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
     bool handled = false;
     switch (msg) {
         case WM_ACTIVATEAPP:
@@ -284,7 +290,7 @@ LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
 
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 void EditorApp::RequestRestart(int adapterIndex) {
@@ -325,10 +331,47 @@ void EditorApp::UpdateWindowTitle() {
     }
 
     std::string projectName = m_ui->GetProjectName();
-    std::string title = "ShaderLab - " + projectName;
-    std::wstring wtitle = ToWide(title);
+    std::string title = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
+    size_t titleNullPos = title.find('\0');
+    size_t projectNullPos = projectName.find('\0');
+    std::wstring wtitle(title.begin(), title.end());
+    if (wtitle.empty()) {
+        return;
+    }
     if (wtitle != m_lastWindowTitle) {
-        SetWindowTextW(m_hwnd, wtitle.c_str());
+        SetLastError(0);
+        BOOL okW = SetWindowTextW(m_hwnd, wtitle.c_str());
+        DWORD errW = GetLastError();
+
+        SetLastError(0);
+        BOOL okA = SetWindowTextA(m_hwnd, title.c_str());
+        DWORD errA = GetLastError();
+        int length = GetWindowTextLengthW(m_hwnd);
+        std::wstring readback;
+        if (length > 0) {
+            readback.resize(static_cast<size_t>(length));
+            int readLen = GetWindowTextW(m_hwnd, readback.data(), length + 1);
+            if (readLen >= 0 && readLen < length) {
+                readback.resize(static_cast<size_t>(readLen));
+            }
+        }
+
+        if (length <= 1) {
+            SetWindowTextW(m_hwnd, wtitle.c_str());
+            SetWindowTextA(m_hwnd, title.c_str());
+        }
+
+        FILE* f = nullptr;
+        fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+        if (f) {
+            fprintf(f, "Requested title len=%zu nullPos=%zu projectLen=%zu projectNull=%zu\n",
+                title.size(), titleNullPos, projectName.size(), projectNullPos);
+            fprintf(f, "Requested title str='%s'\n", title.c_str());
+            fprintf(f, "SetWindowTextW ok=%d err=%lu SetWindowTextA ok=%d err=%lu\n",
+                okW ? 1 : 0, errW, okA ? 1 : 0, errA);
+            fwprintf(f, L"Window title set -> len=%d readback='%s'\n", length, readback.c_str());
+            fclose(f);
+        }
         m_lastWindowTitle = wtitle;
     }
 }

@@ -124,7 +124,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     DWORD style = WS_POPUP | WS_VISIBLE; // Fullscreen style
     
     HWND hwnd = CreateWindowEx(
-        0, CLASS_NAME, "ShaderLab Demo",
+        0, CLASS_NAME, "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo",
         style, 
         0, 0, width, height,
         nullptr, nullptr, hInstance, nullptr
@@ -160,6 +160,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     if (!std::filesystem::exists(jsonPath)) {
         jsonPath = exeP.parent_path() / "project.json";
     }
+
+    std::string projectName = jsonPath.stem().string();
+    if (projectName.empty()) {
+        projectName = "demo";
+    }
+    std::string title = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
+    SetWindowTextA(hwnd, title.c_str());
 
     std::cout << "Expected disk project path: " << jsonPath << std::endl;
     std::cout << "Loading project: " << jsonPath << std::endl;
