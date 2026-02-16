@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "ShaderLab/UI/UISystem.h"
+#include "ShaderLab/UI/UIConfig.h"
 #include "ShaderLab/UI/UISystemDemoUtils.h"
 #include "ShaderLab/Graphics/Device.h"
 #include "ShaderLab/Graphics/Swapchain.h"
@@ -26,6 +27,7 @@
 #include "ShaderLab/Core/BuildPipeline.h"
 #include "ShaderLab/Core/RuntimeExporter.h"
 #include "ShaderLab/Core/Serializer.h"
+#include <nlohmann/json.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -41,6 +43,24 @@
 namespace ShaderLab {
 
 namespace fs = std::filesystem;
+using json = nlohmann::json;
+
+namespace {
+fs::path GetGlobalSnippetPath(const std::string& appRoot) {
+    fs::path baseDir;
+    char* appData = nullptr;
+    size_t appDataLen = 0;
+    if (_dupenv_s(&appData, &appDataLen, "APPDATA") == 0 && appData && *appData) {
+        baseDir = fs::path(appData) / "ShaderLab";
+    } else {
+        baseDir = fs::path(appRoot) / ".shaderlab";
+    }
+    if (appData) {
+        free(appData);
+    }
+    return baseDir / "snippets.json";
+}
+}
 
 UISystem::UISystem() {
     // Store application root (assumed CWD at launch)
@@ -129,6 +149,8 @@ UISystem::UISystem() {
     m_textEditor.SetPalette(palette);
 
     m_textEditor.SetShowWhitespaces(false);
+
+    LoadGlobalSnippets();
 }
 
 std::string UISystem::GetProjectName() const {
@@ -191,6 +213,8 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
         return false;
     }
 
+    m_hwnd = hwnd;
+
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     m_context = ImGui::CreateContext();
@@ -205,28 +229,43 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     std::string fontPath = m_appRoot + "/editor_assets/fonts/";
     
     // Hacked font for logo (large)
-    m_fontHackedLogo = io.Fonts->AddFontFromFileTTF((fontPath + "Hacked-KerX.ttf").c_str(), 48.0f);
+    m_fontHackedLogo = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileHacked).c_str(), UIConfig::FontLogo);
     if (!m_fontHackedLogo) {
         // Fallback to default if font doesn't load
         m_fontHackedLogo = io.Fonts->AddFontDefault();
     }
     
     // Hacked font for headings (medium)
-    m_fontHackedHeading = io.Fonts->AddFontFromFileTTF((fontPath + "Hacked-KerX.ttf").c_str(), 20.0f);
+    m_fontHackedHeading = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileHacked).c_str(), UIConfig::FontHeading);
     if (!m_fontHackedHeading) {
         m_fontHackedHeading = io.Fonts->AddFontDefault();
     }
     
     // Orbitron for regular text
-    m_fontOrbitronText = io.Fonts->AddFontFromFileTTF((fontPath + "OrbitronMedium-Bz9B.ttf").c_str(), 15.0f);
+    m_fontOrbitronText = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileOrbitron).c_str(), UIConfig::FontText);
     if (!m_fontOrbitronText) {
         m_fontOrbitronText = io.Fonts->AddFontDefault();
     }
     
     // Erbos Draco for numerical fields
-    m_fontErbosDracoNumbers = io.Fonts->AddFontFromFileTTF((fontPath + "ErbosDraco1StNbpRegular-99V5.ttf").c_str(), 14.0f);
+    m_fontErbosDracoNumbers = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileErbosOpen).c_str(), UIConfig::FontNumeric);
     if (!m_fontErbosDracoNumbers) {
         m_fontErbosDracoNumbers = io.Fonts->AddFontDefault();
+    }
+
+    // Orbitron for menu (smaller)
+    m_fontMenuSmall = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileOrbitron).c_str(), UIConfig::FontMenu);
+    if (!m_fontMenuSmall) {
+        m_fontMenuSmall = io.Fonts->AddFontDefault();
+    }
+
+    m_fontCode = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileCode).c_str(), UIConfig::FontCode);
+    if (!m_fontCode) {
+        m_fontCode = io.Fonts->AddFontDefault();
+    }
+    m_fontCodeItalic = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileCodeItalic).c_str(), UIConfig::FontCode);
+    if (!m_fontCodeItalic) {
+        m_fontCodeItalic = m_fontCode;
     }
 
     // Build font atlas
@@ -238,6 +277,8 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     if (m_fontOrbitronText) {
         io.FontDefault = m_fontOrbitronText;
     }
+
+    m_textEditor.SetCommentFont(m_fontCodeItalic, UIConfig::FontCode);
 
     // Setup style
     SetupImGuiStyle();
@@ -486,77 +527,121 @@ void UISystem::SetupImGuiStyle() {
     // Demoscene / Cyberpunk Palette - Enhanced futuristic cyan/teal theme
     // Deep blacks, dark grays, and electric cyan accents
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text] = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);          // Slight cyan tint
-    colors[ImGuiCol_TextDisabled] = ImVec4(0.40f, 0.45f, 0.45f, 1.00f);
-    colors[ImGuiCol_WindowBg] = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);      // Very dark blue-black
-    colors[ImGuiCol_ChildBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_PopupBg] = ImVec4(0.04f, 0.06f, 0.08f, 0.95f);
-    colors[ImGuiCol_Border] = ImVec4(0.00f, 0.40f, 0.45f, 0.60f);       // Cyan border
-    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_Text] = UIConfig::ColorText;
+    colors[ImGuiCol_TextDisabled] = UIConfig::ColorTextDisabled;
+    colors[ImGuiCol_WindowBg] = UIConfig::ColorWindowBg;
+    colors[ImGuiCol_ChildBg] = UIConfig::ColorChildBg;
+    colors[ImGuiCol_PopupBg] = UIConfig::ColorPopupBg;
+    colors[ImGuiCol_Border] = UIConfig::ColorBorder;
+    colors[ImGuiCol_BorderShadow] = UIConfig::ColorBorderShadow;
 
     // Input Fields - darker with cyan tint
-    colors[ImGuiCol_FrameBg] = ImVec4(0.05f, 0.08f, 0.10f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.08f, 0.15f, 0.18f, 1.00f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.10f, 0.20f, 0.25f, 1.00f);
+    colors[ImGuiCol_FrameBg] = UIConfig::ColorFrameBg;
+    colors[ImGuiCol_FrameBgHovered] = UIConfig::ColorFrameBgHovered;
+    colors[ImGuiCol_FrameBgActive] = UIConfig::ColorFrameBgActive;
 
     // Title Bars - darker with bright cyan accent
-    colors[ImGuiCol_TitleBg] = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.00f, 0.50f, 0.55f, 1.00f); // Bright Teal
-    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.00f, 0.00f, 0.00f, 0.51f);
+    colors[ImGuiCol_TitleBg] = UIConfig::ColorTitleBg;
+    colors[ImGuiCol_TitleBgActive] = UIConfig::ColorTitleBgActive;
+    colors[ImGuiCol_TitleBgCollapsed] = UIConfig::ColorTitleBgCollapsed;
 
     // Menus - very dark
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.04f, 0.05f, 0.06f, 1.00f);
+    colors[ImGuiCol_MenuBarBg] = UIConfig::ColorMenuBarBg;
 
     // Scrollbar
-    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.01f, 0.02f, 0.03f, 0.53f);
-    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.00f, 0.35f, 0.40f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.00f, 0.50f, 0.55f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.00f, 0.70f, 0.75f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg] = UIConfig::ColorScrollbarBg;
+    colors[ImGuiCol_ScrollbarGrab] = UIConfig::ColorScrollbarGrab;
+    colors[ImGuiCol_ScrollbarGrabHovered] = UIConfig::ColorScrollbarGrabHovered;
+    colors[ImGuiCol_ScrollbarGrabActive] = UIConfig::ColorScrollbarGrabActive;
 
     // Sliders & Checks - bright cyan
-    colors[ImGuiCol_CheckMark] = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);    // Bright Cyan
-    colors[ImGuiCol_SliderGrab] = ImVec4(0.00f, 0.75f, 0.80f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);
+    colors[ImGuiCol_CheckMark] = UIConfig::ColorCheckMark;
+    colors[ImGuiCol_SliderGrab] = UIConfig::ColorSliderGrab;
+    colors[ImGuiCol_SliderGrabActive] = UIConfig::ColorSliderGrabActive;
 
     // Buttons - dark with cyan accents
-    colors[ImGuiCol_Button] = ImVec4(0.08f, 0.12f, 0.15f, 1.00f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.00f, 0.35f, 0.40f, 1.00f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.00f, 0.60f, 0.65f, 1.00f);
+    colors[ImGuiCol_Button] = UIConfig::ColorButton;
+    colors[ImGuiCol_ButtonHovered] = UIConfig::ColorButtonHovered;
+    colors[ImGuiCol_ButtonActive] = UIConfig::ColorButtonActive;
 
     // Headers (Collapsing Headers, Tree Nodes)
-    colors[ImGuiCol_Header] = ImVec4(0.08f, 0.12f, 0.15f, 1.00f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.35f, 0.40f, 1.00f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.00f, 0.55f, 0.60f, 1.00f);
+    colors[ImGuiCol_Header] = UIConfig::ColorHeader;
+    colors[ImGuiCol_HeaderHovered] = UIConfig::ColorHeaderHovered;
+    colors[ImGuiCol_HeaderActive] = UIConfig::ColorHeaderActive;
 
     // Separators - cyan
-    colors[ImGuiCol_Separator] = ImVec4(0.00f, 0.40f, 0.45f, 0.50f);
-    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.00f, 0.60f, 0.65f, 0.78f);
-    colors[ImGuiCol_SeparatorActive] = ImVec4(0.00f, 0.80f, 0.85f, 1.00f);
+    colors[ImGuiCol_Separator] = UIConfig::ColorSeparator;
+    colors[ImGuiCol_SeparatorHovered] = UIConfig::ColorSeparatorHovered;
+    colors[ImGuiCol_SeparatorActive] = UIConfig::ColorSeparatorActive;
 
     // Resize Grip - cyan
-    colors[ImGuiCol_ResizeGrip] = ImVec4(0.00f, 0.50f, 0.55f, 0.25f);
-    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.00f, 0.70f, 0.75f, 0.67f);
-    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.00f, 0.90f, 0.95f, 0.95f);
+    colors[ImGuiCol_ResizeGrip] = UIConfig::ColorResizeGrip;
+    colors[ImGuiCol_ResizeGripHovered] = UIConfig::ColorResizeGripHovered;
+    colors[ImGuiCol_ResizeGripActive] = UIConfig::ColorResizeGripActive;
 
     // Tabs - dark with cyan active state
-    colors[ImGuiCol_Tab] = ImVec4(0.06f, 0.08f, 0.10f, 1.00f);
-    colors[ImGuiCol_TabHovered] = ImVec4(0.00f, 0.40f, 0.45f, 1.00f);
-    colors[ImGuiCol_TabActive] = ImVec4(0.00f, 0.60f, 0.65f, 1.00f);
-    colors[ImGuiCol_TabUnfocused] = ImVec4(0.04f, 0.05f, 0.06f, 0.97f);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.06f, 0.08f, 0.10f, 1.00f);
+    colors[ImGuiCol_Tab] = UIConfig::ColorTab;
+    colors[ImGuiCol_TabHovered] = UIConfig::ColorTabHovered;
+    colors[ImGuiCol_TabActive] = UIConfig::ColorTabActive;
+    colors[ImGuiCol_TabUnfocused] = UIConfig::ColorTabUnfocused;
+    colors[ImGuiCol_TabUnfocusedActive] = UIConfig::ColorTabUnfocusedActive;
 
     // Plots - cyan theme
-    colors[ImGuiCol_PlotLines] = ImVec4(0.00f, 0.80f, 0.85f, 1.00f);
-    colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);
-    colors[ImGuiCol_PlotHistogram] = ImVec4(0.00f, 0.85f, 0.60f, 1.00f);
-    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.00f, 1.00f, 0.70f, 1.00f);
+    colors[ImGuiCol_PlotLines] = UIConfig::ColorPlotLines;
+    colors[ImGuiCol_PlotLinesHovered] = UIConfig::ColorPlotLinesHovered;
+    colors[ImGuiCol_PlotHistogram] = UIConfig::ColorPlotHistogram;
+    colors[ImGuiCol_PlotHistogramHovered] = UIConfig::ColorPlotHistogramHovered;
 
-    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.00f, 0.60f, 0.65f, 0.35f);
-    colors[ImGuiCol_DragDropTarget] = ImVec4(0.00f, 1.00f, 1.00f, 0.90f);
-    colors[ImGuiCol_NavHighlight] = ImVec4(0.00f, 0.90f, 0.95f, 1.00f);
-    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
-    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
-    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+    colors[ImGuiCol_TextSelectedBg] = UIConfig::ColorTextSelectedBg;
+    colors[ImGuiCol_DragDropTarget] = UIConfig::ColorDragDropTarget;
+    colors[ImGuiCol_NavHighlight] = UIConfig::ColorNavHighlight;
+    colors[ImGuiCol_NavWindowingHighlight] = UIConfig::ColorNavWindowingHighlight;
+    colors[ImGuiCol_NavWindowingDimBg] = UIConfig::ColorNavWindowingDimBg;
+    colors[ImGuiCol_ModalWindowDimBg] = UIConfig::ColorModalWindowDimBg;
+}
+
+void UISystem::PushNumericFont() {
+    if (m_fontErbosDracoNumbers) {
+        ImGui::PushFont(m_fontErbosDracoNumbers);
+    }
+}
+
+void UISystem::PopNumericFont() {
+    if (m_fontErbosDracoNumbers) {
+        ImGui::PopFont();
+    }
+}
+
+float UISystem::GetNumericFieldMinWidth() const {
+    ImGuiStyle& style = ImGui::GetStyle();
+    float width = 0.0f;
+    if (m_fontErbosDracoNumbers) {
+        ImGui::PushFont(m_fontErbosDracoNumbers);
+    }
+    width = ImGui::CalcTextSize("000.0").x + style.FramePadding.x * 2.0f;
+    if (m_fontErbosDracoNumbers) {
+        ImGui::PopFont();
+    }
+    return width;
+}
+
+void UISystem::SetNextNumericFieldWidth(float requestedWidth) {
+    const float minWidth = GetNumericFieldMinWidth();
+    const float width = (requestedWidth > 0.0f) ? (std::max)(requestedWidth, minWidth) : minWidth;
+    ImGui::SetNextItemWidth(width);
+}
+
+bool UISystem::IsPointInTitlebarButtons(POINT screenPt) const {
+    return screenPt.x >= m_titlebarButtonsMin.x && screenPt.x <= m_titlebarButtonsMax.x &&
+           screenPt.y >= m_titlebarButtonsMin.y && screenPt.y <= m_titlebarButtonsMax.y;
+}
+
+bool UISystem::IsPointInTitlebarDrag(POINT screenPt) const {
+    if (m_titlebarDragMin.x > m_titlebarDragMax.x || m_titlebarDragMin.y > m_titlebarDragMax.y) {
+        return false;
+    }
+    return screenPt.x >= m_titlebarDragMin.x && screenPt.x <= m_titlebarDragMax.x &&
+           screenPt.y >= m_titlebarDragMin.y && screenPt.y <= m_titlebarDragMax.y;
 }
 
 void UISystem::BeginFrame() {
@@ -577,8 +662,9 @@ void UISystem::BeginFrame() {
 
     // Setup fullscreen dockspace
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImVec2 titlebarPad(UIConfig::TitlebarPadX, UIConfig::TitlebarPadY);
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + titlebarPad.x, viewport->Pos.y + titlebarPad.y));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x - titlebarPad.x * 2.0f, viewport->Size.y - titlebarPad.y * 2.0f));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
@@ -638,6 +724,8 @@ void UISystem::BeginFrame() {
         }
         ImGui::EndTabBar();
     }
+
+    m_titlebarHeight = ImGui::GetCursorPosY();
 
     // Create dockspace below tabs
     ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
@@ -706,15 +794,23 @@ void UISystem::BeginFrame() {
 
 void UISystem::ShowMainMenuBar() {
     if (ImGui::BeginMenuBar()) {
-        // ShaderLab logo in top left using Hacked font
-        if (m_fontHackedHeading) {
-            ImGui::PushFont(m_fontHackedHeading);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.90f, 0.90f, 1.0f)); // Bright cyan
-            ImGui::Text("SHADERLAB");
-            ImGui::PopStyleColor();
-            ImGui::PopFont();
-            ImGui::Separator();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIConfig::MenuFramePadX, UIConfig::MenuFramePadY));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(UIConfig::MenuItemSpacingX, UIConfig::MenuItemSpacingY));
+
+        const float startY = ImGui::GetCursorPosY();
+        ImGui::SetCursorPosY(startY + UIConfig::MenuTopPad);
+
+        ImGui::Dummy(ImVec2(UIConfig::MenuLeftPad, 0.0f));
+        ImGui::SameLine(0.0f, 0.0f);
+
+        m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
+        m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
+
+        if (m_fontMenuSmall) {
+            ImGui::PushFont(m_fontMenuSmall);
         }
+
+        float menuMaxX = ImGui::GetCursorScreenPos().x;
         
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New")) {
@@ -747,6 +843,7 @@ void UISystem::ShowMainMenuBar() {
             if (ImGui::MenuItem("Exit", "Alt+F4")) {}
             ImGui::EndMenu();
         }
+        menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
         if (ImGui::BeginMenu("View")) {
             if (ImGui::MenuItem("Demo Mode", nullptr, m_currentMode == UIMode::Demo)) {
                 m_currentMode = UIMode::Demo;
@@ -759,6 +856,7 @@ void UISystem::ShowMainMenuBar() {
             }
             ImGui::EndMenu();
         }
+        menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
         if (ImGui::BeginMenu("Device")) {
             auto adapters = Device::GetAvailableAdapters();
             int currentIdx = -1;
@@ -783,12 +881,78 @@ void UISystem::ShowMainMenuBar() {
             }
             ImGui::EndMenu();
         }
+        menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("About")) {
                 m_showAbout = true;
             }
             ImGui::EndMenu();
         }
+        menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
+
+        float buttonSize = ImGui::GetFrameHeight();
+        float totalButtonsWidth = buttonSize * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+        float cursorX = ImGui::GetCursorPosX();
+        float avail = ImGui::GetContentRegionAvail().x - UIConfig::MenuRightPad;
+        if (avail > totalButtonsWidth) {
+            ImGui::SetCursorPosX(cursorX + (avail - totalButtonsWidth));
+        }
+
+        const bool canUseWindow = m_hwnd != nullptr;
+        m_titlebarButtonsMin = ImVec2(FLT_MAX, FLT_MAX);
+        m_titlebarButtonsMax = ImVec2(-FLT_MAX, -FLT_MAX);
+        if (ImGui::Button("_", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
+            SendMessage(m_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+        }
+        {
+            ImVec2 min = ImGui::GetItemRectMin();
+            ImVec2 max = ImGui::GetItemRectMax();
+            m_titlebarButtonsMin.x = (std::min)(m_titlebarButtonsMin.x, min.x);
+            m_titlebarButtonsMin.y = (std::min)(m_titlebarButtonsMin.y, min.y);
+            m_titlebarButtonsMax.x = (std::max)(m_titlebarButtonsMax.x, max.x);
+            m_titlebarButtonsMax.y = (std::max)(m_titlebarButtonsMax.y, max.y);
+        }
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+        if (ImGui::Button("X", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
+            SendMessage(m_hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+        }
+        {
+            ImVec2 min = ImGui::GetItemRectMin();
+            ImVec2 max = ImGui::GetItemRectMax();
+            m_titlebarButtonsMin.x = (std::min)(m_titlebarButtonsMin.x, min.x);
+            m_titlebarButtonsMin.y = (std::min)(m_titlebarButtonsMin.y, min.y);
+            m_titlebarButtonsMax.x = (std::max)(m_titlebarButtonsMax.x, max.x);
+            m_titlebarButtonsMax.y = (std::max)(m_titlebarButtonsMax.y, max.y);
+        }
+        if (m_fontMenuSmall) {
+            ImGui::PopFont();
+        }
+
+        const float endY = ImGui::GetCursorPosY();
+        float minHeight = 0.0f;
+        const float autoHeight = (std::max)(endY - startY + UIConfig::MenuBottomPad, minHeight);
+        const float targetHeight = UIConfig::MenuBarHeight > 0.0f
+            ? (std::max)(UIConfig::MenuBarHeight, minHeight)
+            : autoHeight;
+        const float extra = targetHeight - (endY - startY);
+        if (extra > 0.0f) {
+            ImGui::Dummy(ImVec2(0.0f, extra));
+        }
+
+        ImVec2 barMin = ImGui::GetWindowPos();
+        barMin.y += startY;
+        ImVec2 barMax = ImVec2(barMin.x + ImGui::GetWindowWidth(), barMin.y + targetHeight);
+        float dragMinX = menuMaxX + UIConfig::MenuItemSpacingX;
+        float dragMaxX = m_titlebarButtonsMin.x - UIConfig::MenuItemSpacingX;
+        if (dragMaxX > dragMinX) {
+            m_titlebarDragMin = ImVec2(dragMinX, barMin.y);
+            m_titlebarDragMax = ImVec2(dragMaxX, barMax.y);
+        } else {
+            m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
+            m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
+        }
+
+        ImGui::PopStyleVar(2);
         ImGui::EndMenuBar();
     }
 }
@@ -848,6 +1012,118 @@ bool UISystem::CompileScene(int sceneIndex) {
     }
 
     return success;
+}
+
+void UISystem::LoadGlobalSnippets() {
+    m_snippets.clear();
+    m_selectedSnippetIndex = -1;
+    m_nextSnippetId = 1;
+
+    const fs::path snippetPath = GetGlobalSnippetPath(m_appRoot);
+    m_snippetsConfigPath = snippetPath.string();
+
+    std::error_code ec;
+    fs::create_directories(snippetPath.parent_path(), ec);
+
+    if (!fs::exists(snippetPath)) {
+        return;
+    }
+
+    std::ifstream in(snippetPath);
+    if (!in.is_open()) {
+        return;
+    }
+
+    json root;
+    try {
+        in >> root;
+    } catch (...) {
+        return;
+    }
+
+    if (!root.contains("snippets") || !root["snippets"].is_array()) {
+        return;
+    }
+
+    for (const auto& item : root["snippets"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+
+        ShaderSnippet snippet;
+        snippet.name = item.value("name", std::string{});
+        snippet.code = item.value("code", std::string{});
+
+        if (snippet.name.empty() || snippet.code.empty()) {
+            continue;
+        }
+
+        m_snippets.push_back(std::move(snippet));
+    }
+
+    m_selectedSnippetIndex = m_snippets.empty() ? -1 : 0;
+    m_nextSnippetId = static_cast<int>(m_snippets.size()) + 1;
+}
+
+void UISystem::SaveGlobalSnippets() const {
+    if (m_snippetsConfigPath.empty()) {
+        return;
+    }
+
+    const fs::path snippetPath(m_snippetsConfigPath);
+    std::error_code ec;
+    fs::create_directories(snippetPath.parent_path(), ec);
+
+    json root;
+    root["version"] = 1;
+    root["snippets"] = json::array();
+
+    for (const auto& snippet : m_snippets) {
+        if (snippet.name.empty() || snippet.code.empty()) {
+            continue;
+        }
+
+        root["snippets"].push_back({
+            {"name", snippet.name},
+            {"code", snippet.code}
+        });
+    }
+
+    std::ofstream out(snippetPath);
+    if (!out.is_open()) {
+        return;
+    }
+
+    out << root.dump(2);
+}
+
+void UISystem::InsertSnippetIntoEditor(const std::string& snippetCode) {
+    if (snippetCode.empty()) {
+        return;
+    }
+
+    std::string insertText = snippetCode;
+    if (!insertText.empty() && insertText.back() != '\n') {
+        insertText.push_back('\n');
+    }
+
+    m_textEditor.InsertText(insertText);
+    m_shaderState.text = m_textEditor.GetText();
+
+    if (m_currentMode == UIMode::PostFX) {
+        if (m_postFxSelectedIndex >= 0 && m_postFxSelectedIndex < (int)m_postFxDraftChain.size()) {
+            auto& effect = m_postFxDraftChain[m_postFxSelectedIndex];
+            effect.shaderCode = m_shaderState.text;
+            effect.isDirty = true;
+        }
+    } else {
+        if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
+            m_scenes[m_activeSceneIndex].shaderCode = m_shaderState.text;
+            m_scenes[m_activeSceneIndex].isDirty = true;
+        }
+    }
+
+    m_shaderState.status = CompileStatus::Dirty;
 }
 
 void UISystem::Render(ID3D12GraphicsCommandList* commandList) {

@@ -1,4 +1,5 @@
 #include "ShaderLab/Shader/ShaderCompiler.h"
+#include <exception>
 #include <sstream>
 
 namespace ShaderLab {
@@ -57,6 +58,15 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
     result.diagnostics.push_back(diag);
     return result;
 #else
+    if (!m_utils || !m_compiler || !m_includeHandler) {
+        ShaderDiagnostic diag;
+        diag.message = "Shader compiler is not initialized";
+        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    }
+    try {
 
     // Load source file
     ComPtr<IDxcBlobEncoding> sourceBlob;
@@ -139,6 +149,21 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
     }
 
     return result;
+    } catch (const std::exception& ex) {
+        ShaderDiagnostic diag;
+        diag.message = std::string("Shader compilation exception: ") + ex.what();
+        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    } catch (...) {
+        ShaderDiagnostic diag;
+        diag.message = "Shader compilation exception: unknown";
+        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    }
 #endif
 }
 
@@ -159,6 +184,15 @@ ShaderCompileResult ShaderCompiler::CompileFromSource(const std::string& source,
     result.diagnostics.push_back(diag);
     return result;
 #else
+    if (!m_utils || !m_compiler || !m_includeHandler) {
+        ShaderDiagnostic diag;
+        diag.message = "Shader compiler is not initialized";
+        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    }
+    try {
 
     // Create source blob
     ComPtr<IDxcBlobEncoding> sourceBlob;
@@ -241,6 +275,21 @@ ShaderCompileResult ShaderCompiler::CompileFromSource(const std::string& source,
     }
 
     return result;
+    } catch (const std::exception& ex) {
+        ShaderDiagnostic diag;
+        diag.message = std::string("Shader compilation exception: ") + ex.what();
+        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    } catch (...) {
+        ShaderDiagnostic diag;
+        diag.message = "Shader compilation exception: unknown";
+        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.isError = true;
+        result.diagnostics.push_back(diag);
+        return result;
+    }
 #endif
 }
 

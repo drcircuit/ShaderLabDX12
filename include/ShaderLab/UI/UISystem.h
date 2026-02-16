@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <windows.h>
 #include <wrl/client.h>
 #include <string>
 #include <vector>
@@ -73,6 +74,11 @@ struct ProjectState {
     int activeSceneIndex;
 };
 
+struct ShaderSnippet {
+    std::string name;
+    std::string code;
+};
+
 class UISystem {
 public:
     UISystem();
@@ -106,6 +112,9 @@ public:
     }
 
     std::string GetProjectName() const;
+    float GetTitlebarHeight() const { return m_titlebarHeight; }
+    bool IsPointInTitlebarButtons(POINT screenPt) const;
+    bool IsPointInTitlebarDrag(POINT screenPt) const;
 
 private:
     void SetActiveScene(int index);
@@ -139,6 +148,7 @@ private:
     void ShowAboutWindow();
     void ShowFullscreenPreview();
     void ShowShaderEditor();
+    void ShowSnippetBin();
     void ShowDiagnostics();
     void ShowSceneList();
     void ShowDemoPlaylist(); // Tracker View
@@ -150,6 +160,10 @@ private:
     bool CompileScene(int sceneIndex);
     void SyncPostFxEditorToSelection();
     void AppendDemoLog(const std::string& message);
+    void PushNumericFont();
+    void PopNumericFont();
+    float GetNumericFieldMinWidth() const;
+    void SetNextNumericFieldWidth(float requestedWidth);
 
     ComPtr<ID3D12DescriptorHeap> m_srvHeap;
     ImGuiContext* m_context = nullptr;
@@ -160,6 +174,9 @@ private:
     ImFont* m_fontHackedHeading = nullptr;   // Heading font
     ImFont* m_fontOrbitronText = nullptr;    // Regular UI text
     ImFont* m_fontErbosDracoNumbers = nullptr; // Numerical fields
+    ImFont* m_fontMenuSmall = nullptr;       // Menu font
+    ImFont* m_fontCode = nullptr;            // Code editor font
+    ImFont* m_fontCodeItalic = nullptr;      // Code editor italic font
     
     UIMode m_currentMode = UIMode::Demo;
     UIMode m_lastMode = UIMode::Demo;
@@ -220,6 +237,12 @@ private:
     TransitionType m_currentTransitionType = TransitionType::None;
     int m_pendingActiveScene = -2; // -2 = None
     int m_transitionJustCompletedBeat = -1;
+
+    float m_titlebarHeight = 0.0f;
+    ImVec2 m_titlebarButtonsMin = ImVec2(0.0f, 0.0f);
+    ImVec2 m_titlebarButtonsMax = ImVec2(0.0f, 0.0f);
+    ImVec2 m_titlebarDragMin = ImVec2(0.0f, 0.0f);
+    ImVec2 m_titlebarDragMax = ImVec2(0.0f, 0.0f);
     
     // Transition Resources
     ComPtr<ID3D12PipelineState> m_transitionPSO;
@@ -234,6 +257,7 @@ private:
 
     std::string m_currentProjectPath;
     std::string m_appRoot; // Root directory where ShaderLab started (where CMakeLists.txt resides)
+    HWND m_hwnd = nullptr;
 
     // Post FX editor state
     int m_postFxSourceSceneIndex = -1;
@@ -260,6 +284,10 @@ private:
     void ExportRuntimePackage();
     void SeekToBeat(int beat);
 
+    void LoadGlobalSnippets();
+    void SaveGlobalSnippets() const;
+    void InsertSnippetIntoEditor(const std::string& snippetCode);
+
     // Auto-Build State
     bool m_isBuilding = false;
     std::string m_buildLog;
@@ -279,6 +307,11 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE m_aboutSrvGpuHandle{};
     double m_aboutTimeSeconds = 0.0;
     Scene m_aboutScene;
+
+    std::vector<ShaderSnippet> m_snippets;
+    int m_selectedSnippetIndex = -1;
+    std::string m_snippetsConfigPath;
+    int m_nextSnippetId = 1;
 };
 
 } // namespace ShaderLab

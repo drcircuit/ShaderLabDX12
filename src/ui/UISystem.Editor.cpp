@@ -125,8 +125,29 @@ void UISystem::ShowModeWindows() {
                 const double fromTime = SceneTimeSeconds(exactBeat, m_transitionFromStartBeat, m_transitionFromOffset, m_transport.bpm);
                 const double toTime = SceneTimeSeconds(exactBeat, m_transitionToStartBeat, m_transitionToOffset, m_transport.bpm);
                 ImGui::Text("Transition: %s", TransitionName(m_currentTransitionType));
-                ImGui::Text("A: %d time %.2f", m_transitionFromIndex, fromTime);
-                ImGui::Text("B: %d time %.2f", m_transitionToIndex, toTime);
+                ImGui::TextUnformatted("A:");
+                ImGui::SameLine();
+                PushNumericFont();
+                ImGui::Text("%d", m_transitionFromIndex);
+                PopNumericFont();
+                ImGui::SameLine();
+                ImGui::TextUnformatted("time");
+                ImGui::SameLine();
+                PushNumericFont();
+                ImGui::Text("%.2f", fromTime);
+                PopNumericFont();
+
+                ImGui::TextUnformatted("B:");
+                ImGui::SameLine();
+                PushNumericFont();
+                ImGui::Text("%d", m_transitionToIndex);
+                PopNumericFont();
+                ImGui::SameLine();
+                ImGui::TextUnformatted("time");
+                ImGui::SameLine();
+                PushNumericFont();
+                ImGui::Text("%.2f", toTime);
+                PopNumericFont();
                 ImGui::Separator();
             }
 
@@ -148,6 +169,7 @@ void UISystem::ShowModeWindows() {
     // Scene mode windows
     if (m_currentMode == UIMode::Scene) {
         ShowSceneList();
+        ShowSnippetBin();
         if (ImGui::Begin("Scene: Post Stack")) {
             ImGui::Text("Post Processing Stack");
             ImGui::Separator();
@@ -320,7 +342,11 @@ void UISystem::ShowModeWindows() {
                         ImGui::SameLine();
 
                         ImGui::BeginGroup();
-                        ImGui::Text("Channel %d", binding.channelIndex);
+                        ImGui::TextUnformatted("Channel");
+                        ImGui::SameLine();
+                        PushNumericFont();
+                        ImGui::Text("%d", binding.channelIndex);
+                        PopNumericFont();
                         ImGui::TextDisabled("%s", binding.enabled ? "Enabled" : "Disabled");
 
                         ImGui::Separator();
@@ -329,7 +355,11 @@ void UISystem::ShowModeWindows() {
                                     binding.type == TextureType::Texture3D ? "3D" : "2D");
 
                         if (binding.bindingType == BindingType::Scene) {
-                            ImGui::Text("Source: Scene %d", binding.sourceSceneIndex);
+                            ImGui::TextUnformatted("Source: Scene");
+                            ImGui::SameLine();
+                            PushNumericFont();
+                            ImGui::Text("%d", binding.sourceSceneIndex);
+                            PopNumericFont();
                         } else if (binding.bindingType == BindingType::File) {
                             ImGui::Text("Source: File");
                         }
@@ -611,6 +641,101 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
     color.b = 0.5 + 0.5 * sin((uv.x + uv.y) * 5.0 + iTime * 0.7);
 
     return float4(color, 1.0);
+}
+
+void UISystem::ShowSnippetBin() {
+    if (!ImGui::Begin("Scene: Snippets")) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("Reusable Snippets");
+    ImGui::Separator();
+
+    if (ImGui::Button("+ Save Current As Snippet")) {
+        ShaderSnippet snippet;
+        snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
+        snippet.code = m_shaderState.text;
+        if (!snippet.code.empty()) {
+            m_snippets.push_back(std::move(snippet));
+            m_selectedSnippetIndex = (int)m_snippets.size() - 1;
+            SaveGlobalSnippets();
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("+ Add Empty Snippet")) {
+        ShaderSnippet snippet;
+        snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
+        snippet.code = "float4 SnippetFunc(float2 uv, float t) {\n    return float4(uv, sin(t), 1.0);\n}\n";
+        m_snippets.push_back(std::move(snippet));
+        m_selectedSnippetIndex = (int)m_snippets.size() - 1;
+        SaveGlobalSnippets();
+    }
+
+    ImGui::Separator();
+
+    if (m_snippets.empty()) {
+        ImGui::TextDisabled("No snippets yet.");
+        ImGui::TextDisabled("Create one from current shader text.");
+        ImGui::End();
+        return;
+    }
+
+    if (m_selectedSnippetIndex < 0 || m_selectedSnippetIndex >= (int)m_snippets.size()) {
+        m_selectedSnippetIndex = 0;
+    }
+
+    if (ImGui::BeginListBox("##SnippetList", ImVec2(-1, 170.0f))) {
+        for (int i = 0; i < (int)m_snippets.size(); ++i) {
+            bool isSelected = (i == m_selectedSnippetIndex);
+            if (ImGui::Selectable(m_snippets[i].name.c_str(), isSelected)) {
+                m_selectedSnippetIndex = i;
+            }
+        }
+        ImGui::EndListBox();
+    }
+
+    auto& selected = m_snippets[m_selectedSnippetIndex];
+
+    char nameBuffer[128] = {};
+    strncpy_s(nameBuffer, selected.name.c_str(), _TRUNCATE);
+    if (ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer))) {
+        selected.name = nameBuffer;
+        if (selected.name.empty()) {
+            selected.name = "Snippet " + std::to_string(m_selectedSnippetIndex + 1);
+        }
+        SaveGlobalSnippets();
+    }
+
+    if (ImGui::Button("Insert At Cursor")) {
+        InsertSnippetIntoEditor(selected.code);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Overwrite With Current Shader")) {
+        selected.code = m_shaderState.text;
+        SaveGlobalSnippets();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Delete Snippet")) {
+        m_snippets.erase(m_snippets.begin() + m_selectedSnippetIndex);
+        if (m_selectedSnippetIndex >= (int)m_snippets.size()) {
+            m_selectedSnippetIndex = (int)m_snippets.size() - 1;
+        }
+        SaveGlobalSnippets();
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Snippet Code:");
+    ImGui::BeginChild("SnippetPreview", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::TextUnformatted(selected.code.c_str());
+    ImGui::EndChild();
+
+    ImGui::End();
 }
 )";
 
@@ -987,7 +1112,13 @@ void UISystem::ShowShaderEditor() {
         if (ctrlEnterPressed) {
             m_textEditor.SetHandleKeyboardInputs(false);
         }
+        if (m_fontCode) {
+            ImGui::PushFont(m_fontCode);
+        }
         m_textEditor.Render("##ShaderCode", ImVec2(-1, -statusBarHeight), true);
+        if (m_fontCode) {
+            ImGui::PopFont();
+        }
         if (ctrlEnterPressed) {
             m_textEditor.SetHandleKeyboardInputs(prevKeyboardInput);
         }
@@ -1015,11 +1146,27 @@ void UISystem::ShowShaderEditor() {
         // Status bar at bottom
         ImGui::Separator();
         auto cursorPos = m_textEditor.GetCursorPosition();
-        ImGui::Text("Lines: %d | Ln %d, Col %d | %s",
-                    m_textEditor.GetTotalLines(),
-                    cursorPos.mLine + 1,
-                    cursorPos.mColumn + 1,
-                    m_textEditor.IsOverwrite() ? "Ovr" : "Ins");
+        ImGui::TextUnformatted("Lines:");
+        ImGui::SameLine();
+        PushNumericFont();
+        ImGui::Text("%d", m_textEditor.GetTotalLines());
+        PopNumericFont();
+        ImGui::SameLine();
+        ImGui::TextUnformatted("| Ln");
+        ImGui::SameLine();
+        PushNumericFont();
+        ImGui::Text("%d", cursorPos.mLine + 1);
+        PopNumericFont();
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextUnformatted(", Col");
+        ImGui::SameLine();
+        PushNumericFont();
+        ImGui::Text("%d", cursorPos.mColumn + 1);
+        PopNumericFont();
+        ImGui::SameLine();
+        ImGui::TextUnformatted("|");
+        ImGui::SameLine();
+        ImGui::TextUnformatted(m_textEditor.IsOverwrite() ? "Ovr" : "Ins");
 
     }
     ImGui::End();
@@ -1034,7 +1181,13 @@ void UISystem::ShowDiagnostics() {
                  ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Compilation Successful.");
             }
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%d Errors Found:", (int)m_shaderState.diagnostics.size());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            PushNumericFont();
+            ImGui::Text("%d", (int)m_shaderState.diagnostics.size());
+            PopNumericFont();
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Errors Found:");
+            ImGui::PopStyleColor();
             ImGui::Separator();
 
             for (int i = 0; i < (int)m_shaderState.diagnostics.size(); ++i) {
@@ -1044,7 +1197,24 @@ void UISystem::ShowDiagnostics() {
                 // Selectable error to jump to line
                 char buf[512];
                 snprintf(buf, sizeof(buf), "Line %d, Col %d: %s", diag.line, diag.column, diag.message.c_str());
-                if (ImGui::Selectable(buf, false)) {
+                 const bool selected = ImGui::Selectable("##DiagSelect", false);
+                 ImGui::SameLine(0.0f, 0.0f);
+                 ImGui::TextUnformatted("Line ");
+                 ImGui::SameLine(0.0f, 0.0f);
+                 PushNumericFont();
+                 ImGui::Text("%d", diag.line);
+                 PopNumericFont();
+                 ImGui::SameLine(0.0f, 0.0f);
+                 ImGui::TextUnformatted(", Col ");
+                 ImGui::SameLine(0.0f, 0.0f);
+                 PushNumericFont();
+                 ImGui::Text("%d", diag.column);
+                 PopNumericFont();
+                 ImGui::SameLine(0.0f, 0.0f);
+                 ImGui::TextUnformatted(": ");
+                 ImGui::SameLine(0.0f, 0.0f);
+                 ImGui::TextUnformatted(diag.message.c_str());
+                 if (selected) {
                      // Jump to Error
                      TextEditor::Coordinates coord(diag.line - 1, diag.column > 0 ? diag.column - 1 : 0);
                      m_textEditor.SetCursorPosition(coord);
@@ -1087,14 +1257,17 @@ void UISystem::BuildLayout(UIMode mode) {
         // 3. Right: Split into Tracker (Top) and Preview (Bottom)
         ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.50f, &dock_right_top, &dock_right_bottom);
 
-        // 4. Split Left Stack
-        ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.5f, &dock_left_bottom, &dock_left_top);
+        // 4. Split Left Stack into Scene / Audio / Log
+        ImGuiID dock_left_mid = 0;
+        ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.33f, &dock_left_bottom, &dock_left);
+        ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.50f, &dock_left_mid, &dock_left_top);
 
         ImGui::DockBuilderDockWindow("Transport", dock_up);
         ImGui::DockBuilderDockWindow("Demo: Playlist", dock_right_top);
         ImGui::DockBuilderDockWindow("Preview", dock_right_bottom);
 
         ImGui::DockBuilderDockWindow("Demo: Scene Library", dock_left_top);
+        ImGui::DockBuilderDockWindow("Audio Library", dock_left_mid);
         ImGui::DockBuilderDockWindow("Demo: Runtime Log", dock_left_bottom);
 
     } else if (mode == UIMode::PostFX) {
@@ -1156,6 +1329,7 @@ void UISystem::BuildLayout(UIMode mode) {
 
         ImGui::DockBuilderDockWindow("Transport", dock_up);
         ImGui::DockBuilderDockWindow("Scene: Library", dock_left_top);
+        ImGui::DockBuilderDockWindow("Scene: Snippets", dock_left_bot);
         ImGui::DockBuilderDockWindow("Scene: Post Stack", dock_left_bot);
         ImGui::DockBuilderDockWindow("Shader Editor", dock_center);
         ImGui::DockBuilderDockWindow("Preview", dock_right_top);

@@ -16,6 +16,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     printf("ShaderLab Editor starting...\n");
+    (void)nCmdShow;
     
     // Register window class
     WNDCLASSEXW wc = {};
@@ -31,21 +32,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     printf("Window class registered\n");
 
-    // Create window
-    const int width = 1920;
-    const int height = 1080;
+    // Create borderless window and start maximized (no default titlebar or min/max buttons)
+    const int fallbackWidth = 1920;
+    const int fallbackHeight = 1080;
 
-    RECT rect = { 0, 0, width, height };
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+    MONITORINFO monitorInfo = {};
+    monitorInfo.cbSize = sizeof(MONITORINFO);
+    RECT workArea = { 0, 0, fallbackWidth, fallbackHeight };
+    HMONITOR monitor = MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+    if (GetMonitorInfo(monitor, &monitorInfo)) {
+        workArea = monitorInfo.rcWork;
+    }
+
+    int width = workArea.right - workArea.left;
+    int height = workArea.bottom - workArea.top;
 
     HWND hwnd = CreateWindowExW(
         0,
         L"ShaderLabEditorClass",
         L"DrCiRCUiT's ShaderLab - For democoders, by a democoder - untitled",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
+        WS_POPUP,
+        workArea.left, workArea.top,
+        width,
+        height,
         nullptr,
         nullptr,
         hInstance,
@@ -71,7 +80,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
     printf("Application initialized successfully\n");
 
-    ShowWindow(hwnd, nCmdShow);
+    ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    SetWindowPos(hwnd, HWND_TOP, workArea.left, workArea.top, width, height, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+    SetForegroundWindow(hwnd);
+    SetActiveWindow(hwnd);
     UpdateWindow(hwnd);
 
     // Main loop

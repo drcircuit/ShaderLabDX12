@@ -8,8 +8,13 @@
 #include "ShaderLab/Audio/BeatClock.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
 
+#include <dwmapi.h>
+#include <windowsx.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <cstdio>
+
+#pragma comment(lib, "dwmapi.lib")
 
 // Forward declare Win32 message handler
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -47,6 +52,10 @@ bool EditorApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
     m_hwnd = hwnd;
     
     SetWindowTextW(m_hwnd, L"DrCiRCUiT's ShaderLab - For democoders, by a democoder - untitled");
+
+    if (m_useCustomTitlebar) {
+        ConfigureCustomTitlebar();
+    }
 
     // Initialize graphics
     m_device = std::make_unique<Device>();
@@ -116,6 +125,14 @@ bool EditorApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
 
     m_initialized = true;
     return true;
+}
+
+void EditorApp::ConfigureCustomTitlebar() {
+    BOOL enableDark = TRUE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enableDark, sizeof(enableDark));
+
+    MARGINS margins = {0, 0, 1, 0};
+    DwmExtendFrameIntoClientArea(m_hwnd, &margins);
 }
 
 void EditorApp::Shutdown() {
@@ -255,6 +272,55 @@ LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
     bool handled = false;
     switch (msg) {
+        case WM_NCCALCSIZE:
+            if (m_useCustomTitlebar && wParam) {
+                return 0;
+            }
+            break;
+
+        case WM_NCHITTEST:
+            if (m_useCustomTitlebar) {
+                POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                if (m_ui && m_ui->IsPointInTitlebarButtons(pt)) {
+                    return HTCLIENT;
+                }
+                RECT rect = {};
+                GetWindowRect(hwnd, &rect);
+
+                const int frameX = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                const int frameY = GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+                const bool onLeft = pt.x < rect.left + frameX;
+                const bool onRight = pt.x >= rect.right - frameX;
+                const bool onTop = pt.y < rect.top + frameY;
+                const bool onBottom = pt.y >= rect.bottom - frameY;
+
+                if (onTop && onLeft) return HTTOPLEFT;
+                if (onTop && onRight) return HTTOPRIGHT;
+                if (onBottom && onLeft) return HTBOTTOMLEFT;
+                if (onBottom && onRight) return HTBOTTOMRIGHT;
+                if (onLeft) return HTLEFT;
+                if (onRight) return HTRIGHT;
+                if (onTop) return HTTOP;
+                if (onBottom) return HTBOTTOM;
+
+                const float titlebarHeight = m_ui ? m_ui->GetTitlebarHeight() : 0.0f;
+                if (titlebarHeight > 0.0f) {
+                    POINT clientPt = pt;
+                    ScreenToClient(hwnd, &clientPt);
+                    if (clientPt.y >= 0 && clientPt.y < static_cast<LONG>(titlebarHeight)) {
+                        if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) {
+                            return HTCLIENT;
+                        }
+                        if (m_ui && m_ui->IsPointInTitlebarDrag(pt)) {
+                            return HTCAPTION;
+                        }
+                        return HTCLIENT;
+                    }
+                }
+            }
+            break;
+
         case WM_ACTIVATEAPP:
             m_appActive = (wParam == TRUE);
             handled = true;
@@ -271,6 +337,12 @@ LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 uint32_t width = LOWORD(lParam);
                 uint32_t height = HIWORD(lParam);
                 OnResize(width, height);
+            }
+            if (ImGui::GetCurrentContext()) {
+                ImGui::ClearActiveID();
+                ImGui::GetIO().MouseDown[0] = false;
+                ImGui::GetIO().MouseDown[1] = false;
+                ImGui::GetIO().MouseDown[2] = false;
             }
             handled = true;
             break;

@@ -37,6 +37,7 @@ private:
     void InitializeShaders();
     void PerformRestart();
     void UpdateWindowTitle();
+    void ConfigureCustomTitlebar();
 
     std::unique_ptr<Device> m_device;
     std::unique_ptr<CommandQueue> m_commandQueue;
@@ -53,6 +54,7 @@ private:
     bool m_initialized = false;
     std::wstring m_lastWindowTitle;
     bool m_appActive = true;
+    bool m_useCustomTitlebar = true;
 
 
     // Restart state

@@ -1,4 +1,5 @@
 #include "ShaderLab/UI/UISystem.h"
+#include "ShaderLab/UI/UIConfig.h"
 #include "ShaderLab/UI/UISystemDemoUtils.h"
 #include "ShaderLab/Audio/AudioSystem.h"
 
@@ -76,7 +77,9 @@ void UISystem::ShowAudioLibrary() {
                 auto& clip = m_audioLibrary[i];
 
                 ImGui::TableSetColumnIndex(0);
+                PushNumericFont();
                 ImGui::Text("%d", i);
+                PopNumericFont();
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%s", clip.name.c_str());
@@ -91,11 +94,13 @@ void UISystem::ShowAudioLibrary() {
                 }
 
                 ImGui::TableSetColumnIndex(3);
-                if (clip.type == AudioType::Music) {
+                 if (clip.type == AudioType::Music) {
                      ImGui::SetNextItemWidth(-FLT_MIN);
                      // BPM of the specific audio file - This should remain editable as it's a property of the file
+                     PushNumericFont();
                      ImGui::InputFloat("##BPM", &clip.bpm, 0.0f, 0.0f, "%.1f");
-                } else {
+                     PopNumericFont();
+                 } else {
                      ImGui::TextDisabled("-");
                 }
 
@@ -158,30 +163,49 @@ void UISystem::ShowDemoPlaylist() {
         ImGui::SameLine();
         ImGui::Text("BPM");
         ImGui::SameLine(0.0f, 4.0f);
-        ImGui::SetNextItemWidth(60);
+        SetNextNumericFieldWidth(60.0f);
+        PushNumericFont();
         if (ImGui::InputFloat("##TrackBPM", &track.bpm, 0.0f, 0.0f, "%.1f")) {
             if (track.bpm < 1.0f) track.bpm = 1.0f;
         }
+        PopNumericFont();
         ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::SmallButton("-")) {
+        const ImVec2 spinnerSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
+        auto SpinnerButton = [&](const char* label) -> bool {
+            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+            bool pressed = ImGui::Button(label, spinnerSize);
+            ImGui::PopStyleVar();
+            return pressed;
+        };
+        if (SpinnerButton("-")) {
             if (track.bpm > 1.0f) track.bpm -= 1.0f;
         }
         ImGui::SameLine(0.0f, 2.0f);
-        if (ImGui::SmallButton("+")) {
+        if (SpinnerButton("+")) {
             track.bpm += 1.0f;
         }
 
         ImGui::SameLine(0.0f, 12.0f);
         ImGui::Text("Bars");
         ImGui::SameLine(0.0f, 4.0f);
-        ImGui::SetNextItemWidth(70);
+        SetNextNumericFieldWidth(70.0f);
         int bars = (track.lengthBeats + 3) / 4;
+        PushNumericFont();
         if (ImGui::InputInt("##TrackBars", &bars, 4, 16)) {
             if (bars < 1) bars = 1;
             track.lengthBeats = bars * 4;
         }
+        PopNumericFont();
         ImGui::SameLine(0.0f, 6.0f);
-        ImGui::Text("(%d beats)", track.lengthBeats);
+        PushNumericFont();
+        ImGui::TextUnformatted("(");
+        ImGui::SameLine(0.0f, 0.0f);
+        PushNumericFont();
+        ImGui::Text("%d", track.lengthBeats);
+        PopNumericFont();
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextUnformatted(" beats)");
+        PopNumericFont();
 
         ImGui::Separator();
 
@@ -285,8 +309,10 @@ void UISystem::ShowDemoPlaylist() {
                              row->stop = false;
                         }
                     } else {
+                        PushNumericFont();
                         if (isBarStart) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%02d:%02d", bar, subBeat);
                         else ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%02d:%02d", bar, subBeat);
+                        PopNumericFont();
 
                         if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
                             ScrubToBeat(beat);
@@ -317,12 +343,14 @@ void UISystem::ShowDemoPlaylist() {
 
                     if (comboIdx > 0) { // If scene selected
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(80);
+                        SetNextNumericFieldWidth(80.0f);
+                        PushNumericFont();
                         if (ImGui::InputFloat("##Off", &currentOffset, 1.0f, 4.0f, "%.1f")) {
                             EnsureRow();
                             row = GetRow();
                             if (row) row->timeOffset = currentOffset;
                         }
+                        PopNumericFont();
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Time Offset (Beats)");
                     }
                     ImGui::EndGroup();
@@ -340,13 +368,15 @@ void UISystem::ShowDemoPlaylist() {
                     }
                     if (currentTrans != 0) { // If not Cut
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(85);
+                        SetNextNumericFieldWidth(85.0f);
+                        PushNumericFont();
                         // Using InputFloat with step=0.5 to show arrows
                         if (ImGui::InputFloat("##Dur", &currentDur, 0.5f, 1.0f, "%.1f")) {
                             EnsureRow();
                             row = GetRow();
                             if (row) row->transitionDuration = currentDur;
                         }
+                        PopNumericFont();
                     }
 
                     // Column 3: Music
@@ -495,6 +525,12 @@ void UISystem::UpdateTransport(double wallNowSeconds, float dtSeconds) {
         float exactBeat = (float)(m_transport.timeSeconds * beatsPerSec);
         track.currentBeat = (int)std::floor(exactBeat);
 
+        // When editing Scene/PostFX, keep transport time/beat in sync but avoid
+        // track-driven scene switches that can overwrite in-progress editor text.
+        if (m_currentMode == UIMode::Scene || m_currentMode == UIMode::PostFX) {
+            return;
+        }
+
         if (m_transitionActive) {
             double transitionEndBeat = m_transitionStartBeat + m_transitionDurationBeats;
             if (exactBeat >= transitionEndBeat) {
@@ -510,10 +546,6 @@ void UISystem::UpdateTransport(double wallNowSeconds, float dtSeconds) {
                     m_transitionJustCompletedBeat = track.currentBeat;
                 }
             }
-        }
-
-        if (m_currentMode == UIMode::Scene || m_currentMode == UIMode::PostFX) {
-            return;
         }
 
         // Auto-Stop at end of track
@@ -779,14 +811,33 @@ void UISystem::SeekToBeat(int beat) {
 }
 
 void UISystem::ShowTransportControls() {
-    ImGui::Begin("Transport", nullptr, ImGuiWindowFlags_NoCollapse);
+    ImGui::Begin("Transport", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    if (m_fontHackedLogo) {
+        ImGui::PushFont(m_fontHackedLogo);
+        ImVec2 logoSize = ImGui::CalcTextSize("SHADERLAB");
+        ImGui::PopFont();
+
+        ImVec2 windowPos = ImGui::GetWindowPos();
+        ImVec2 contentMin = ImGui::GetWindowContentRegionMin();
+        ImVec2 contentMax = ImGui::GetWindowContentRegionMax();
+        ImVec2 logoPos(
+            windowPos.x + contentMax.x - logoSize.x,
+            windowPos.y + contentMin.y + (std::min)(UIConfig::MenuLogoBaselineOffset, 0.0f)
+        );
+
+        ImGui::PushFont(m_fontHackedLogo);
+        ImGui::GetWindowDrawList()->AddText(logoPos, IM_COL32(0, 230, 230, 255), "SHADERLAB");
+        ImGui::PopFont();
+    }
 
     const bool altDown = ImGui::IsKeyDown(ImGuiKey_LeftAlt) || ImGui::IsKeyDown(ImGuiKey_RightAlt);
     const bool hotkeyToggle = altDown && ImGui::IsKeyPressed(ImGuiKey_Space, false);
     const bool hotkeyStop = altDown && ImGui::IsKeyPressed(ImGuiKey_X, false);
 
     // Play/Pause/Stop buttons
-    const bool playPausePressed = ImGui::Button(m_transport.state == TransportState::Playing ? "Pause" : "Play") || hotkeyToggle;
+    ImGui::Button(m_transport.state == TransportState::Playing ? "Pause" : "Play");
+    const bool playPausePressed = ImGui::IsItemClicked(ImGuiMouseButton_Left) || hotkeyToggle;
     if (playPausePressed) {
         if (m_transport.state == TransportState::Playing) {
             m_transport.state = TransportState::Paused;
@@ -888,7 +939,8 @@ void UISystem::ShowTransportControls() {
     }
     ImGui::SameLine();
 
-    if (ImGui::Button("Stop") || hotkeyStop) {
+    ImGui::Button("Stop");
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || hotkeyStop) {
         m_transport.state = TransportState::Stopped;
         m_transport.timeSeconds = 0.0;
         m_transport.lastFrameWallSeconds = 0.0;
@@ -920,7 +972,13 @@ void UISystem::ShowTransportControls() {
     }
     ImGui::SameLine();
 
-    ImGui::Text("Time: %.2f", m_transport.timeSeconds);
+    PushNumericFont();
+    ImGui::TextUnformatted("Time:");
+    ImGui::SameLine();
+    PushNumericFont();
+    ImGui::Text("%.2f", m_transport.timeSeconds);
+    PopNumericFont();
+    PopNumericFont();
 
     // Show beat counter based on active BPM
     float beatsPerSec = m_transport.bpm / 60.0f;
@@ -928,20 +986,34 @@ void UISystem::ShowTransportControls() {
     int bar = (int)exactBeat / 4 + 1;
     int beat = (int)exactBeat % 4 + 1;
     ImGui::SameLine();
-    ImGui::Text("Beat: %02d:%02d", bar, beat);
+    PushNumericFont();
+    ImGui::TextUnformatted("Beat:");
+    ImGui::SameLine();
+    PushNumericFont();
+    ImGui::Text("%02d:%02d", bar, beat);
+    PopNumericFont();
+    PopNumericFont();
 
     if (m_track.lengthBeats > 0) {
         ImGui::SameLine();
-        ImGui::Text("/%d", m_track.lengthBeats);
+        PushNumericFont();
+        ImGui::TextUnformatted("/");
+        ImGui::SameLine(0.0f, 0.0f);
+        PushNumericFont();
+        ImGui::Text("%d", m_track.lengthBeats);
+        PopNumericFont();
+        PopNumericFont();
     }
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(80);
+    SetNextNumericFieldWidth(80.0f);
     float bpm = m_transport.bpm;
+    PushNumericFont();
     if (ImGui::InputFloat("BPM", &bpm, 0.0f, 0.0f, "%.1f")) {
         if (bpm < 1.0f) bpm = 1.0f;
         m_transport.bpm = bpm;
     }
+    PopNumericFont();
 
     ImGui::End();
 }
