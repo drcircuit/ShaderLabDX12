@@ -10,7 +10,9 @@
 #include <atomic>
 #include <mutex>
 #include <fstream>
+#include <cstddef>
 #include "TextEditor.h"
+#include "ShaderLab/Core/BuildPipeline.h"
 #include "ShaderLab/Core/ShaderLabData.h"
 
 using Microsoft::WRL::ComPtr;
@@ -40,6 +42,7 @@ struct Diagnostic {
 };
 
 enum class EditorTheme { Dark, DarkOriginal, Light, RetroBlue };
+enum class CodeFontSize { XS, S, M, L, XL };
 
 struct ShaderEditState {
     CompileStatus status = CompileStatus::Clean;
@@ -57,6 +60,7 @@ struct ShaderEditState {
     
     // Theme
     EditorTheme theme = EditorTheme::Dark;
+    CodeFontSize codeFontSize = CodeFontSize::M;
     
     // Performance
     bool showPerformanceOverlay = false;
@@ -77,6 +81,12 @@ struct ProjectState {
 struct ShaderSnippet {
     std::string name;
     std::string code;
+};
+
+struct ShaderSnippetFolder {
+    std::string name;
+    std::string filePath;
+    std::vector<ShaderSnippet> snippets;
 };
 
 class UISystem {
@@ -177,6 +187,7 @@ private:
     ImFont* m_fontMenuSmall = nullptr;       // Menu font
     ImFont* m_fontCode = nullptr;            // Code editor font
     ImFont* m_fontCodeItalic = nullptr;      // Code editor italic font
+    ImFont* m_fontCodeSizes[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
     
     UIMode m_currentMode = UIMode::Demo;
     UIMode m_lastMode = UIMode::Demo;
@@ -223,6 +234,7 @@ private:
     
     // Editor
     TextEditor m_textEditor;
+    TextEditor m_snippetTextEditor;
     
     // Transition State
     bool m_transitionActive = false;
@@ -281,6 +293,7 @@ private:
     void SaveProjectAs();
     void OpenProject();
     void BuildProject();
+    void ShowBuildSettingsWindow();
     void ExportRuntimePackage();
     void SeekToBeat(int beat);
 
@@ -295,6 +308,15 @@ private:
     std::future<void> m_buildFuture;
     bool m_buildComplete = false;
     bool m_buildSuccess = false;
+    bool m_showBuildSettings = false;
+    BuildMode m_buildSettingsMode = BuildMode::Release;
+    SizeTargetPreset m_buildSettingsSizeTarget = SizeTargetPreset::K16;
+    bool m_buildSettingsRestrictedCompactTrack = false;
+    bool m_buildSettingsRuntimeDebugLog = false;
+    bool m_buildSettingsCompactTrackDebugLog = false;
+    BuildPrereqReport m_buildSettingsPrereq;
+    bool m_buildSettingsRefreshRequested = true;
+    bool m_buildSettingsAutoSwitchedToCrinkled = false;
     void UpdateBuildLogic();
 
     void RenderAboutLogo(ID3D12GraphicsCommandList* commandList);
@@ -308,10 +330,19 @@ private:
     double m_aboutTimeSeconds = 0.0;
     Scene m_aboutScene;
 
-    std::vector<ShaderSnippet> m_snippets;
+    std::vector<ShaderSnippetFolder> m_snippetFolders;
+    int m_selectedSnippetFolderIndex = -1;
     int m_selectedSnippetIndex = -1;
-    std::string m_snippetsConfigPath;
+    std::string m_snippetsDirectoryPath;
     int m_nextSnippetId = 1;
+    bool m_snippetCodeLocked = true;
+    bool m_snippetDraftDirty = false;
+    int m_snippetDraftFolderIndex = -1;
+    int m_snippetDraftIndex = -1;
+    std::string m_snippetDraftCode;
+
+    size_t m_lastDemoCompiledSizeBytes = 0;
+    bool m_hasDemoCompiledSize = false;
 };
 
 } // namespace ShaderLab

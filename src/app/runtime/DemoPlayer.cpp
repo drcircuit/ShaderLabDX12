@@ -3,20 +3,42 @@
 #include "ShaderLab/Graphics/Swapchain.h"
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
+#ifndef SHADERLAB_TINY_PLAYER
+#define SHADERLAB_TINY_PLAYER 0
+#endif
+
+#if !SHADERLAB_TINY_PLAYER
 #include "ShaderLab/Audio/AudioSystem.h"
+#endif
 #include "ShaderLab/Core/Serializer.h"
 #include "ShaderLab/Core/PackageManager.h" 
 #include "stb_image.h"
 #include <windows.h>
 #include <cmath>
 #include <climits>
+#include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 
+#ifndef SHADERLAB_RUNTIME_IMGUI
+#define SHADERLAB_RUNTIME_IMGUI 1
+#endif
+
+#ifndef SHADERLAB_RUNTIME_DEBUG_LOG
+#define SHADERLAB_RUNTIME_DEBUG_LOG 0
+#endif
+
+#ifndef SHADERLAB_COMPACT_TRACK_DEBUG
+#define SHADERLAB_COMPACT_TRACK_DEBUG 0
+#endif
+
+#if SHADERLAB_RUNTIME_IMGUI
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx12.h"
+#endif
 
 namespace ShaderLab {
 
@@ -26,6 +48,7 @@ static const int kPostFxHistoryCount = 4;
 static const int kMaxPostFxChain = 32;
 static const char* kPackedVertexShaderPath = "assets/shaders/vertex.cso";
 
+#if SHADERLAB_RUNTIME_DEBUG_LOG
 static bool DebugConsoleEnabled() {
     static int cached = -1;
     if (cached == -1) {
@@ -43,6 +66,32 @@ static void DebugLog(const std::string& message) {
 static void DebugLogError(const std::string& message) {
     if (!DebugConsoleEnabled()) return;
     std::cerr << message << std::endl;
+}
+#else
+static void DebugLog(const std::string& message) {
+    (void)message;
+}
+
+static void DebugLogError(const std::string& message) {
+    (void)message;
+}
+#endif
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG
+#define SHADERLAB_RT_DEBUG_LOG(msgExpr) do { DebugLog((msgExpr)); } while (0)
+#define SHADERLAB_RT_DEBUG_LOG_ERROR(msgExpr) do { DebugLogError((msgExpr)); } while (0)
+#else
+#define SHADERLAB_RT_DEBUG_LOG(msgExpr) do { } while (0)
+#define SHADERLAB_RT_DEBUG_LOG_ERROR(msgExpr) do { } while (0)
+#endif
+
+static void SetCompactTrackDecodeError(std::string& outError, const char* message) {
+#if SHADERLAB_COMPACT_TRACK_DEBUG
+    outError = message;
+#else
+    (void)message;
+    outError.clear();
+#endif
 }
 
 static const char* TransitionToString(TransitionType type) {
@@ -68,6 +117,7 @@ static const char* TextureTypeToString(TextureType type) {
 }
 
 static void DebugLogProjectSummary(const ProjectData& project) {
+#if SHADERLAB_RUNTIME_DEBUG_LOG
     if (!DebugConsoleEnabled()) return;
 
     DebugLog("----- Project Summary -----");
@@ -98,6 +148,9 @@ static void DebugLogProjectSummary(const ProjectData& project) {
             + " stop=" + std::string(row.stop ? "true" : "false"));
     }
     DebugLog("--------------------------");
+#else
+    (void)project;
+#endif
 }
 
 static int TransitionIndex(TransitionType type) {
@@ -122,6 +175,75 @@ static const char* GetTransitionPackedPath(TransitionType type) {
         case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
         default: return "";
     }
+}
+
+static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, DemoTrack& track, std::string& outError) {
+    constexpr size_t kHeaderSize = 10;
+    constexpr size_t kRowSize = 9;
+    if (bytes.size() < kHeaderSize) {
+        SetCompactTrackDecodeError(outError, "Compact track binary too small.");
+        return false;
+    }
+
+    const auto readU16 = [&bytes](size_t offset) -> uint16_t {
+        return static_cast<uint16_t>(bytes[offset]) |
+               static_cast<uint16_t>(static_cast<uint16_t>(bytes[offset + 1]) << 8);
+    };
+    const auto readI16 = [&readU16](size_t offset) -> int16_t {
+        return static_cast<int16_t>(readU16(offset));
+    };
+    const auto readI8 = [&bytes](size_t offset) -> int8_t {
+        return static_cast<int8_t>(bytes[offset]);
+    };
+
+    const uint16_t magic0 = readU16(0);
+    const uint16_t magic1 = readU16(2);
+    if (magic0 != 0x4B54u || magic1 != 0x3252u) {
+        SetCompactTrackDecodeError(outError, "Compact track binary has invalid magic.");
+        return false;
+    }
+
+    const uint16_t bpmQ8 = readU16(4);
+    const uint16_t lengthBeats = readU16(6);
+    const uint16_t rowCount = readU16(8);
+
+    const size_t expectedSize = kHeaderSize + static_cast<size_t>(rowCount) * kRowSize;
+    if (bytes.size() < expectedSize) {
+        SetCompactTrackDecodeError(outError, "Compact track binary truncated.");
+        return false;
+    }
+
+    DemoTrack decoded;
+    decoded.name = "CompactTrack";
+    decoded.bpm = static_cast<float>(bpmQ8) / 256.0f;
+    decoded.lengthBeats = static_cast<int>(lengthBeats);
+    decoded.rows.reserve(rowCount);
+
+    size_t offset = kHeaderSize;
+    for (uint32_t i = 0; i < rowCount; ++i) {
+        const int16_t rowId = readI16(offset); offset += 2;
+        const int16_t sceneIndex = readI16(offset); offset += 2;
+        const uint8_t transition = bytes[offset++];
+        const uint8_t flags = bytes[offset++];
+        const uint8_t transitionDurationQ4 = bytes[offset++];
+        const int8_t timeOffsetQ4 = readI8(offset++);
+        const int8_t musicIndex = readI8(offset++);
+
+        TrackerRow row;
+        row.rowId = static_cast<int>(rowId);
+        row.sceneIndex = static_cast<int>(sceneIndex);
+        row.transition = static_cast<TransitionType>(transition);
+        row.transitionDuration = static_cast<float>(transitionDurationQ4) / 16.0f;
+        row.timeOffset = static_cast<float>(timeOffsetQ4) / 16.0f;
+        row.musicIndex = static_cast<int>(musicIndex);
+        row.oneShotIndex = -1;
+        row.stop = (flags & 0x1u) != 0;
+        row.isBeat = false;
+        decoded.rows.push_back(row);
+    }
+
+    track = std::move(decoded);
+    return true;
 }
 
 static const TrackerRow* FindNextSceneRow(const DemoTrack& track, int afterBeat) {
@@ -208,15 +330,26 @@ DemoPlayer::~DemoPlayer() { Shutdown(); }
 
 void DemoPlayer::Shutdown() {
     // Shutdown ImGui
+#if SHADERLAB_RUNTIME_IMGUI
     if (ImGui::GetCurrentContext()) {
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
     }
+#endif
 
+#if !SHADERLAB_TINY_PLAYER
     if (m_audio) { m_audio->Shutdown(); delete m_audio; m_audio = nullptr; }
+#else
+    m_audio = nullptr;
+#endif
     if (m_renderer) { m_renderer->Shutdown(); delete m_renderer; m_renderer = nullptr; }
+#if !SHADERLAB_TINY_PLAYER
     if (m_compiler) { m_compiler->Shutdown(); delete m_compiler; m_compiler = nullptr; }
+#else
+    m_compiler = nullptr;
+    m_compilerReady = false;
+#endif
     // Device/Swapchain/Renderer are owned externally (except Renderer/Compiler now)
 }
 
@@ -229,12 +362,17 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
         m_precompiledVertexShader = PackageManager::Get().GetFile(kPackedVertexShaderPath);
     }
     
+#if !SHADERLAB_TINY_PLAYER
     // Init Compiler (Graceful failure)
     m_compiler = new ShaderCompiler();
     m_compilerReady = m_compiler->Initialize();
     if (!m_compilerReady) {
         std::cerr << "Warning: Shader Compiler init failed (missing dxcompiler.dll?). Runtime compilation may fail.\n";
     }
+#else
+    m_compiler = nullptr;
+    m_compilerReady = false;
+#endif
 
     // Init Renderer
     m_renderer = new PreviewRenderer();
@@ -250,10 +388,14 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
     }
     
     // Create local Audio System
+#if !SHADERLAB_TINY_PLAYER
     m_audio = new AudioSystem();
     if (!m_audio->Initialize()) {
         std::cerr << "Failed to init audio\n";
     }
+#else
+    m_audio = nullptr;
+#endif
 
     m_width = width;
     m_height = height;
@@ -290,6 +432,7 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
     }
 
     // Initialize ImGui
+#if SHADERLAB_RUNTIME_IMGUI
     {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -316,6 +459,7 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
             m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
             m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart());
     }
+    #endif
 
     return true;
 }
@@ -345,6 +489,21 @@ void DemoPlayer::Update(double wallTime, float dt) {
                     auto data = PackageManager::Get().GetFile("project.json");
                     std::string jsonStr(data.begin(), data.end());
                     loaded = Serializer::LoadProjectFromJson(jsonStr, m_project);
+
+                    if (loaded && PackageManager::Get().HasFile("assets/track.bin")) {
+                        auto trackData = PackageManager::Get().GetFile("assets/track.bin");
+                        std::string trackError;
+                        if (!LoadCompactTrackBinaryFromBytes(trackData, m_project.track, trackError)) {
+#if SHADERLAB_COMPACT_TRACK_DEBUG
+                            SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to load compact track binary: " + trackError);
+#endif
+                        }
+#if SHADERLAB_COMPACT_TRACK_DEBUG
+                        else {
+                            SHADERLAB_RT_DEBUG_LOG("Loaded compact track binary from packed executable.");
+                        }
+#endif
+                    }
                 } else {
                     std::cerr << "Packed build is missing project.json in the executable.\n";
                 }
@@ -363,15 +522,17 @@ void DemoPlayer::Update(double wallTime, float dt) {
         }
 
         if (m_loadingStage == LoadingStage::LoadingAssets) {
+    #if !SHADERLAB_TINY_PLAYER
             bool packed = PackageManager::Get().IsPacked();
             for(auto& clip : m_project.audioLibrary) {
-                if (packed && PackageManager::Get().HasFile(clip.path)) {
-                        auto d = PackageManager::Get().GetFile(clip.path);
-                        m_audio->LoadAudioFromMemory(d.data(), d.size());
-                } else {
-                        m_audio->LoadAudio(clip.path);
-                }
+            if (packed && PackageManager::Get().HasFile(clip.path)) {
+                auto d = PackageManager::Get().GetFile(clip.path);
+                m_audio->LoadAudioFromMemory(d.data(), d.size());
+            } else {
+                m_audio->LoadAudio(clip.path);
             }
+            }
+    #endif
             m_compilationIndex = 0;
             // Force Playing state for standalone demo
             m_transport = m_project.transport; 
@@ -401,6 +562,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
         m_transport.timeSeconds += dt;
         
         // Input Handling for Debug Overlay (Alt+D)
+#if SHADERLAB_RUNTIME_IMGUI
         bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
         bool d = (GetAsyncKeyState('D') & 0x8000) != 0;
         if (alt && d && !m_altPressed) {
@@ -409,6 +571,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
         } else if (!d) {
             m_altPressed = false;
         }
+#endif
         
         // Sync Audio
         // if (m_audio) m_audio->Update();
@@ -490,24 +653,30 @@ void DemoPlayer::Update(double wallTime, float dt) {
                              m_activeSceneOffset = row.timeOffset;
                          }
                          
+#if !SHADERLAB_TINY_PLAYER
                          // Audio
                          if (row.musicIndex >= 0 && row.musicIndex < (int)m_project.audioLibrary.size() && m_audio) {
                              auto& clip = m_project.audioLibrary[row.musicIndex];
-                             
+
                              if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(clip.path)) {
                                  auto d = PackageManager::Get().GetFile(clip.path);
                                  m_audio->LoadAudioFromMemory(d.data(), d.size());
                              } else {
                                  m_audio->LoadAudio(clip.path);
                              }
-                             
+
                              m_audio->Play();
                              if(clip.bpm > 0) m_transport.bpm = clip.bpm;
                          }
+#endif
                          // Stop
                          if (row.stop) {
                              m_transport.state = TransportState::Stopped;
-                             m_audio->Stop();
+#if !SHADERLAB_TINY_PLAYER
+                             if (m_audio) {
+                                 m_audio->Stop();
+                             }
+#endif
                          }
                      }
                  }
@@ -544,25 +713,25 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
         std::vector<uint8_t> data;
         if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(scene.precompiledPath)) {
             data = PackageManager::Get().GetFile(scene.precompiledPath);
-            DebugLog("Loaded packed scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+            SHADERLAB_RT_DEBUG_LOG("Loaded packed scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
         } else {
             loadBytecodeFromFile(scene.precompiledPath, data);
             if (!data.empty()) {
-                DebugLog("Loaded disk scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+                SHADERLAB_RT_DEBUG_LOG("Loaded disk scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
             }
         }
 
         if (!data.empty()) {
             scene.pipelineState = m_renderer->CreatePSOFromBytecode(data);
             if (scene.pipelineState) {
-                DebugLog("Scene PSO created from precompiled shader: " + scene.name);
+                SHADERLAB_RT_DEBUG_LOG("Scene PSO created from precompiled shader: " + scene.name);
                 sceneReady = true;
             } else {
                 std::cerr << "Failed to create PSO from precompiled shader for scene " << scene.name << std::endl;
             }
         }
         if (data.empty()) {
-            DebugLogError("No precompiled scene shader data for: " + scene.name);
+            SHADERLAB_RT_DEBUG_LOG_ERROR("No precompiled scene shader data for: " + scene.name);
         }
     }
 
@@ -752,11 +921,11 @@ bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect) {
         std::vector<uint8_t> data;
         if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(effect.precompiledPath)) {
             data = PackageManager::Get().GetFile(effect.precompiledPath);
-            DebugLog("Loaded packed post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+            SHADERLAB_RT_DEBUG_LOG("Loaded packed post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
         } else {
             loadBytecodeFromFile(effect.precompiledPath, data);
             if (!data.empty()) {
-                DebugLog("Loaded disk post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+                SHADERLAB_RT_DEBUG_LOG("Loaded disk post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
             }
         }
 
@@ -765,12 +934,12 @@ bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect) {
             if (effect.pipelineState) {
                 effect.isDirty = false;
                 effect.lastCompiledCode = effect.shaderCode;
-                DebugLog("Post FX PSO created from precompiled shader: " + effect.name);
+                SHADERLAB_RT_DEBUG_LOG("Post FX PSO created from precompiled shader: " + effect.name);
                 return true;
             }
         }
         if (data.empty()) {
-            DebugLogError("No precompiled post FX shader data for: " + effect.name);
+            SHADERLAB_RT_DEBUG_LOG_ERROR("No precompiled post FX shader data for: " + effect.name);
         }
     }
 
@@ -1056,6 +1225,7 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
 }
 
 void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle) {
+#if SHADERLAB_RUNTIME_IMGUI
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -1076,6 +1246,7 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
         }
         ImGui::End();
     }
+#endif
 
     if (m_loadingStage != LoadingStage::Ready) {
         float clearColor[] = {0.1f, 0.1f, 0.2f, 1.0f};
@@ -1215,12 +1386,15 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
     }
 
 render_ui:
+    (void)0;
+#if SHADERLAB_RUNTIME_IMGUI
     ImGui::Render();
     if (m_imguiSrvHeap) {
         ID3D12DescriptorHeap* heaps[] = { m_imguiSrvHeap.Get() };
         cmd->SetDescriptorHeaps(1, heaps);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmd);
     }
+#endif
 }
 
 }

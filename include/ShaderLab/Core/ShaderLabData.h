@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstddef>
 #include <d3d12.h>
 #include <wrl/client.h>
 
@@ -78,6 +79,7 @@ struct Scene {
         std::string lastCompiledCode;
         std::string precompiledPath;
         ComPtr<ID3D12PipelineState> pipelineState;
+        size_t compiledShaderBytes = 0;
         int historyIndex = 0;
         bool historyInitialized = false;
         std::vector<ComPtr<ID3D12Resource>> historyTextures;
@@ -94,6 +96,7 @@ struct Scene {
     ComPtr<ID3D12DescriptorHeap> srvHeap;
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     ComPtr<ID3D12PipelineState> pipelineState;
+    size_t compiledShaderBytes = 0;
     bool textureValid = false;
     bool isDirty = true;
 

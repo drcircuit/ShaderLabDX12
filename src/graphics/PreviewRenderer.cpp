@@ -165,6 +165,7 @@ ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& sh
 
 ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors, bool flipFragCoord) {
     outErrors.clear();
+    m_lastCompiledPixelShaderSize = 0;
 
     // Wrap user shader code with proper entry point
     std::string wrappedSource = R"(
@@ -230,6 +231,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
 
     ComPtr<ID3D12PipelineState> pso;
     if (CreatePipelineState(psResult.bytecode, pso)) {
+        m_lastCompiledPixelShaderSize = psResult.bytecode.size();
         return pso;
     }
     return nullptr;

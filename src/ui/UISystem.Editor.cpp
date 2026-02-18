@@ -1,6 +1,8 @@
 #include "ShaderLab/UI/UISystem.h"
+#include "ShaderLab/UI/UIConfig.h"
 #include "ShaderLab/UI/UISystemDemoUtils.h"
 #include "ShaderLab/UI/UISystemAssets.h"
+#include "ShaderLab/UI/OpenFontIcons.h"
 #include "ShaderLab/Graphics/Device.h"
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 
@@ -8,7 +10,10 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -46,6 +51,90 @@ ImVec2 FitAspect(ImVec2 avail, float aspect) {
     width = (std::max)(1.0f, width);
     height = (std::max)(1.0f, height);
     return ImVec2(width, height);
+}
+
+bool IconButton(const char* id, uint32_t iconCodepoint, const char* tooltip, const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+    const std::string icon = OpenFontIcons::ToUtf8(iconCodepoint);
+    const std::string buttonId = std::string("##") + id;
+
+    ImVec2 buttonSize = size;
+    if (buttonSize.x <= 0.0f || buttonSize.y <= 0.0f) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        const ImVec2 pad = ImGui::GetStyle().FramePadding;
+        if (buttonSize.x <= 0.0f) buttonSize.x = textSize.x + pad.x * 2.0f;
+        if (buttonSize.y <= 0.0f) buttonSize.y = textSize.y + pad.y * 2.0f;
+    }
+
+    const bool pressed = ImGui::InvisibleButton(buttonId.c_str(), buttonSize);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : (hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+    drawList->AddRectFilled(min, max, bg, style.FrameRounding);
+    if (style.FrameBorderSize > 0.0f) {
+        drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding, 0, style.FrameBorderSize);
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize();
+
+    float textX = min.x;
+    float textY = min.y;
+    bool usedGlyphBounds = false;
+    if (font) {
+        if (ImFontBaked* baked = font->GetFontBaked(fontSize)) {
+            if (ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(iconCodepoint))) {
+                const float glyphW = glyph->X1 - glyph->X0;
+                const float glyphH = glyph->Y1 - glyph->Y0;
+                textX = min.x + (buttonSize.x - glyphW) * 0.5f - glyph->X0;
+                textY = min.y + (buttonSize.y - glyphH) * 0.5f - glyph->Y0;
+                usedGlyphBounds = true;
+            }
+        }
+    }
+    if (!usedGlyphBounds) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        textX = min.x + (buttonSize.x - textSize.x) * 0.5f;
+        textY = min.y + (buttonSize.y - textSize.y) * 0.5f;
+    }
+
+    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(UIConfig::ColorCheckMark), icon.c_str());
+
+    if (ImGui::IsItemHovered() && tooltip && *tooltip) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    return pressed;
+}
+
+float CompactActionHeight() {
+    return ImGui::GetFrameHeight();
+}
+
+ImVec2 CompactActionSize(float width = -1.0f) {
+    return ImVec2(width, CompactActionHeight());
+}
+
+std::string FormatByteSize(size_t bytes) {
+    if (bytes == 0) return "0 B";
+    static const char* units[] = { "B", "KB", "MB", "GB" };
+    double value = static_cast<double>(bytes);
+    int unitIndex = 0;
+    while (value >= 1024.0 && unitIndex < 3) {
+        value /= 1024.0;
+        ++unitIndex;
+    }
+    char buffer[32] = {};
+    if (unitIndex == 0) {
+        std::snprintf(buffer, sizeof(buffer), "%zu %s", bytes, units[unitIndex]);
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "%.2f %s", value, units[unitIndex]);
+    }
+    return std::string(buffer);
 }
 }
 
@@ -112,7 +201,7 @@ void UISystem::ShowModeWindows() {
         ShowSceneList();
 
         if (ImGui::Begin("Demo: Runtime Log")) {
-            if (ImGui::Button("Clear")) {
+            if (IconButton("ClearRuntimeLog", OpenFontIcons::kTrash2, "Clear log")) {
                 m_demoLog.clear();
             }
             ImGui::SameLine();
@@ -214,7 +303,7 @@ void UISystem::ShowModeWindows() {
                     return (int)scene.bindings.size() % 8;
                 };
 
-                if (ImGui::Button("+ Add File Texture")) {
+                if (IconButton("AddFileTexture", OpenFontIcons::kFilePlus, "Add file texture")) {
                     TextureBinding binding;
                     binding.enabled = true;
                     binding.bindingType = BindingType::File;
@@ -240,7 +329,7 @@ void UISystem::ShowModeWindows() {
                     scene.bindings.push_back(binding);
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("+ Add Scene Sampler")) {
+                if (IconButton("AddSceneSampler", OpenFontIcons::kPlus, "Add scene sampler")) {
                     TextureBinding binding;
                     binding.enabled = true;
                     binding.bindingType = BindingType::Scene;
@@ -410,7 +499,7 @@ void UISystem::ShowModeWindows() {
                                         binding.fileTextureValid = binding.textureResource != nullptr;
                                     }
                                 }
-                                if (ImGui::Button("Browse")) {
+                                if (IconButton("BrowseTexture", OpenFontIcons::kFolder, "Browse texture file")) {
                                     OPENFILENAMEA ofn = {};
                                     char szFile[260] = {};
                                     ofn.lStructSize = sizeof(ofn);
@@ -473,7 +562,7 @@ void UISystem::ShowModeWindows() {
                 ImGui::EndListBox();
             }
 
-            if (ImGui::Button("Add Preset")) {
+            if (IconButton("AddPreset", OpenFontIcons::kPlus, "Add preset effect")) {
                 if (selectedPresetIndex >= 0 && selectedPresetIndex < (int)kPostFxPresetCount) {
                     const auto& preset = kPostFxPresets[selectedPresetIndex];
                     m_postFxDraftChain.emplace_back(preset.name, preset.code);
@@ -482,7 +571,7 @@ void UISystem::ShowModeWindows() {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Add Empty")) {
+            if (IconButton("AddEmptyFx", OpenFontIcons::kFilePlus, "Add empty effect")) {
                 m_postFxDraftChain.emplace_back("New FX", "float4 main(float2 fragCoord, float2 iResolution, float iTime) {\n    float2 uv = fragCoord / iResolution;\n    return iChannel0.Sample(iSampler0, uv);\n}\n");
                 m_postFxSelectedIndex = (int)m_postFxDraftChain.size() - 1;
                 SyncPostFxEditorToSelection();
@@ -514,7 +603,7 @@ void UISystem::ShowModeWindows() {
             }
 
             if (m_postFxSourceSceneIndex >= 0 && m_postFxSourceSceneIndex < (int)m_scenes.size()) {
-                if (ImGui::Button("Apply Draft To Scene")) {
+                if (IconButton("ApplyFxDraft", OpenFontIcons::kCheck, "Apply draft to scene")) {
                     m_scenes[m_postFxSourceSceneIndex].postFxChain = m_postFxDraftChain;
                 }
             }
@@ -541,17 +630,17 @@ void UISystem::ShowModeWindows() {
 
             if (m_postFxSelectedIndex >= 0 && m_postFxSelectedIndex < (int)m_postFxDraftChain.size()) {
                 ImGui::Separator();
-                if (ImGui::Button("Move Up") && m_postFxSelectedIndex > 0) {
+                if (IconButton("MoveFxUp", OpenFontIcons::kChevronUp, "Move effect up") && m_postFxSelectedIndex > 0) {
                     std::swap(m_postFxDraftChain[m_postFxSelectedIndex], m_postFxDraftChain[m_postFxSelectedIndex - 1]);
                     m_postFxSelectedIndex -= 1;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Move Down") && m_postFxSelectedIndex + 1 < (int)m_postFxDraftChain.size()) {
+                if (IconButton("MoveFxDown", OpenFontIcons::kChevronDown, "Move effect down") && m_postFxSelectedIndex + 1 < (int)m_postFxDraftChain.size()) {
                     std::swap(m_postFxDraftChain[m_postFxSelectedIndex], m_postFxDraftChain[m_postFxSelectedIndex + 1]);
                     m_postFxSelectedIndex += 1;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Remove")) {
+                if (IconButton("RemoveFx", OpenFontIcons::kTrash2, "Remove effect")) {
                     m_postFxDraftChain.erase(m_postFxDraftChain.begin() + m_postFxSelectedIndex);
                     if (m_postFxSelectedIndex >= (int)m_postFxDraftChain.size()) {
                         m_postFxSelectedIndex = (int)m_postFxDraftChain.size() - 1;
@@ -620,7 +709,7 @@ void UISystem::ShowSceneList() {
         ImGui::Separator();
 
         // Add scene button
-        if (ImGui::Button("+ Add Scene")) {
+        if (IconButton("AddScene", OpenFontIcons::kPlus, "Add scene")) {
             char nameBuf[64];
             snprintf(nameBuf, sizeof(nameBuf), "Scene %d", (int)m_scenes.size() + 1);
 
@@ -641,101 +730,6 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
     color.b = 0.5 + 0.5 * sin((uv.x + uv.y) * 5.0 + iTime * 0.7);
 
     return float4(color, 1.0);
-}
-
-void UISystem::ShowSnippetBin() {
-    if (!ImGui::Begin("Scene: Snippets")) {
-        ImGui::End();
-        return;
-    }
-
-    ImGui::Text("Reusable Snippets");
-    ImGui::Separator();
-
-    if (ImGui::Button("+ Save Current As Snippet")) {
-        ShaderSnippet snippet;
-        snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
-        snippet.code = m_shaderState.text;
-        if (!snippet.code.empty()) {
-            m_snippets.push_back(std::move(snippet));
-            m_selectedSnippetIndex = (int)m_snippets.size() - 1;
-            SaveGlobalSnippets();
-        }
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("+ Add Empty Snippet")) {
-        ShaderSnippet snippet;
-        snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
-        snippet.code = "float4 SnippetFunc(float2 uv, float t) {\n    return float4(uv, sin(t), 1.0);\n}\n";
-        m_snippets.push_back(std::move(snippet));
-        m_selectedSnippetIndex = (int)m_snippets.size() - 1;
-        SaveGlobalSnippets();
-    }
-
-    ImGui::Separator();
-
-    if (m_snippets.empty()) {
-        ImGui::TextDisabled("No snippets yet.");
-        ImGui::TextDisabled("Create one from current shader text.");
-        ImGui::End();
-        return;
-    }
-
-    if (m_selectedSnippetIndex < 0 || m_selectedSnippetIndex >= (int)m_snippets.size()) {
-        m_selectedSnippetIndex = 0;
-    }
-
-    if (ImGui::BeginListBox("##SnippetList", ImVec2(-1, 170.0f))) {
-        for (int i = 0; i < (int)m_snippets.size(); ++i) {
-            bool isSelected = (i == m_selectedSnippetIndex);
-            if (ImGui::Selectable(m_snippets[i].name.c_str(), isSelected)) {
-                m_selectedSnippetIndex = i;
-            }
-        }
-        ImGui::EndListBox();
-    }
-
-    auto& selected = m_snippets[m_selectedSnippetIndex];
-
-    char nameBuffer[128] = {};
-    strncpy_s(nameBuffer, selected.name.c_str(), _TRUNCATE);
-    if (ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer))) {
-        selected.name = nameBuffer;
-        if (selected.name.empty()) {
-            selected.name = "Snippet " + std::to_string(m_selectedSnippetIndex + 1);
-        }
-        SaveGlobalSnippets();
-    }
-
-    if (ImGui::Button("Insert At Cursor")) {
-        InsertSnippetIntoEditor(selected.code);
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Overwrite With Current Shader")) {
-        selected.code = m_shaderState.text;
-        SaveGlobalSnippets();
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Delete Snippet")) {
-        m_snippets.erase(m_snippets.begin() + m_selectedSnippetIndex);
-        if (m_selectedSnippetIndex >= (int)m_snippets.size()) {
-            m_selectedSnippetIndex = (int)m_snippets.size() - 1;
-        }
-        SaveGlobalSnippets();
-        ImGui::End();
-        return;
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Snippet Code:");
-    ImGui::BeginChild("SnippetPreview", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::TextUnformatted(selected.code.c_str());
-    ImGui::EndChild();
-
-    ImGui::End();
 }
 )";
 
@@ -803,6 +797,270 @@ void UISystem::ShowSnippetBin() {
     ImGui::End();
 }
 
+void UISystem::ShowSnippetBin() {
+    if (!ImGui::Begin("Scene: Snippets")) {
+        ImGui::End();
+        return;
+    }
+
+    namespace fs = std::filesystem;
+
+    ImGui::Text("Reusable Snippets");
+    ImGui::Separator();
+
+    if (m_snippetFolders.empty()) {
+        ShaderSnippetFolder folder;
+        folder.name = "General";
+        if (!m_snippetsDirectoryPath.empty()) {
+            folder.filePath = (fs::path(m_snippetsDirectoryPath) / "General.json").string();
+        }
+        m_snippetFolders.push_back(std::move(folder));
+        m_selectedSnippetFolderIndex = 0;
+    }
+
+    if (m_selectedSnippetFolderIndex < 0 || m_selectedSnippetFolderIndex >= (int)m_snippetFolders.size()) {
+        m_selectedSnippetFolderIndex = 0;
+    }
+
+    std::vector<const char*> folderNames;
+    folderNames.reserve(m_snippetFolders.size());
+    for (auto& folder : m_snippetFolders) {
+        folderNames.push_back(folder.name.c_str());
+    }
+
+    ImGui::TextUnformatted("Folder");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::Combo("##SnippetFolder", &m_selectedSnippetFolderIndex, folderNames.data(), (int)folderNames.size());
+
+    static char newFolderName[64] = "";
+    const float folderActionButtonSize = CompactActionHeight();
+    const float folderActionSpacing = ImGui::GetStyle().ItemSpacing.x;
+    float folderInputWidth = ImGui::GetContentRegionAvail().x - (folderActionButtonSize * 2.0f + folderActionSpacing);
+    folderInputWidth = (std::max)(90.0f, folderInputWidth);
+    ImGui::SetNextItemWidth(folderInputWidth);
+    ImGui::InputText("##NewSnippetFolder", newFolderName, sizeof(newFolderName));
+    ImGui::SameLine(0.0f, folderActionSpacing);
+    if (IconButton("SnippetAddFolder", OpenFontIcons::kPlus, "Add folder", CompactActionSize(folderActionButtonSize))) {
+        std::string folderName = newFolderName;
+        if (folderName.empty()) {
+            folderName = "Folder " + std::to_string((int)m_snippetFolders.size() + 1);
+        }
+
+        auto sanitize = [](const std::string& value) {
+            std::string out;
+            out.reserve(value.size());
+            for (char c : value) {
+                const bool ok =
+                    (c >= 'a' && c <= 'z') ||
+                    (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '_' || c == '-';
+                out.push_back(ok ? c : '_');
+            }
+            if (out.empty()) {
+                out = "Folder";
+            }
+            return out;
+        };
+
+        fs::path dir = m_snippetsDirectoryPath.empty() ? fs::current_path() : fs::path(m_snippetsDirectoryPath);
+        std::string stem = sanitize(folderName);
+        fs::path filePath = dir / (stem + ".json");
+        int suffix = 2;
+        while (fs::exists(filePath)) {
+            filePath = dir / (stem + "_" + std::to_string(suffix) + ".json");
+            ++suffix;
+        }
+
+        ShaderSnippetFolder folder;
+        folder.name = folderName;
+        folder.filePath = filePath.string();
+        m_snippetFolders.push_back(std::move(folder));
+        m_selectedSnippetFolderIndex = (int)m_snippetFolders.size() - 1;
+        m_selectedSnippetIndex = -1;
+        SaveGlobalSnippets();
+        newFolderName[0] = '\0';
+    }
+    ImGui::SameLine(0.0f, folderActionSpacing);
+    if (IconButton("SnippetDeleteFolder", OpenFontIcons::kTrash2, "Delete folder", CompactActionSize(folderActionButtonSize)) && m_snippetFolders.size() > 1) {
+        fs::path fileToDelete = m_snippetFolders[m_selectedSnippetFolderIndex].filePath;
+        m_snippetFolders.erase(m_snippetFolders.begin() + m_selectedSnippetFolderIndex);
+        if (m_selectedSnippetFolderIndex >= (int)m_snippetFolders.size()) {
+            m_selectedSnippetFolderIndex = (int)m_snippetFolders.size() - 1;
+        }
+        m_selectedSnippetIndex = -1;
+        if (!fileToDelete.empty()) {
+            std::error_code ec;
+            fs::remove(fileToDelete, ec);
+        }
+        SaveGlobalSnippets();
+    }
+
+    auto& activeFolder = m_snippetFolders[m_selectedSnippetFolderIndex];
+    auto& snippets = activeFolder.snippets;
+
+    ImGui::Separator();
+
+    if (ImGui::BeginTable("SnippetCreateActions", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("CreateA", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("CreateB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableNextColumn();
+        if (IconButton("SnippetSaveCurrent", OpenFontIcons::kSave, "Save current shader as snippet", CompactActionSize())) {
+            ShaderSnippet snippet;
+            snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
+            snippet.code = m_shaderState.text;
+            if (!snippet.code.empty()) {
+                snippets.push_back(std::move(snippet));
+                m_selectedSnippetIndex = (int)snippets.size() - 1;
+                SaveGlobalSnippets();
+            }
+        }
+
+        ImGui::TableNextColumn();
+        if (IconButton("SnippetAddEmpty", OpenFontIcons::kFilePlus, "Add empty snippet", CompactActionSize())) {
+            ShaderSnippet snippet;
+            snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
+            snippet.code = "float4 SnippetFunc(float2 uv, float t) {\n    return float4(uv, sin(t), 1.0);\n}\n";
+            snippets.push_back(std::move(snippet));
+            m_selectedSnippetIndex = (int)snippets.size() - 1;
+            SaveGlobalSnippets();
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+
+    if (snippets.empty()) {
+        ImGui::TextDisabled("No snippets yet.");
+        ImGui::TextDisabled("Create one from current shader text.");
+        ImGui::End();
+        return;
+    }
+
+    if (m_selectedSnippetIndex < 0 || m_selectedSnippetIndex >= (int)snippets.size()) {
+        m_selectedSnippetIndex = 0;
+    }
+
+    std::vector<const char*> snippetNames;
+    snippetNames.reserve(snippets.size());
+    for (const auto& snippet : snippets) {
+        snippetNames.push_back(snippet.name.c_str());
+    }
+
+    ImGui::TextUnformatted("Snippet");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::Combo("##SnippetSelector", &m_selectedSnippetIndex, snippetNames.data(), (int)snippetNames.size());
+
+    auto& selected = snippets[m_selectedSnippetIndex];
+
+    if (m_snippetDraftFolderIndex != m_selectedSnippetFolderIndex ||
+        m_snippetDraftIndex != m_selectedSnippetIndex) {
+        m_snippetDraftFolderIndex = m_selectedSnippetFolderIndex;
+        m_snippetDraftIndex = m_selectedSnippetIndex;
+        m_snippetDraftCode = selected.code;
+        m_snippetDraftDirty = false;
+        m_snippetTextEditor.SetText(m_snippetDraftCode);
+    }
+
+    if (ImGui::BeginTable("SnippetActions", 3, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("SnipActA", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("SnipActB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("SnipActC", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableNextColumn();
+        if (IconButton("SnippetInsert", OpenFontIcons::kInsert, "Insert at cursor", CompactActionSize())) {
+            InsertSnippetIntoEditor(selected.code);
+        }
+
+        ImGui::TableNextColumn();
+        if (IconButton("SnippetOverwrite", OpenFontIcons::kCopy, "Overwrite snippet with current shader", CompactActionSize())) {
+            selected.code = m_shaderState.text;
+            m_snippetDraftCode = selected.code;
+            m_snippetTextEditor.SetText(m_snippetDraftCode);
+            m_snippetDraftDirty = false;
+            SaveGlobalSnippets();
+        }
+
+        ImGui::TableNextColumn();
+        if (IconButton("SnippetDelete", OpenFontIcons::kTrash2, "Delete snippet", CompactActionSize())) {
+            snippets.erase(snippets.begin() + m_selectedSnippetIndex);
+            if (m_selectedSnippetIndex >= (int)snippets.size()) {
+                m_selectedSnippetIndex = (int)snippets.size() - 1;
+            }
+            SaveGlobalSnippets();
+            ImGui::EndTable();
+            ImGui::End();
+            return;
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Snippet Code");
+    ImGui::SameLine();
+    if (IconButton("SnippetEditMode", m_snippetCodeLocked ? OpenFontIcons::kLock : OpenFontIcons::kUnlock, m_snippetCodeLocked ? "Locked" : "Unlocked")) {
+        m_snippetCodeLocked = !m_snippetCodeLocked;
+        if (!m_snippetCodeLocked) {
+            m_snippetDraftCode = selected.code;
+            m_snippetTextEditor.SetText(m_snippetDraftCode);
+            m_snippetDraftDirty = false;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled(m_snippetCodeLocked ? "Locked" : "Edit Draft");
+
+    if (m_snippetTextEditor.GetText() != m_snippetDraftCode) {
+        m_snippetTextEditor.SetText(m_snippetDraftCode);
+    }
+    m_snippetTextEditor.SetReadOnly(m_snippetCodeLocked);
+    float codeEditorHeight = ImGui::GetContentRegionAvail().y;
+    if (!m_snippetCodeLocked) {
+        codeEditorHeight -= (ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() + 6.0f);
+    }
+    codeEditorHeight = (std::max)(180.0f, codeEditorHeight);
+    int snippetFontIndex = (std::max)(0, (std::min)(4, (int)m_shaderState.codeFontSize));
+    ImFont* activeSnippetCodeFont = m_fontCodeSizes[snippetFontIndex] ? m_fontCodeSizes[snippetFontIndex] : m_fontCode;
+    if (activeSnippetCodeFont) {
+        ImGui::PushFont(activeSnippetCodeFont);
+    }
+    m_snippetTextEditor.Render("##SnippetCodeEditor", ImVec2(-1.0f, codeEditorHeight), true);
+    if (activeSnippetCodeFont) {
+        ImGui::PopFont();
+    }
+    if (!m_snippetCodeLocked && m_snippetTextEditor.IsTextChanged()) {
+        m_snippetDraftCode = m_snippetTextEditor.GetText();
+        m_snippetDraftDirty = (m_snippetDraftCode != selected.code);
+    }
+
+    if (!m_snippetCodeLocked) {
+        if (ImGui::BeginTable("SnippetDraftActions", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableSetupColumn("DraftA", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("DraftB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableNextColumn();
+            if (IconButton("SnippetSaveDraft", OpenFontIcons::kSave, "Save snippet edits", CompactActionSize())) {
+                selected.code = m_snippetDraftCode;
+                m_snippetDraftDirty = false;
+                SaveGlobalSnippets();
+            }
+
+            ImGui::TableNextColumn();
+            if (IconButton("SnippetRevertDraft", OpenFontIcons::kRefresh, "Revert unsaved edits", CompactActionSize())) {
+                m_snippetDraftCode = selected.code;
+                m_snippetTextEditor.SetText(m_snippetDraftCode);
+                m_snippetDraftDirty = false;
+            }
+            ImGui::EndTable();
+        }
+
+        if (m_snippetDraftDirty) {
+            ImGui::TextDisabled("Unsaved snippet edits");
+        }
+    }
+
+    ImGui::End();
+}
+
 void UISystem::CreateDefaultScene() {
     // Classic ShaderToy hello world - colorful sine wave pattern
     const char* defaultShader = R"(// ShaderToy-style Hello World
@@ -855,7 +1113,7 @@ void UISystem::ShowShaderEditor() {
         const bool editorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         const bool ctrlDown = ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl);
         const bool ctrlEnterPressed = editorFocused && ctrlDown && ImGui::IsKeyPressed(ImGuiKey_Enter);
-        if (ImGui::Button("Compile (Ctrl+Enter)") ||
+        if (IconButton("CompileShader", OpenFontIcons::kCode, "Compile (Ctrl+Enter / F7)") ||
             ctrlEnterPressed ||
             (editorFocused && ImGui::IsKeyPressed(ImGuiKey_F7))) {
 
@@ -933,11 +1191,16 @@ void UISystem::ShowShaderEditor() {
                         if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
                             m_scenes[m_activeSceneIndex].pipelineState = pso;
                             m_scenes[m_activeSceneIndex].shaderCode = m_shaderState.text;
+                            m_scenes[m_activeSceneIndex].compiledShaderBytes = m_previewRenderer->GetLastCompiledPixelShaderSize();
+                            m_scenes[m_activeSceneIndex].isDirty = false;
                         }
 
                         m_shaderState.status = CompileStatus::Success;
                         m_shaderState.lastCompiledText = m_shaderState.text;
                     } else {
+                        if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
+                            m_scenes[m_activeSceneIndex].compiledShaderBytes = 0;
+                        }
                         m_shaderState.status = CompileStatus::Error;
                         for (const auto& error : errors) {
                             Diagnostic diag;
@@ -950,15 +1213,38 @@ void UISystem::ShowShaderEditor() {
         }
         ImGui::SameLine();
         ImGui::TextColored(statusColor, "%s", statusText);
+        if (m_shaderState.status == CompileStatus::Success) {
+            size_t compiledBytes = 0;
+            if (m_currentMode == UIMode::PostFX) {
+                if (m_postFxSelectedIndex >= 0 && m_postFxSelectedIndex < (int)m_postFxDraftChain.size()) {
+                    compiledBytes = m_postFxDraftChain[m_postFxSelectedIndex].compiledShaderBytes;
+                }
+            } else if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
+                compiledBytes = m_scenes[m_activeSceneIndex].compiledShaderBytes;
+            }
 
-        // Theme selector
+            if (compiledBytes > 0) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", FormatByteSize(compiledBytes).c_str());
+            }
+        }
+
+        // Theme selector + code font size selector
         ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 160);
-        ImGui::SetNextItemWidth(150);
+        const float themeWidth = 150.0f;
+        const float fontSizeWidth = 96.0f;
+        const float rightPad = 10.0f;
+        const float totalControlsWidth = themeWidth + fontSizeWidth + ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - totalControlsWidth - rightPad);
+        ImGui::SetNextItemWidth(themeWidth);
         const char* themeNames[] = { "Dark (Enhanced)", "Dark", "Light", "Retro Blue" };
         int currentTheme = (int)m_shaderState.theme;
         if (ImGui::Combo("##Theme", &currentTheme, themeNames, 4)) {
             m_shaderState.theme = (EditorTheme)currentTheme;
+            auto ApplyPalette = [&](const TextEditor::Palette& palette) {
+                m_textEditor.SetPalette(palette);
+                m_snippetTextEditor.SetPalette(palette);
+            };
             TextEditor::Palette palette;
             switch (m_shaderState.theme) {
                 case EditorTheme::Dark:
@@ -973,18 +1259,26 @@ void UISystem::ShowShaderEditor() {
                     palette[(int)TextEditor::PaletteIndex::Identifier] = 0xffdcdcdc;      // #dcdcdc (White/Grey)
                     palette[(int)TextEditor::PaletteIndex::Punctuation] = 0xffdcdcdc;
                     palette[(int)TextEditor::PaletteIndex::Preprocessor] = 0xff9b9b9b;
-                    m_textEditor.SetPalette(palette);
+                    ApplyPalette(palette);
                     break;
                 case EditorTheme::DarkOriginal:
-                    m_textEditor.SetPalette(TextEditor::GetDarkPalette());
+                    ApplyPalette(TextEditor::GetDarkPalette());
                     break;
                 case EditorTheme::Light:
-                    m_textEditor.SetPalette(TextEditor::GetLightPalette());
+                    ApplyPalette(TextEditor::GetLightPalette());
                     break;
                 case EditorTheme::RetroBlue:
-                    m_textEditor.SetPalette(TextEditor::GetRetroBluePalette());
+                    ApplyPalette(TextEditor::GetRetroBluePalette());
                     break;
             }
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(fontSizeWidth);
+        const char* codeSizeNames[] = { "XS", "S", "M", "L", "XL" };
+        int currentCodeFontSize = (int)m_shaderState.codeFontSize;
+        if (ImGui::Combo("##CodeFontSize", &currentCodeFontSize, codeSizeNames, 5)) {
+            currentCodeFontSize = (std::max)(0, (std::min)(4, currentCodeFontSize));
+            m_shaderState.codeFontSize = (CodeFontSize)currentCodeFontSize;
         }
 
         ImGui::Separator();
@@ -1008,7 +1302,7 @@ void UISystem::ShowShaderEditor() {
             }
             ImGui::InputText("##Search", m_shaderState.searchBuffer, sizeof(m_shaderState.searchBuffer));
             ImGui::SameLine();
-            if (ImGui::Button("Find Next")) {
+            if (IconButton("FindNext", OpenFontIcons::kSearch, "Find next")) {
                 std::string searchStr = m_shaderState.searchBuffer;
                 if (!searchStr.empty()) {
                     std::string text = m_textEditor.GetText();
@@ -1059,7 +1353,7 @@ void UISystem::ShowShaderEditor() {
             ImGui::SetNextItemWidth(-80);
             ImGui::InputText("##Replace", m_shaderState.replaceBuffer, sizeof(m_shaderState.replaceBuffer));
             ImGui::SameLine();
-            if (ImGui::Button("Replace All")) {
+            if (IconButton("ReplaceAll", OpenFontIcons::kRefresh, "Replace all")) {
                 std::string search = m_shaderState.searchBuffer;
                 std::string replace = m_shaderState.replaceBuffer;
                 if (!search.empty()) {
@@ -1089,7 +1383,7 @@ void UISystem::ShowShaderEditor() {
             }
 
             // Close button on new line
-            if (ImGui::Button("Close Search")) {
+            if (IconButton("CloseSearch", OpenFontIcons::kX, "Close search")) {
                 m_shaderState.showSearchReplace = false;
             }
 
@@ -1112,11 +1406,13 @@ void UISystem::ShowShaderEditor() {
         if (ctrlEnterPressed) {
             m_textEditor.SetHandleKeyboardInputs(false);
         }
-        if (m_fontCode) {
-            ImGui::PushFont(m_fontCode);
+        int codeFontIndex = (std::max)(0, (std::min)(4, (int)m_shaderState.codeFontSize));
+        ImFont* activeCodeFont = m_fontCodeSizes[codeFontIndex] ? m_fontCodeSizes[codeFontIndex] : m_fontCode;
+        if (activeCodeFont) {
+            ImGui::PushFont(activeCodeFont);
         }
         m_textEditor.Render("##ShaderCode", ImVec2(-1, -statusBarHeight), true);
-        if (m_fontCode) {
+        if (activeCodeFont) {
             ImGui::PopFont();
         }
         if (ctrlEnterPressed) {
@@ -1314,18 +1610,18 @@ void UISystem::BuildLayout(UIMode mode) {
         ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Up, 0.08f, &dock_up, &dock_down);
 
         // 2. Split Left (Library)
-        ImGui::DockBuilderSplitNode(dock_down, ImGuiDir_Left, 0.20f, &dock_left, &dock_down);
+        ImGui::DockBuilderSplitNode(dock_down, ImGuiDir_Left, 0.24f, &dock_left, &dock_down);
 
         // 3. Split Right (Preview/Diag)
-        ImGui::DockBuilderSplitNode(dock_down, ImGuiDir_Right, 0.30f, &dock_right, &dock_center);
+        ImGui::DockBuilderSplitNode(dock_down, ImGuiDir_Right, 0.27f, &dock_right, &dock_center);
 
         // Split Right Stack
         ImGuiID dock_right_top = 0, dock_right_bot = 0;
-        ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.60f, &dock_right_top, &dock_right_bot);
+        ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.62f, &dock_right_top, &dock_right_bot);
 
         // Split Left Stack
         ImGuiID dock_left_top = 0, dock_left_bot = 0;
-        ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Up, 0.60f, &dock_left_top, &dock_left_bot);
+        ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Up, 0.40f, &dock_left_top, &dock_left_bot);
 
         ImGui::DockBuilderDockWindow("Transport", dock_up);
         ImGui::DockBuilderDockWindow("Scene: Library", dock_left_top);

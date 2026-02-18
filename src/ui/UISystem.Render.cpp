@@ -243,11 +243,13 @@ bool UISystem::CompilePostFxEffect(Scene::PostFXEffect& effect, std::vector<std:
     auto pso = m_previewRenderer->CompileShader(effect.shaderCode, decls, outErrors, true);
     if (pso) {
         effect.pipelineState = pso;
+        effect.compiledShaderBytes = m_previewRenderer->GetLastCompiledPixelShaderSize();
         effect.isDirty = false;
         effect.lastCompiledCode = effect.shaderCode;
         return true;
     }
     effect.pipelineState = nullptr;
+    effect.compiledShaderBytes = 0;
     return false;
 }
 

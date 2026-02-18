@@ -10,6 +10,7 @@ inline constexpr const char* FontFileOrbitron = "OrbitronMedium-Bz9B.ttf";
 inline constexpr const char* FontFileErbosOpen = "ErbosDraco1StOpenNbpRegular-l5wX.ttf";
 inline constexpr const char* FontFileCode = "Hack-Regular.ttf";
 inline constexpr const char* FontFileCodeItalic = "Hack-Italic.ttf";
+inline constexpr const char* FontFileOpenFontIcons = "OpenFontIcons.ttf";
 
 // Font sizes
 inline constexpr float FontLogo = 56.0f;

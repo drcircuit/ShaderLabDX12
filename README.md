@@ -6,6 +6,8 @@ A Windows-native demoscene SDK and realtime shader authoring environment.
 
 ShaderLab is a minimalist, high-performance toolkit for creating demoscene productions and visual experiments. Built on Direct3D 12 and DXC, it provides a tracker-inspired interface for authoring shader-driven visuals synchronized to music.
 
+Project documentation is maintained under `docs/`.
+
 ### Core Features
 
 - **Realtime Shader Authoring**: Live HLSL compilation via DXC with instant feedback
@@ -40,12 +42,13 @@ The editor features a custom futuristic cyberpunk aesthetic:
 
 ```
 src/
-├── engine/     - Core runtime systems
-├── editor/     - Editor application
-├── runtime/    - Standalone demo runtime
-├── graphics/   - D3D12 abstraction
-├── shader/     - DXC wrapper and shader system
+├── app/        - Entry points for editor and runtime players
 ├── audio/      - Audio playback and beat clock
+├── core/       - Build pipeline, project IO, runtime export, packing
+├── editor/     - Editor domain systems
+├── graphics/   - D3D12 abstraction
+├── runtime/    - Runtime systems used by players
+├── shader/     - DXC wrapper and shader system
 └── ui/         - ImGui integration and panels
 
 creative/
@@ -100,20 +103,22 @@ tools/          - Build and utility scripts
 git clone https://github.com/drcircuit/ShaderLabDX12.git
 cd ShaderLab
 
-# Open a VS Developer PowerShell or load the toolchain
+# Load the MSVC developer environment
 .\tools\dev_env.ps1
 
-# Configure with CMake
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-
-# Build
-cmake --build build
+# Use VS Code tasks (recommended), or build manually:
+# powershell -NoProfile -ExecutionPolicy Bypass -Command ". .\tools\dev_env.ps1; cmd /c .\.vscode\build-debug.bat"
 
 # Run the editor from the repository root
 build\bin\ShaderLabEditor.exe
 ```
 
 Third-party dependencies are listed in [third_party/README.md](third_party/README.md).
+
+For full setup and packaging flows, see:
+- [docs/README.md](docs/README.md)
+- [docs/QUICKSTART.md](docs/QUICKSTART.md)
+- [docs/BUILD.md](docs/BUILD.md)
 
 ### Build Configurations
 
@@ -170,17 +175,11 @@ Contributions are welcome! Please:
 
 All contributions must be licensed under the Community License.
 
-## Roadmap
+## Project Notes
 
-- [x] Core D3D12 rendering
-- [x] DXC shader compilation
-- [x] Beat clock and audio sync
-- [x] Basic ImGui interface
-- [ ] Multi-pass rendering system
-- [ ] Shader parameter automation
-- [ ] Playlist and transitions
-- [ ] Export to standalone runtime
-- [ ] Shader library and presets
+- Tiny demo build presets target `MicroPlayer` on x86 for size-sensitive outputs.
+- Open/free presets target the full runtime on x64.
+- Runtime and compact-track debug logging are opt-in build flags and default OFF.
 
 ## Credits
 

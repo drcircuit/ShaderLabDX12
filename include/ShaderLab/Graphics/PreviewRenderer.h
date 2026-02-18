@@ -2,6 +2,7 @@
 
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,7 @@ public:
     bool IsValid(ID3D12PipelineState* pso) const { return pso != nullptr; }
 
     float GetLastGPUTimeMs() const { return m_lastGPUTimeMs; }
+    size_t GetLastCompiledPixelShaderSize() const { return m_lastCompiledPixelShaderSize; }
 
 private:
     bool CreateRootSignature();
@@ -69,6 +71,7 @@ private:
     ComPtr<ID3D12Resource> m_queryResultBuffer;
     uint64_t m_gpuFrequency = 0;
     float m_lastGPUTimeMs = 0.0f;
+    size_t m_lastCompiledPixelShaderSize = 0;
 };
 
 } // namespace ShaderLab

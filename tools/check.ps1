@@ -5,6 +5,7 @@ Write-Host "===================================" -ForegroundColor Cyan
 Write-Host ""
 
 $allReady = $true
+$docsReady = $true
 
 # Check CMake
 Write-Host "CMake: " -NoNewline
@@ -71,14 +72,30 @@ foreach ($dep in $deps.GetEnumerator()) {
 }
 
 Write-Host ""
+Write-Host "Documentation:" -ForegroundColor Cyan
+$docsCheckScript = Join-Path $PSScriptRoot "check_docs.ps1"
+if (Test-Path $docsCheckScript) {
+    & $docsCheckScript
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Docs check: OK" -ForegroundColor Green
+    } else {
+        Write-Host "  Docs check: FAILED" -ForegroundColor Red
+        $docsReady = $false
+    }
+} else {
+    Write-Host "  Docs check script missing" -ForegroundColor Yellow
+    $docsReady = $false
+}
+
+Write-Host ""
 Write-Host "===================================" -ForegroundColor Cyan
 
-if ($allReady) {
+if ($allReady -and $docsReady) {
     Write-Host "Ready to build!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Run: .\tools\build.ps1" -ForegroundColor Cyan
 } else {
-    Write-Host "Some components are missing" -ForegroundColor Yellow
+    Write-Host "Some checks failed" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "If Visual Studio is installing, wait for it to complete," -ForegroundColor White
     Write-Host "then restart your terminal and run this check again." -ForegroundColor White

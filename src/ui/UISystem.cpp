@@ -19,6 +19,7 @@
 
 #include "ShaderLab/UI/UISystem.h"
 #include "ShaderLab/UI/UIConfig.h"
+#include "ShaderLab/UI/OpenFontIcons.h"
 #include "ShaderLab/UI/UISystemDemoUtils.h"
 #include "ShaderLab/Graphics/Device.h"
 #include "ShaderLab/Graphics/Swapchain.h"
@@ -33,7 +34,9 @@
 #include "stb_image.h"
 
 #include <commdlg.h>
+#include <shellapi.h>
 #pragma comment(lib, "Comdlg32.lib")
+#pragma comment(lib, "Shell32.lib")
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -46,7 +49,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace {
-fs::path GetGlobalSnippetPath(const std::string& appRoot) {
+fs::path GetGlobalSnippetBaseDir(const std::string& appRoot) {
     fs::path baseDir;
     char* appData = nullptr;
     size_t appDataLen = 0;
@@ -58,7 +61,118 @@ fs::path GetGlobalSnippetPath(const std::string& appRoot) {
     if (appData) {
         free(appData);
     }
-    return baseDir / "snippets.json";
+    return baseDir;
+}
+
+fs::path GetGlobalSnippetDirectory(const std::string& appRoot) {
+    return GetGlobalSnippetBaseDir(appRoot) / "snippets";
+}
+
+std::string SanitizeSnippetFileStem(const std::string& name) {
+    std::string result;
+    result.reserve(name.size());
+    for (char c : name) {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_' || c == '-';
+        result.push_back(ok ? c : '_');
+    }
+    if (result.empty()) {
+        result = "Folder";
+    }
+    return result;
+}
+
+bool IconButton(const char* id, uint32_t iconCodepoint, const char* tooltip, const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+    const std::string icon = OpenFontIcons::ToUtf8(iconCodepoint);
+    const std::string buttonId = std::string("##") + id;
+
+    ImVec2 buttonSize = size;
+    if (buttonSize.x <= 0.0f || buttonSize.y <= 0.0f) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        const ImVec2 pad = ImGui::GetStyle().FramePadding;
+        if (buttonSize.x <= 0.0f) buttonSize.x = textSize.x + pad.x * 2.0f;
+        if (buttonSize.y <= 0.0f) buttonSize.y = textSize.y + pad.y * 2.0f;
+    }
+
+    const bool pressed = ImGui::InvisibleButton(buttonId.c_str(), buttonSize);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : (hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+    drawList->AddRectFilled(min, max, bg, style.FrameRounding);
+    if (style.FrameBorderSize > 0.0f) {
+        drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding, 0, style.FrameBorderSize);
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize();
+
+    float textX = min.x;
+    float textY = min.y;
+    bool usedGlyphBounds = false;
+    if (font) {
+        if (ImFontBaked* baked = font->GetFontBaked(fontSize)) {
+            if (ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(iconCodepoint))) {
+                const float glyphW = glyph->X1 - glyph->X0;
+                const float glyphH = glyph->Y1 - glyph->Y0;
+                textX = min.x + (buttonSize.x - glyphW) * 0.5f - glyph->X0;
+                textY = min.y + (buttonSize.y - glyphH) * 0.5f - glyph->Y0;
+                usedGlyphBounds = true;
+            }
+        }
+    }
+    if (!usedGlyphBounds) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        textX = min.x + (buttonSize.x - textSize.x) * 0.5f;
+        textY = min.y + (buttonSize.y - textSize.y) * 0.5f;
+    }
+
+    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(UIConfig::ColorCheckMark), icon.c_str());
+
+    if (ImGui::IsItemHovered() && tooltip && *tooltip) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    return pressed;
+}
+
+const char* BuildModeLabel(BuildMode mode) {
+    return mode == BuildMode::ReleaseCrinkled ? "Release Crinkled" : "Release";
+}
+
+const char* SizePresetLabel(SizeTargetPreset preset) {
+    switch (preset) {
+        case SizeTargetPreset::K1: return "1K";
+        case SizeTargetPreset::K2: return "2K";
+        case SizeTargetPreset::K4: return "4K";
+        case SizeTargetPreset::K16: return "16K";
+        case SizeTargetPreset::K32: return "32K";
+        case SizeTargetPreset::K64: return "64K";
+        default: return "None";
+    }
+}
+
+uint64_t SizePresetBytes(SizeTargetPreset preset) {
+    switch (preset) {
+        case SizeTargetPreset::K1: return 1024ull;
+        case SizeTargetPreset::K2: return 2048ull;
+        case SizeTargetPreset::K4: return 4096ull;
+        case SizeTargetPreset::K16: return 16ull * 1024ull;
+        case SizeTargetPreset::K32: return 32ull * 1024ull;
+        case SizeTargetPreset::K64: return 64ull * 1024ull;
+        default: return 0ull;
+    }
+}
+
+void OpenExternal(const std::string& target) {
+    ShellExecuteA(nullptr, "open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 }
 
@@ -134,6 +248,7 @@ UISystem::UISystem() {
     langDef.mName = "HLSL";
 
     m_textEditor.SetLanguageDefinition(langDef);
+    m_snippetTextEditor.SetLanguageDefinition(langDef);
 
     // Create enhanced dark palette with vivid colors (IM_COL32 AABBGGRR format)
     auto palette = TextEditor::GetDarkPalette();
@@ -147,8 +262,11 @@ UISystem::UISystem() {
     palette[(int)TextEditor::PaletteIndex::Punctuation] = 0xffdcdcdc;
     palette[(int)TextEditor::PaletteIndex::Preprocessor] = 0xff9b9b9b;
     m_textEditor.SetPalette(palette);
+    m_snippetTextEditor.SetPalette(palette);
 
     m_textEditor.SetShowWhitespaces(false);
+    m_snippetTextEditor.SetShowWhitespaces(false);
+    m_snippetTextEditor.SetReadOnly(true);
 
     LoadGlobalSnippets();
 }
@@ -227,6 +345,11 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     // Load custom fonts for editor
     // Path to fonts relative to executable (in editor_assets/fonts/)
     std::string fontPath = m_appRoot + "/editor_assets/fonts/";
+    std::string iconFontPath = m_appRoot + "/third_party/OpenFontIcons/";
+    std::string iconFontFile = iconFontPath + UIConfig::FontFileOpenFontIcons;
+    if (!fs::exists(iconFontFile)) {
+        iconFontFile = fontPath + UIConfig::FontFileOpenFontIcons;
+    }
     
     // Hacked font for logo (large)
     m_fontHackedLogo = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileHacked).c_str(), UIConfig::FontLogo);
@@ -246,6 +369,14 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     if (!m_fontOrbitronText) {
         m_fontOrbitronText = io.Fonts->AddFontDefault();
     }
+    static const ImWchar iconRanges[] = { 0xE000, 0xE0FF, 0 };
+    constexpr float iconFontScale = 1.22f;
+    constexpr float iconGlyphOffsetY = 1.0f;
+    ImFontConfig iconConfigText;
+    iconConfigText.MergeMode = true;
+    iconConfigText.PixelSnapH = true;
+    iconConfigText.GlyphOffset.y = iconGlyphOffsetY;
+    io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontText * iconFontScale, &iconConfigText, iconRanges);
     
     // Erbos Draco for numerical fields
     m_fontErbosDracoNumbers = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileErbosOpen).c_str(), UIConfig::FontNumeric);
@@ -258,11 +389,21 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     if (!m_fontMenuSmall) {
         m_fontMenuSmall = io.Fonts->AddFontDefault();
     }
+    ImFontConfig iconConfigMenu;
+    iconConfigMenu.MergeMode = true;
+    iconConfigMenu.PixelSnapH = true;
+    iconConfigMenu.GlyphOffset.y = iconGlyphOffsetY;
+    io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontMenu * iconFontScale, &iconConfigMenu, iconRanges);
 
-    m_fontCode = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileCode).c_str(), UIConfig::FontCode);
-    if (!m_fontCode) {
-        m_fontCode = io.Fonts->AddFontDefault();
+    const float codeFontSizes[5] = { 11.0f, 12.0f, 13.0f, 15.0f, 17.0f };
+    for (int i = 0; i < 5; ++i) {
+        m_fontCodeSizes[i] = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileCode).c_str(), codeFontSizes[i]);
+        if (!m_fontCodeSizes[i]) {
+            m_fontCodeSizes[i] = io.Fonts->AddFontDefault();
+        }
     }
+    m_fontCode = m_fontCodeSizes[(int)CodeFontSize::M];
+
     m_fontCodeItalic = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileCodeItalic).c_str(), UIConfig::FontCode);
     if (!m_fontCodeItalic) {
         m_fontCodeItalic = m_fontCode;
@@ -279,6 +420,7 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     }
 
     m_textEditor.SetCommentFont(m_fontCodeItalic, UIConfig::FontCode);
+    m_snippetTextEditor.SetCommentFont(m_fontCodeItalic, UIConfig::FontCode);
 
     // Setup style
     SetupImGuiStyle();
@@ -770,6 +912,10 @@ void UISystem::BeginFrame() {
         ShowAboutWindow();
     }
 
+    if (m_showBuildSettings) {
+        ShowBuildSettingsWindow();
+    }
+
     if (m_modeChangeFlashSeconds > 0.0f) {
         m_modeChangeFlashSeconds = (std::max)(0.0f, m_modeChangeFlashSeconds - ImGui::GetIO().DeltaTime);
         float t = (kModeFlashDuration > 0.0f) ? (m_modeChangeFlashSeconds / kModeFlashDuration) : 0.0f;
@@ -834,6 +980,10 @@ void UISystem::ShowMainMenuBar() {
             ImGui::Separator();
             if (ImGui::MenuItem("Build Self-Contained EXE...")) {
                 BuildProject();
+            }
+            if (ImGui::MenuItem("Build Settings...")) {
+                m_showBuildSettings = true;
+                m_buildSettingsRefreshRequested = true;
             }
             if (ImGui::MenuItem("Export Runtime Package...")) {
                 ExportRuntimePackage();
@@ -901,9 +1051,12 @@ void UISystem::ShowMainMenuBar() {
         const bool canUseWindow = m_hwnd != nullptr;
         m_titlebarButtonsMin = ImVec2(FLT_MAX, FLT_MAX);
         m_titlebarButtonsMax = ImVec2(-FLT_MAX, -FLT_MAX);
-        if (ImGui::Button("_", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIConfig::ColorFrameBgHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, UIConfig::ColorFrameBgActive);
+        if (IconButton("TitlebarMinimize", OpenFontIcons::kChevronDown, "Minimize", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
             SendMessage(m_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
         }
+        ImGui::PopStyleColor(2);
         {
             ImVec2 min = ImGui::GetItemRectMin();
             ImVec2 max = ImGui::GetItemRectMax();
@@ -913,9 +1066,12 @@ void UISystem::ShowMainMenuBar() {
             m_titlebarButtonsMax.y = (std::max)(m_titlebarButtonsMax.y, max.y);
         }
         ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button("X", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIConfig::ColorHeaderHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, UIConfig::ColorHeaderActive);
+        if (IconButton("TitlebarClose", OpenFontIcons::kXCircle, "Close", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
             SendMessage(m_hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
         }
+        ImGui::PopStyleColor(2);
         {
             ImVec2 min = ImGui::GetItemRectMin();
             ImVec2 max = ImGui::GetItemRectMax();
@@ -991,7 +1147,10 @@ bool UISystem::CompileScene(int sceneIndex) {
     // Update Scene state
     if (success) {
         scene.pipelineState = pso;
+        scene.compiledShaderBytes = m_previewRenderer->GetLastCompiledPixelShaderSize();
         scene.isDirty = false;
+    } else {
+        scene.compiledShaderBytes = 0;
     }
 
     // If this is the active scene, update the editor UI state too
@@ -1015,86 +1174,134 @@ bool UISystem::CompileScene(int sceneIndex) {
 }
 
 void UISystem::LoadGlobalSnippets() {
-    m_snippets.clear();
+    m_snippetFolders.clear();
+    m_selectedSnippetFolderIndex = -1;
     m_selectedSnippetIndex = -1;
     m_nextSnippetId = 1;
 
-    const fs::path snippetPath = GetGlobalSnippetPath(m_appRoot);
-    m_snippetsConfigPath = snippetPath.string();
+    const fs::path snippetsDir = GetGlobalSnippetDirectory(m_appRoot);
+    m_snippetsDirectoryPath = snippetsDir.string();
 
     std::error_code ec;
-    fs::create_directories(snippetPath.parent_path(), ec);
+    fs::create_directories(snippetsDir, ec);
 
-    if (!fs::exists(snippetPath)) {
-        return;
-    }
-
-    std::ifstream in(snippetPath);
-    if (!in.is_open()) {
-        return;
-    }
-
-    json root;
-    try {
-        in >> root;
-    } catch (...) {
-        return;
-    }
-
-    if (!root.contains("snippets") || !root["snippets"].is_array()) {
-        return;
-    }
-
-    for (const auto& item : root["snippets"]) {
-        if (!item.is_object()) {
-            continue;
+    const auto loadFromFile = [this](const fs::path& filePath, const std::string& fallbackFolderName) {
+        std::ifstream in(filePath);
+        if (!in.is_open()) {
+            return;
         }
 
-        ShaderSnippet snippet;
-        snippet.name = item.value("name", std::string{});
-        snippet.code = item.value("code", std::string{});
-
-        if (snippet.name.empty() || snippet.code.empty()) {
-            continue;
+        json root;
+        try {
+            in >> root;
+        } catch (...) {
+            return;
         }
 
-        m_snippets.push_back(std::move(snippet));
+        if (!root.contains("snippets") || !root["snippets"].is_array()) {
+            return;
+        }
+
+        ShaderSnippetFolder folder;
+        folder.name = root.value("folder", fallbackFolderName);
+        folder.filePath = filePath.string();
+
+        for (const auto& item : root["snippets"]) {
+            if (!item.is_object()) {
+                continue;
+            }
+
+            ShaderSnippet snippet;
+            snippet.name = item.value("name", std::string{});
+            snippet.code = item.value("code", std::string{});
+
+            if (snippet.name.empty() || snippet.code.empty()) {
+                continue;
+            }
+
+            folder.snippets.push_back(std::move(snippet));
+            m_nextSnippetId = (std::max)(m_nextSnippetId, static_cast<int>(folder.snippets.size()) + 1);
+        }
+
+        m_snippetFolders.push_back(std::move(folder));
+    };
+
+    if (fs::exists(snippetsDir)) {
+        std::vector<fs::path> jsonFiles;
+        for (const auto& entry : fs::directory_iterator(snippetsDir, ec)) {
+            if (ec) {
+                break;
+            }
+
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            if (entry.path().extension() == ".json") {
+                jsonFiles.push_back(entry.path());
+            }
+        }
+
+        std::sort(jsonFiles.begin(), jsonFiles.end());
+        for (const auto& path : jsonFiles) {
+            loadFromFile(path, path.stem().string());
+        }
     }
 
-    m_selectedSnippetIndex = m_snippets.empty() ? -1 : 0;
-    m_nextSnippetId = static_cast<int>(m_snippets.size()) + 1;
+    const fs::path legacyPath = GetGlobalSnippetBaseDir(m_appRoot) / "snippets.json";
+    if (m_snippetFolders.empty() && fs::exists(legacyPath)) {
+        loadFromFile(legacyPath, "General");
+    }
+
+    if (m_snippetFolders.empty()) {
+        ShaderSnippetFolder folder;
+        folder.name = "General";
+        folder.filePath = (snippetsDir / "General.json").string();
+        m_snippetFolders.push_back(std::move(folder));
+    }
+
+    m_selectedSnippetFolderIndex = 0;
+    if (!m_snippetFolders[0].snippets.empty()) {
+        m_selectedSnippetIndex = 0;
+    }
 }
 
 void UISystem::SaveGlobalSnippets() const {
-    if (m_snippetsConfigPath.empty()) {
+    if (m_snippetsDirectoryPath.empty()) {
         return;
     }
 
-    const fs::path snippetPath(m_snippetsConfigPath);
+    const fs::path snippetsDir(m_snippetsDirectoryPath);
     std::error_code ec;
-    fs::create_directories(snippetPath.parent_path(), ec);
+    fs::create_directories(snippetsDir, ec);
 
-    json root;
-    root["version"] = 1;
-    root["snippets"] = json::array();
+    for (const auto& folder : m_snippetFolders) {
+        fs::path filePath = folder.filePath.empty()
+            ? (snippetsDir / (SanitizeSnippetFileStem(folder.name) + ".json"))
+            : fs::path(folder.filePath);
 
-    for (const auto& snippet : m_snippets) {
-        if (snippet.name.empty() || snippet.code.empty()) {
-            continue;
+        json root;
+        root["version"] = 1;
+        root["folder"] = folder.name;
+        root["snippets"] = json::array();
+
+        for (const auto& snippet : folder.snippets) {
+            if (snippet.name.empty() || snippet.code.empty()) {
+                continue;
+            }
+
+            root["snippets"].push_back({
+                {"name", snippet.name},
+                {"code", snippet.code}
+            });
         }
 
-        root["snippets"].push_back({
-            {"name", snippet.name},
-            {"code", snippet.code}
-        });
+        std::ofstream out(filePath);
+        if (!out.is_open()) {
+            continue;
+        }
+        out << root.dump(2);
     }
-
-    std::ofstream out(snippetPath);
-    if (!out.is_open()) {
-        return;
-    }
-
-    out << root.dump(2);
 }
 
 void UISystem::InsertSnippetIntoEditor(const std::string& snippetCode) {
@@ -1384,169 +1591,293 @@ void UISystem::RestoreState(const ProjectState& state) {
     m_layoutBuilt = false;
 }
 
-void UISystem::SaveProject() {
-    if (m_currentProjectPath.empty()) {
-        SaveProjectAs();
+void UISystem::ShowBuildSettingsWindow() {
+    if (m_buildSettingsRefreshRequested) {
+        m_buildSettingsPrereq = BuildPipeline::CheckPrereqs(m_appRoot, m_buildSettingsMode);
+        m_buildSettingsRefreshRequested = false;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 windowSize(760.0f, 620.0f);
+    ImGui::SetNextWindowPos(ImVec2(
+        viewport->Pos.x + (viewport->Size.x - windowSize.x) * 0.5f,
+        viewport->Pos.y + (viewport->Size.y - windowSize.y) * 0.5f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Appearing);
+
+    if (!ImGui::Begin("Build Settings", &m_showBuildSettings, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
         return;
     }
 
-    // Prepare data
-    ProjectData data;
-    data.scenes = m_scenes;
-    data.track = m_track;
-    data.transport = m_transport;
-    data.audioLibrary = m_audioLibrary;
+    bool buildModeChanged = false;
+    int modeIndex = (m_buildSettingsMode == BuildMode::ReleaseCrinkled) ? 1 : 0;
+    const char* modeLabels[] = { "Release (standard)", "Release Crinkled (smallest, requires Crinkler + Ninja)" };
+    if (ImGui::Combo("Build Mode", &modeIndex, modeLabels, 2)) {
+        m_buildSettingsMode = modeIndex == 1 ? BuildMode::ReleaseCrinkled : BuildMode::Release;
+        m_buildSettingsRefreshRequested = true;
+        buildModeChanged = true;
+        m_buildSettingsAutoSwitchedToCrinkled = false;
+    }
 
-    // Consolidate Assets (Copy external files to project/assets)
-    // We assume m_currentProjectPath is a file path "path/to/project.json"
-    fs::path projectRoot = fs::path(m_currentProjectPath).parent_path();
-    if (Serializer::ConsolidateProject(data, projectRoot.string())) {
-        // Update local state with Consolidated paths (so UI reflects "assets/...")
-        m_scenes = data.scenes;
-        m_audioLibrary = data.audioLibrary;
-        // Track and Transport technically don't contain paths but we keep consistency
-
-        // Save
-        if (Serializer::SaveProject(data, m_currentProjectPath)) {
-            // Optional: Notification "Saved"
+    ImGui::SeparatorText("Budget Target");
+    static const SizeTargetPreset presets[] = {
+        SizeTargetPreset::None,
+        SizeTargetPreset::K1,
+        SizeTargetPreset::K2,
+        SizeTargetPreset::K4,
+        SizeTargetPreset::K16,
+        SizeTargetPreset::K32,
+        SizeTargetPreset::K64
+    };
+    bool sizePresetChanged = false;
+    for (SizeTargetPreset preset : presets) {
+        ImGui::PushID((int)preset);
+        const bool selected = (m_buildSettingsSizeTarget == preset);
+        const std::string label = std::string(SizePresetLabel(preset)) +
+            (preset == SizeTargetPreset::None ? " (No target)" : " (" + std::to_string(SizePresetBytes(preset)) + " bytes)");
+        if (ImGui::RadioButton(label.c_str(), selected)) {
+            m_buildSettingsSizeTarget = preset;
+            sizePresetChanged = true;
+            m_buildSettingsAutoSwitchedToCrinkled = false;
+        }
+        ImGui::PopID();
+        if (preset == SizeTargetPreset::K4) {
+            ImGui::SameLine();
         }
     }
-}
 
-void UISystem::SaveProjectAs() {
-    char szFile[260] = { 0 };
-    OPENFILENAMEA ofn = { 0 };
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "JSON Project (*.json)\0*.json\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "json";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-
-    if (GetSaveFileNameA(&ofn)) {
-        m_currentProjectPath = szFile;
-        SaveProject();
+    const bool tinyTargetSelected = (m_buildSettingsSizeTarget != SizeTargetPreset::None);
+    bool autoSwitchedToCrinkled = false;
+    const bool canAutoSwitchToCrinkled =
+        tinyTargetSelected &&
+        m_buildSettingsMode == BuildMode::Release &&
+        m_buildSettingsPrereq.hasCrinkler &&
+        m_buildSettingsPrereq.hasNinja;
+    if (canAutoSwitchToCrinkled && (sizePresetChanged || buildModeChanged)) {
+        m_buildSettingsMode = BuildMode::ReleaseCrinkled;
+        m_buildSettingsRefreshRequested = true;
+        autoSwitchedToCrinkled = true;
+        m_buildSettingsAutoSwitchedToCrinkled = true;
     }
-}
 
-void UISystem::OpenProject() {
-    char szFile[260] = { 0 };
-    OPENFILENAMEA ofn = { 0 };
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "JSON Project (*.json)\0*.json\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "json";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    if (autoSwitchedToCrinkled || m_buildSettingsAutoSwitchedToCrinkled) {
+        ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "Auto-switched to Release Crinkled for tiny target.");
+    }
 
-    if (GetOpenFileNameA(&ofn)) {
-        m_currentProjectPath = szFile;
-        ProjectData data;
-        if (Serializer::LoadProject(m_currentProjectPath, data)) {
-            m_scenes = data.scenes;
-            m_audioLibrary = data.audioLibrary;
-            m_track = data.track;
-            m_transport.bpm = data.transport.bpm;
+    if (m_buildSettingsMode == BuildMode::Release && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
+        ImGui::TextDisabled("Tiny targets (1K-64K) use MicroPlayer on x86 by default. Open demos (no size target) use full runtime on x64.");
+    }
 
-            // Adjust CWD to project root for relative paths?
-            // Or just resolve relative paths against project root.
-            fs::current_path(fs::path(m_currentProjectPath).parent_path());
+    ImGui::Checkbox("Restricted compact track mode", &m_buildSettingsRestrictedCompactTrack);
+    ImGui::TextDisabled("Stores track data as assets/track.bin and strips verbose JSON fields before packing.");
+    ImGui::Checkbox("Include runtime debug logs", &m_buildSettingsRuntimeDebugLog);
+    ImGui::TextDisabled("Compiles runtime log strings and debug output paths (adds bytes to final executable).");
+    ImGui::Checkbox("Include compact-track debug logs", &m_buildSettingsCompactTrackDebugLog);
+    ImGui::TextDisabled("Compiles compact timeline decode diagnostics (adds bytes to final executable).");
 
-            // Reload Audio (Basic re-init)
-            if (m_audioSystem) {
-                m_audioSystem->Stop();
-                // We don't auto-play or auto-load everything until needed,
-                // but textures must be reloaded for previews.
+    if (m_buildSettingsRuntimeDebugLog && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Warning: Runtime debug logs increase binary size and can hurt tiny targets.");
+    }
+    if (m_buildSettingsCompactTrackDebugLog && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Warning: Compact-track debug logs increase binary size and can hurt tiny targets.");
+    }
+
+    ImGui::SeparatorText("Dependencies");
+    if (IconButton("RefreshDeps", OpenFontIcons::kRefresh, "Refresh dependency detection", ImVec2(120, 0))) {
+        m_buildSettingsRefreshRequested = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Mode: %s", BuildModeLabel(m_buildSettingsMode));
+
+    const bool crinklerPossible =
+        (m_buildSettingsMode == BuildMode::ReleaseCrinkled) &&
+        m_buildSettingsPrereq.hasCrinkler &&
+        m_buildSettingsPrereq.hasNinja;
+    const char* activeLinker = (m_buildSettingsMode == BuildMode::Release)
+        ? "MSVC link.exe"
+        : (crinklerPossible ? "Crinkler" : "Unavailable (missing Crinkler or Ninja)");
+    ImGui::Text("Active linker: %s", activeLinker);
+
+    struct DepRow {
+        const char* name;
+        bool present;
+        bool required;
+        const char* configureLabel;
+        std::string configureTarget;
+    };
+
+    const bool crinklerRequired = (m_buildSettingsMode == BuildMode::ReleaseCrinkled);
+    const bool ninjaRequired = (m_buildSettingsMode == BuildMode::ReleaseCrinkled);
+    const std::vector<DepRow> deps = {
+        { "Visual Studio C++ Build Tools", m_buildSettingsPrereq.hasVisualStudioTools, true, "Install", "https://visualstudio.microsoft.com/downloads/" },
+        { "Windows SDK", m_buildSettingsPrereq.hasWindowsSdk, true, "Install", "https://developer.microsoft.com/windows/downloads/windows-sdk/" },
+        { "CMake", m_buildSettingsPrereq.hasCMake, true, "Install", "https://cmake.org/download/" },
+        { "DXC Runtime (dxcompiler.dll)", m_buildSettingsPrereq.hasDxcRuntime, true, "Download", "https://github.com/microsoft/DirectXShaderCompiler/releases" },
+        { "Crinkler", m_buildSettingsPrereq.hasCrinkler, crinklerRequired, "Setup Guide", m_appRoot + "\\README-CRINKLER.txt" },
+        { "Ninja", m_buildSettingsPrereq.hasNinja, ninjaRequired, "Install", "https://github.com/ninja-build/ninja/releases" }
+    };
+
+    if (ImGui::BeginTable("BuildDeps", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableSetupColumn("Dependency");
+        ImGui::TableSetupColumn("Required");
+        ImGui::TableSetupColumn("Status");
+        ImGui::TableSetupColumn("Configure");
+        ImGui::TableHeadersRow();
+
+        for (size_t i = 0; i < deps.size(); ++i) {
+            const auto& dep = deps[i];
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(dep.name);
+
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(dep.required ? "Yes" : "Optional");
+
+            ImGui::TableSetColumnIndex(2);
+            if (dep.present) {
+                ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "Detected");
+            } else if (dep.required) {
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Missing");
+            } else {
+                ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.25f, 1.0f), "Missing (Optional)");
             }
 
-            // Reload Textures
-            if (m_deviceRef) {
-                for(auto& scene : m_scenes) {
-                    for(auto& bind : scene.bindings) {
-                        if (bind.bindingType == BindingType::File && !bind.filePath.empty()) {
-                            LoadTextureFromFile(bind.filePath, bind.textureResource);
-                        }
-                    }
-                }
+            ImGui::TableSetColumnIndex(3);
+            ImGui::PushID((int)i + 1000);
+            if (!dep.present && IconButton("Cfg", OpenFontIcons::kFolder, dep.configureLabel, ImVec2(96.0f, 0.0f))) {
+                OpenExternal(dep.configureTarget);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    if (!m_buildSettingsPrereq.hasCrinkler) {
+        if (IconButton("PickCrinklerExe", OpenFontIcons::kFolder, "Select crinkler.exe and set SHADERLAB_CRINKLER", ImVec2(260, 0))) {
+            char pathBuf[512] = { 0 };
+            OPENFILENAMEA ofn = { 0 };
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
+            ofn.lpstrFile = pathBuf;
+            ofn.nMaxFile = sizeof(pathBuf);
+            ofn.lpstrFilter = "Crinkler (crinkler.exe)\0crinkler.exe\0Executables (*.exe)\0*.exe\0All Files\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameA(&ofn)) {
+                SetEnvironmentVariableA("SHADERLAB_CRINKLER", pathBuf);
+                m_buildSettingsRefreshRequested = true;
             }
         }
     }
-}
 
-void UISystem::BuildProject() {
-    BuildPrereqReport prereq = BuildPipeline::CheckPrereqs(m_appRoot);
-    if (!prereq.ok) {
-        MessageBoxA(nullptr, prereq.message.c_str(), "Build Prerequisites Missing", MB_OK | MB_ICONWARNING);
-        return;
-    }
-    if (!prereq.message.empty()) {
-        MessageBoxA(nullptr, prereq.message.c_str(), "Build Prerequisites Notice", MB_OK | MB_ICONINFORMATION);
+    if (!m_buildSettingsPrereq.hasNinja) {
+        ImGui::SameLine();
+        if (IconButton("CopyNinjaWinget", OpenFontIcons::kCopy, "Copy Ninja install command", ImVec2(230, 0))) {
+            ImGui::SetClipboardText("winget install Ninja-build.Ninja");
+        }
     }
 
-    if (m_currentMode == UIMode::PostFX && m_postFxSourceSceneIndex >= 0 && m_postFxSourceSceneIndex < (int)m_scenes.size()) {
-        m_scenes[m_postFxSourceSceneIndex].postFxChain = m_postFxDraftChain;
+    if (!m_buildSettingsPrereq.message.empty()) {
+        ImGui::Separator();
+        ImGui::BeginChild("PrereqMsg", ImVec2(0, 120), true, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::TextUnformatted(m_buildSettingsPrereq.message.c_str());
+        ImGui::EndChild();
     }
 
-    if (m_currentProjectPath.empty()) {
-        // Enforce Save First
-        int ret = MessageBoxA(NULL, "Project must be saved before building. Save now?", "Build Requirement", MB_YESNO | MB_ICONQUESTION);
-        if (ret == IDYES) {
+    ImGui::Separator();
+    if (IconButton("CloseBuildSettings", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0))) {
+        m_showBuildSettings = false;
+    }
+    ImGui::SameLine();
+    const bool canBuild = m_buildSettingsPrereq.ok;
+    if (!canBuild) {
+        ImGui::BeginDisabled();
+    }
+    if (IconButton("BuildFromSettings", OpenFontIcons::kPlay, "Choose output path and build", ImVec2(220, 0))) {
+        if (m_currentMode == UIMode::PostFX && m_postFxSourceSceneIndex >= 0 && m_postFxSourceSceneIndex < (int)m_scenes.size()) {
+            m_scenes[m_postFxSourceSceneIndex].postFxChain = m_postFxDraftChain;
+        }
+
+        if (m_currentProjectPath.empty()) {
             SaveProjectAs();
-            if (m_currentProjectPath.empty()) return; // Cancelled
-        } else {
-            return;
-        }
-    } else {
-        // Auto-save before build
-        SaveProject();
-    }
-
-    // Now proceed with build using m_currentProjectPath
-    char szFile[260] = { 0 };
-    OPENFILENAMEA ofn = { 0 };
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Executable (*.exe)\0*.exe\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "exe";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-
-    if (GetSaveFileNameA(&ofn)) {
-        // Start Async Build
-        m_isBuilding = true;
-        m_buildComplete = false;
-        m_buildSuccess = false;
-        m_buildLog = "Initializing Build Process...\n";
-
-        std::string targetExePath = szFile;
-        std::string projectPath = m_currentProjectPath;
-        std::string appRoot = m_appRoot;
-
-        m_buildFuture = std::async(std::launch::async, [this, targetExePath, projectPath, appRoot]() {
-            auto Log = [&](const std::string& msg) {
-                std::lock_guard<std::mutex> lock(m_buildLogMutex);
-                m_buildLog += msg;
-                if (msg.empty() || msg.back() != '\n') {
-                    m_buildLog += "\n";
+            if (m_currentProjectPath.empty()) {
+                if (!canBuild) {
+                    ImGui::EndDisabled();
                 }
-            };
+                ImGui::End();
+                return;
+            }
+        } else {
+            SaveProject();
+        }
 
-            BuildRequest request;
-            request.appRoot = appRoot;
-            request.projectPath = projectPath;
-            request.targetExePath = targetExePath;
+        char szFile[260] = { 0 };
+        OPENFILENAMEA ofn = { 0 };
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Executable (*.exe)\0*.exe\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrDefExt = "exe";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
-            BuildResult result = BuildPipeline::BuildSelfContained(request, Log);
-            m_buildSuccess = result.success;
-            m_buildComplete = true;
-        });
+        if (GetSaveFileNameA(&ofn)) {
+            m_isBuilding = true;
+            m_buildComplete = false;
+            m_buildSuccess = false;
+            m_buildLog = "Initializing Build Process...\n";
+            m_buildLog += std::string("Build Mode: ") + BuildModeLabel(m_buildSettingsMode) + "\n";
+            m_buildLog += std::string("Size Target: ") + SizePresetLabel(m_buildSettingsSizeTarget) + "\n";
+            m_buildLog += std::string("Restricted Compact Track: ") + (m_buildSettingsRestrictedCompactTrack ? "Enabled" : "Disabled") + "\n";
+            m_buildLog += std::string("Runtime Debug Logs: ") + (m_buildSettingsRuntimeDebugLog ? "Enabled" : "Disabled") + "\n";
+            m_buildLog += std::string("Compact Track Debug Logs: ") + (m_buildSettingsCompactTrackDebugLog ? "Enabled" : "Disabled") + "\n";
+            if (m_buildSettingsAutoSwitchedToCrinkled) {
+                m_buildLog += "Build Mode Auto-Switch: Release -> Release Crinkled (tiny target with Crinkler+Ninja detected)\n";
+                m_buildSettingsAutoSwitchedToCrinkled = false;
+            }
+
+            const std::string targetExePath = szFile;
+            const std::string projectPath = m_currentProjectPath;
+            const std::string appRoot = m_appRoot;
+            const BuildMode selectedMode = m_buildSettingsMode;
+            const SizeTargetPreset selectedSizeTarget = m_buildSettingsSizeTarget;
+            const bool selectedRestrictedCompactTrack = m_buildSettingsRestrictedCompactTrack;
+            const bool selectedRuntimeDebugLog = m_buildSettingsRuntimeDebugLog;
+            const bool selectedCompactTrackDebugLog = m_buildSettingsCompactTrackDebugLog;
+
+            m_buildFuture = std::async(std::launch::async, [this, targetExePath, projectPath, appRoot, selectedMode, selectedSizeTarget, selectedRestrictedCompactTrack, selectedRuntimeDebugLog, selectedCompactTrackDebugLog]() {
+                auto Log = [&](const std::string& msg) {
+                    std::lock_guard<std::mutex> lock(m_buildLogMutex);
+                    m_buildLog += msg;
+                    if (msg.empty() || msg.back() != '\n') {
+                        m_buildLog += "\n";
+                    }
+                };
+
+                BuildRequest request;
+                request.appRoot = appRoot;
+                request.projectPath = projectPath;
+                request.targetExePath = targetExePath;
+                request.mode = selectedMode;
+                request.sizeTarget = selectedSizeTarget;
+                request.restrictedCompactTrack = selectedRestrictedCompactTrack;
+                request.runtimeDebugLog = selectedRuntimeDebugLog;
+                request.compactTrackDebugLog = selectedCompactTrackDebugLog;
+
+                BuildResult result = BuildPipeline::BuildSelfContained(request, Log);
+                m_buildSuccess = result.success;
+                m_buildComplete = true;
+            });
+        }
     }
+    if (!canBuild) {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Resolve required dependencies to enable build.");
+    }
+
+    ImGui::End();
 }
 
 void UISystem::UpdateBuildLogic() {
@@ -1571,7 +1902,7 @@ void UISystem::UpdateBuildLogic() {
                 didAutoCopy = false;
             }
 
-            if (ImGui::Button("Copy Log", ImVec2(120, 0))) {
+            if (IconButton("CopyBuildLog", OpenFontIcons::kCopy, "Copy log", ImVec2(120, 0))) {
                 std::lock_guard<std::mutex> lock(m_buildLogMutex);
                 ImGui::SetClipboardText(m_buildLog.c_str());
             }
@@ -1589,7 +1920,7 @@ void UISystem::UpdateBuildLogic() {
                         didAutoCopy = true;
                     }
                 }
-                if (ImGui::Button("Close", ImVec2(120, 0))) {
+                if (IconButton("CloseBuildStatus", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0))) {
                     m_isBuilding = false;
                 }
             } else {
@@ -1600,47 +1931,6 @@ void UISystem::UpdateBuildLogic() {
             }
         }
         ImGui::End();
-    }
-}
-
-void UISystem::ExportRuntimePackage() {
-    char szFile[260] = { 0 };
-    OPENFILENAMEA ofn = { 0 };
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Executable (*.exe)\0*.exe\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "exe";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-
-    // Suggest a name based on project or "Demo"
-    if (!m_currentProjectPath.empty()) {
-        std::string name = fs::path(m_currentProjectPath).stem().string();
-        strcpy_s(szFile, name.c_str());
-    } else {
-        strcpy_s(szFile, "MyDemo");
-    }
-
-    if (GetSaveFileNameA(&ofn)) {
-        ProjectData data;
-        data.scenes = m_scenes;
-        data.track = m_track;
-        data.transport = m_transport;
-        data.audioLibrary = m_audioLibrary;
-
-        RuntimeExportRequest request;
-        request.appRoot = m_appRoot;
-        request.destExePath = szFile;
-        request.data = data;
-
-        RuntimeExportResult result = RuntimeExporter::Export(request);
-        if (result.success) {
-            MessageBoxA(NULL, result.message.c_str(), "Export Complete", MB_ICONINFORMATION);
-        } else {
-            MessageBoxA(NULL, result.message.c_str(), "Export Error", MB_ICONERROR);
-        }
     }
 }
 

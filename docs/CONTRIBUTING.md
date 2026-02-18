@@ -1,149 +1,98 @@
 # Contributing to ShaderLab
 
-Thank you for your interest in contributing to ShaderLab! This document provides guidelines for contributing to the project.
+Thanks for helping improve ShaderLab.
 
-## How to Contribute
+## First Steps
 
-### Reporting Bugs
+- Read `docs/README.md` for canonical documentation.
+- Use `docs/archive/` only for historical context.
+- Keep changes focused and minimal unless a broader refactor is explicitly discussed.
 
-1. Check existing issues to avoid duplicates
-2. Open a new issue with:
-   - Clear description of the problem
-   - Steps to reproduce
-   - Expected vs actual behavior
-   - System information (OS, GPU, driver version)
-   - Relevant logs or screenshots
+## Reporting Bugs
 
-### Suggesting Features
+Open an issue with:
 
-1. Open an issue with the "enhancement" tag
-2. Describe the feature and its use case
-3. Explain how it fits ShaderLab's philosophy (minimalism, demoscene focus)
-4. Be open to discussion and alternative approaches
+- clear repro steps,
+- expected vs actual behavior,
+- OS + GPU details,
+- relevant logs/screenshots.
 
-### Submitting Code
+## Proposing Features
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes following our code style
-4. Test thoroughly in Debug and Release builds
-5. Commit with clear messages
-6. Push to your fork
-7. Open a Pull Request
+Open an issue with the enhancement context first.
 
-### Code Style Guidelines
+Include:
 
-- **C++20** standard features are encouraged
-- **RAII** for resource management
-- Use **smart pointers** for ownership, raw pointers for non-owning references
-- Clear, descriptive names (no Hungarian notation)
-- Comments only where intent isn't obvious from code
-- Consistent formatting (follow existing code style)
+- user value,
+- scope,
+- impact on size/performance constraints,
+- alternatives considered.
 
-Example:
-```cpp
-class MySystem {
-public:
-    bool Initialize();  // Clear verb-based names
-    void Shutdown();
-    
-private:
-    std::unique_ptr<Resource> m_resource;  // Member prefix
-    int m_counter = 0;
-};
-```
+## Pull Request Workflow
 
-### Commit Messages
+1. Create a branch from latest main.
+2. Implement focused changes with clear commit messages.
+3. Run local checks.
+4. Update docs when behavior changes.
+5. Open PR with rationale and validation notes.
 
-- Use present tense ("Add feature" not "Added feature")
-- Use imperative mood ("Move cursor to..." not "Moves cursor to...")
-- Limit first line to 72 characters
-- Reference issues and PRs when relevant
+## Build and Validation
 
-Example:
-```
-Add beat-synchronized particle system
+Preferred local flow is workspace tasks:
 
-- Implement particle emitter with beat phase sync
-- Add particle rendering to Scene View
-- Update shader constants to include particle data
+- Build ShaderLab (Debug)
+- Build ShaderLab (Release)
+- Reconfigure CMake
 
-Closes #42
-```
+Before validating from a plain shell, load environment with:
 
-### Testing
+- .\tools\dev_env.ps1
 
-- Test on your hardware before submitting
-- Verify in both Debug and Release configurations
-- If you are not using the VS Developer Console, run `.\tools\dev_env.ps1` first
-- Check for memory leaks (use debug tools if available)
-- Ensure backward compatibility with existing projects
+Run checks with:
 
-### Documentation
+- .\tools\check.ps1
 
-- Update README.md if adding major features
-- Add comments for complex algorithms
-- Update ARCHITECTURE.md for structural changes
-- Update BUILD.md or STRUCTURE.md when build steps or layout change
-- Include example shaders if adding rendering features
+## Documentation Maintenance (Required)
 
-## Contribution Areas
+If you change behavior, build flow, structure, or policies:
 
-We especially welcome contributions in:
+- update canonical docs in `docs/`,
+- avoid adding new root-level status reports,
+- keep historical notes in `docs/archive/`.
 
-### Core Features
-- Multi-pass rendering system
-- Shader parameter automation
-- Playlist and transitions
-- Texture loading and management
-- Export to standalone runtime
+Run docs checks before opening PR:
 
-### Creative Content
-- Example shaders (licensed under CC BY-NC-SA 4.0)
-- Demo projects
-- Tutorials and documentation
-- Shader presets and templates
+- .\tools\check_docs.ps1
 
-### Tools & Utilities
-- Build scripts
-- Shader validator tools
-- Asset converters
-- Profiling tools
+`tools/check_docs.ps1` validates:
 
-### Platform Support
-- AMD GPU optimization
-- Intel GPU support
-- Laptop/low-power testing
+- required canonical docs are present,
+- archived pointer docs stay in archived format,
+- local markdown links resolve.
 
-## License Agreement
+## Runtime/Build Policy Notes
 
-By contributing code to ShaderLab, you agree to license your contributions under the Community License (see LICENSE-COMMUNITY.md).
+When changing build/export behavior, preserve and document:
 
-By contributing creative assets (shaders, examples), you agree to license them under CC BY-NC-SA 4.0.
+- tiny presets: MicroPlayer + x86,
+- open/free preset: full runtime + x64,
+- runtime/compact debug flags default OFF for size-sensitive outputs.
 
-## Community Guidelines
+## Code Guidelines
 
-- Be respectful and constructive
-- Focus on what's best for the project and community
-- Embrace the demoscene spirit: creativity, learning, and sharing
-- Help newcomers and answer questions
-- Keep discussions on-topic
+- Use C++20 and existing project style.
+- Prefer RAII and explicit ownership.
+- Keep naming descriptive.
+- Avoid unrelated refactors in the same PR.
 
-## Getting Help
+## Licensing
 
-- Open an issue for bugs or feature requests
-- Use GitHub Discussions for questions and ideas
-- Check existing documentation first
+By contributing code, you agree to license contributions under `LICENSE-COMMUNITY.md`.
 
-## Recognition
+By contributing creative assets, you agree to `creative/LICENSE.md`.
 
-Contributors will be:
-- Listed in project credits
-- Mentioned in release notes for their contributions
-- Part of the growing ShaderLab community
+## Community
 
-Thank you for helping make ShaderLab better!
-
----
-
-*Questions? Open an issue or start a discussion on GitHub.*
+- Be respectful and constructive.
+- Keep discussions technical and actionable.
+- Help improve clarity for future contributors.

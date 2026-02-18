@@ -8,7 +8,14 @@
 #include <filesystem>
 #include <shellapi.h>
 #include <conio.h>
+
+#ifndef SHADERLAB_RUNTIME_IMGUI
+#define SHADERLAB_RUNTIME_IMGUI 1
+#endif
+
+#if SHADERLAB_RUNTIME_IMGUI
 #include "imgui.h" // Add this for IMGUI_IMPL_API
+#endif
 
 using namespace ShaderLab;
 
@@ -22,11 +29,15 @@ bool g_Windowed = false;
 RECT g_WindowedRect = { 0, 0, 1280, 720 };
 
 // Forward declare message handler from imgui_impl_win32.cpp
+#if SHADERLAB_RUNTIME_IMGUI
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+#if SHADERLAB_RUNTIME_IMGUI
     if (ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam))
         return true;
+#endif
 
     switch (uMsg) {
         case WM_DESTROY:

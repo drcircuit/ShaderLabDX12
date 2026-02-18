@@ -1,5 +1,6 @@
 #include "ShaderLab/UI/UISystem.h"
 #include "ShaderLab/UI/UIConfig.h"
+#include "ShaderLab/UI/OpenFontIcons.h"
 #include "ShaderLab/UI/UISystemDemoUtils.h"
 #include "ShaderLab/Audio/AudioSystem.h"
 
@@ -17,6 +18,90 @@
 
 namespace ShaderLab {
 
+namespace {
+bool IconButton(const char* id, uint32_t iconCodepoint, const char* tooltip, const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+    const std::string icon = OpenFontIcons::ToUtf8(iconCodepoint);
+    const std::string buttonId = std::string("##") + id;
+
+    ImVec2 buttonSize = size;
+    if (buttonSize.x <= 0.0f || buttonSize.y <= 0.0f) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        const ImVec2 pad = ImGui::GetStyle().FramePadding;
+        if (buttonSize.x <= 0.0f) buttonSize.x = textSize.x + pad.x * 2.0f;
+        if (buttonSize.y <= 0.0f) buttonSize.y = textSize.y + pad.y * 2.0f;
+    }
+
+    const bool pressed = ImGui::InvisibleButton(buttonId.c_str(), buttonSize);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : (hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+    drawList->AddRectFilled(min, max, bg, style.FrameRounding);
+    if (style.FrameBorderSize > 0.0f) {
+        drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding, 0, style.FrameBorderSize);
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize();
+
+    float textX = min.x;
+    float textY = min.y;
+    bool usedGlyphBounds = false;
+    if (font) {
+        if (ImFontBaked* baked = font->GetFontBaked(fontSize)) {
+            if (ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(iconCodepoint))) {
+                const float glyphW = glyph->X1 - glyph->X0;
+                const float glyphH = glyph->Y1 - glyph->Y0;
+                textX = min.x + (buttonSize.x - glyphW) * 0.5f - glyph->X0;
+                textY = min.y + (buttonSize.y - glyphH) * 0.5f - glyph->Y0;
+                usedGlyphBounds = true;
+            }
+        }
+    }
+    if (!usedGlyphBounds) {
+        const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+        textX = min.x + (buttonSize.x - textSize.x) * 0.5f;
+        textY = min.y + (buttonSize.y - textSize.y) * 0.5f;
+    }
+
+    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(UIConfig::ColorCheckMark), icon.c_str());
+
+    if (ImGui::IsItemHovered() && tooltip && *tooltip) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    return pressed;
+}
+
+ImVec2 CompactIconSquareSize() {
+    const float side = ImGui::GetFrameHeight();
+    return ImVec2(side, side);
+}
+
+std::string FormatByteSize(size_t bytes) {
+    if (bytes == 0) return "0 B";
+    static const char* units[] = { "B", "KB", "MB", "GB" };
+    double value = static_cast<double>(bytes);
+    int unitIndex = 0;
+    while (value >= 1024.0 && unitIndex < 3) {
+        value /= 1024.0;
+        ++unitIndex;
+    }
+
+    char buffer[32] = {};
+    if (unitIndex == 0) {
+        std::snprintf(buffer, sizeof(buffer), "%zu %s", bytes, units[unitIndex]);
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "%.2f %s", value, units[unitIndex]);
+    }
+    return std::string(buffer);
+}
+}
+
 void UISystem::CreateDefaultTrack() {
     m_track.name = "Main Track";
     m_track.bpm = 120.0f;
@@ -32,7 +117,7 @@ void UISystem::CreateDefaultTrack() {
 void UISystem::ShowAudioLibrary() {
     if (ImGui::Begin("Audio Library")) {
         // Add Button
-        if (ImGui::Button("+ Add Audio File")) {
+        if (IconButton("AddAudioFile", OpenFontIcons::kFilePlus, "Add audio file")) {
              OPENFILENAMEA ofn = {0};
              char szFile[260] = {0};
              ofn.lStructSize = sizeof(ofn);
@@ -105,7 +190,7 @@ void UISystem::ShowAudioLibrary() {
                 }
 
                 ImGui::TableSetColumnIndex(4);
-                if (ImGui::Button("X")) {
+                if (IconButton("DeleteAudio", OpenFontIcons::kTrash2, "Delete audio clip")) {
                      // Check if this clip is currently playing and stop it
                      if (m_audioSystem && m_audioSystem->IsPlaying() && m_currentMode == UIMode::Demo) {
                          // We don't have a way to check WHICH clip is playing exactly by index easily here
@@ -170,18 +255,15 @@ void UISystem::ShowDemoPlaylist() {
         }
         PopNumericFont();
         ImGui::SameLine(0.0f, 2.0f);
-        const ImVec2 spinnerSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
-        auto SpinnerButton = [&](const char* label) -> bool {
-            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-            bool pressed = ImGui::Button(label, spinnerSize);
-            ImGui::PopStyleVar();
-            return pressed;
+        const ImVec2 spinnerSize = CompactIconSquareSize();
+        auto SpinnerIconButton = [&](const char* id, uint32_t icon, const char* tooltip) -> bool {
+            return IconButton(id, icon, tooltip, spinnerSize);
         };
-        if (SpinnerButton("-")) {
+        if (SpinnerIconButton("BpmDec", OpenFontIcons::kMinus, "Decrease BPM")) {
             if (track.bpm > 1.0f) track.bpm -= 1.0f;
         }
         ImGui::SameLine(0.0f, 2.0f);
-        if (SpinnerButton("+")) {
+        if (SpinnerIconButton("BpmInc", OpenFontIcons::kPlus, "Increase BPM")) {
             track.bpm += 1.0f;
         }
 
@@ -305,7 +387,7 @@ void UISystem::ShowDemoPlaylist() {
 
                     // "Stop" Button/Indicator
                     if (row && row->stop) {
-                        if (ImGui::Button("STOP", ImVec2(-FLT_MIN, 0))) {
+                        if (IconButton("StopMarker", OpenFontIcons::kStop, "Clear STOP marker", ImVec2(-FLT_MIN, 0))) {
                              row->stop = false;
                         }
                     } else {
@@ -894,7 +976,38 @@ void UISystem::ShowTransportControls() {
                 }
             }
 
+            if (compilationFailed && m_currentMode == UIMode::Demo) {
+                m_hasDemoCompiledSize = false;
+                m_lastDemoCompiledSizeBytes = 0;
+            }
+
             if (!compilationFailed) {
+                if (m_currentMode == UIMode::Demo) {
+                    std::vector<bool> referencedScenes(m_scenes.size(), false);
+                    for (const auto& row : m_track.rows) {
+                        if (row.sceneIndex >= 0 && row.sceneIndex < (int)m_scenes.size()) {
+                            referencedScenes[row.sceneIndex] = true;
+                        }
+                    }
+
+                    size_t totalBytes = 0;
+                    for (int i = 0; i < (int)m_scenes.size(); ++i) {
+                        if (!referencedScenes[i]) continue;
+                        const auto& scene = m_scenes[i];
+                        if (scene.pipelineState && scene.compiledShaderBytes > 0) {
+                            totalBytes += scene.compiledShaderBytes;
+                        }
+                        for (const auto& fx : scene.postFxChain) {
+                            if (fx.enabled && fx.pipelineState && fx.compiledShaderBytes > 0) {
+                                totalBytes += fx.compiledShaderBytes;
+                            }
+                        }
+                    }
+
+                    m_lastDemoCompiledSizeBytes = totalBytes;
+                    m_hasDemoCompiledSize = (totalBytes > 0);
+                }
+
                 if (m_transport.state == TransportState::Stopped) {
                     // Reset Transport
                     m_transport.timeSeconds = 0.0;
@@ -939,8 +1052,8 @@ void UISystem::ShowTransportControls() {
     }
     ImGui::SameLine();
 
-    ImGui::Button("Stop");
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || hotkeyStop) {
+    bool stopPressed = ImGui::Button("Stop");
+    if (stopPressed || hotkeyStop) {
         m_transport.state = TransportState::Stopped;
         m_transport.timeSeconds = 0.0;
         m_transport.lastFrameWallSeconds = 0.0;
@@ -1014,6 +1127,11 @@ void UISystem::ShowTransportControls() {
         m_transport.bpm = bpm;
     }
     PopNumericFont();
+
+    if (m_currentMode == UIMode::Demo && m_hasDemoCompiledSize) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Compiled: %s", FormatByteSize(m_lastDemoCompiledSizeBytes).c_str());
+    }
 
     ImGui::End();
 }
