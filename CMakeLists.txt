@@ -299,6 +299,7 @@ if(SHADERLAB_BUILD_EDITOR)
     add_executable(ShaderLabEditor WIN32
         src/app/editor/main.cpp
         src/app/editor/EditorApp.cpp
+        src/app/editor/ShaderLabEditor.rc
         include/ShaderLab/App/EditorApp.h
     )
     

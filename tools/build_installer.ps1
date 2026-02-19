@@ -173,6 +173,7 @@ $issLines = @(
     'SolidCompression=yes',
     'ArchitecturesAllowed=x64compatible',
     'ArchitecturesInstallIn64BitMode=x64compatible',
+    'SetupIconFile={#SourceRoot}\\editor_assets\\shaderlab.ico.ico',
     ('LicenseFile={0}\LICENSE-COMMUNITY.md' -f $repoRootEsc),
     '',
     '[Languages]',
@@ -193,8 +194,8 @@ if ($vcRedistStaged) {
 $issLines += @(
     '',
     '[Icons]',
-    'Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"',
-    'Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon',
+    'Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\editor_assets\shaderlab.ico.ico"; AppUserModelID: "ShaderLab.Editor"',
+    'Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\editor_assets\shaderlab.ico.ico"; AppUserModelID: "ShaderLab.Editor"',
     '',
     '[Run]'
 )
