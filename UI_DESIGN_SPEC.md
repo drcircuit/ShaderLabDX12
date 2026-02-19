@@ -23,9 +23,8 @@ The ShaderLab editor has been redesigned with a futuristic cyberpunk aesthetic f
 ## Typography
 
 ### Font Family: Hacked
-- **Usage**: Logo and large headings
-- **Sizes**: 
-  - 48px (Logo "SHADERLAB" in menu bar)
+- **Usage**: Large headings
+- **Sizes**:
   - 20px (Section headings)
 - **Style**: Technical monospace display font
 - **Color**: Bright cyan (#00FFFF)
@@ -48,8 +47,8 @@ The ShaderLab editor has been redesigned with a futuristic cyberpunk aesthetic f
 ### Menu Bar
 ```
 ┌─────────────────────────────────────────────────────┐
-│ SHADERLAB │ File  View  Device  Help                │
-│  (cyan)   │                                          │
+│ [icon]  File  View  Device  Help   VSync  FPS ...   │
+│                 <center demo name>                   │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -84,7 +83,8 @@ The ShaderLab editor has been redesigned with a futuristic cyberpunk aesthetic f
 - All colors defined in `UISystem::SetupImGuiStyle()`
 - Fonts loaded in `UISystem::Initialize()`
 - Orbitron set as `io.FontDefault` for all standard UI text
-- Special fonts pushed/popped for logo and headings
+- Titlebar icon is loaded from `editor_assets/*.ico` and rendered in the custom titlebar
+- Center titlebar text uses project filename stem, fallback `Untitled Demo`
 - Graceful fallback to default font if loading fails
 
 ## Reference Image

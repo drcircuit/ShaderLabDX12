@@ -20,7 +20,7 @@ Project documentation is maintained under `docs/`.
 ### Editor UI Design
 
 The editor features a custom futuristic cyberpunk aesthetic:
-- **Custom Fonts**: Hacked (logo/headings), Orbitron (UI text), Erbos Draco (numbers)
+- **Custom Fonts**: Hacked (headings), Orbitron (UI text), Erbos Draco (numbers)
 - **Color Scheme**: Dark blue-black backgrounds with bright cyan/teal accents
 - **Sharp Geometry**: Angular, industrial design with no rounded corners
 - **High Contrast**: Optimized for extended coding sessions in dark environments
@@ -107,6 +107,7 @@ cd ShaderLab
 .\tools\dev_env.ps1
 
 # Use VS Code tasks (recommended), or build manually:
+# Ctrl+Shift+B opens the build task picker (Debug/Release)
 # powershell -NoProfile -ExecutionPolicy Bypass -Command ". .\tools\dev_env.ps1; cmd /c .\.vscode\build-debug.bat"
 
 # Run the editor from the repository root

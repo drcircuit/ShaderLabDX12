@@ -14,6 +14,10 @@ This folder is the canonical source of project documentation.
 
 - [feature_time_offset.md](feature_time_offset.md)
 
+## End-User Docs
+
+- [enduser/README.md](enduser/README.md)
+
 ## Historical / Archived Notes
 
 Legacy bootstrap and one-off implementation reports were consolidated into:

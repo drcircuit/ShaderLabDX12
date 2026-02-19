@@ -20,6 +20,11 @@ From VS Code, use the workspace tasks:
 
 These tasks automatically load `tools/dev_env.ps1` before configuring/building/running.
 
+Build task selection behavior:
+
+- `Ctrl+Shift+B` opens the build task picker (Debug or Release).
+- No single build task is forced as default in workspace settings.
+
 ## Command-Line Workflow
 
 From repository root in PowerShell:
@@ -42,6 +47,8 @@ Release builds now also produce a setup artifact automatically:
 - Output folder: `artifacts/`
 - Preferred output: Inno Setup installer (`ShaderLabSetup-x64-...exe`)
 - Fallback output: portable zip (`ShaderLabSetup-x64-...-portable.zip`) when Inno Setup is unavailable
+- Inno Setup architecture directives use modern identifiers (`x64compatible`) to avoid deprecated `x64` warnings.
+- End-user docs from `docs/enduser/` are staged into `build/bin/docs/enduser/` and included in installer/portable artifacts.
 
 VC++ runtime bundling for installer builds:
 

@@ -58,6 +58,7 @@ Copy-Item -Path (Join-Path $BuildBin "*") -Destination $stageApp -Recurse -Force
 $extraToCopy = @(
     "templates",
     "editor_assets",
+    "docs\\enduser",
     "LICENSE-COMMUNITY.md",
     "LICENSE-COMMERCIAL.md",
     "README.md"

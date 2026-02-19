@@ -13,7 +13,7 @@ This document outlines the testing steps to verify the UI redesign functionality
 - [ ] Launch the editor
 - [ ] Verify no font loading errors in the log
 - [ ] Check that the UI text appears in Orbitron font (clean, futuristic geometric font)
-- [ ] Logo text "SHADERLAB" in menu bar should use Hacked font (technical monospace style)
+- [ ] Top-left titlebar icon is visible (loaded from `editor_assets/*.ico`)
 
 ### 2. Color Scheme
 - [ ] Window backgrounds should be very dark blue-black (not pure black)
@@ -22,11 +22,11 @@ This document outlines the testing steps to verify the UI redesign functionality
 - [ ] Buttons should have cyan hover states
 - [ ] Sliders and checkmarks should be bright cyan
 
-### 3. Menu Bar Logo
-- [ ] "SHADERLAB" text appears in the top-left of menu bar
-- [ ] Logo text is bright cyan color
-- [ ] Logo uses larger Hacked font
-- [ ] A separator line appears after the logo before "File" menu
+### 3. Titlebar Layout
+- [ ] Top-left app icon is visible in the custom titlebar
+- [ ] Center title shows demo name (project filename stem) or `Untitled Demo` when no project is loaded
+- [ ] Left utility controls show `VSync` and `FPS` in fixed slots (they should not shift each other)
+- [ ] `Alt+F` toggles preview fullscreen
 
 ### 4. UI Elements
 

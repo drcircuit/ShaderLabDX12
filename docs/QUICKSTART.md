@@ -27,7 +27,10 @@ Then verify with:
 
 ## 3) Build (Recommended: VS Code Task)
 
-Run the `Build ShaderLab (Debug)` task.
+Press `Ctrl+Shift+B` and choose either:
+
+- `Build ShaderLab (Debug)`
+- `Build ShaderLab (Release)`
 
 Equivalent command-line flow:
 
