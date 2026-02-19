@@ -324,14 +324,31 @@ if(SHADERLAB_BUILD_EDITOR)
 
     # Copy DXC DLLs to output directory
     if(SHADERLAB_ENABLE_DXC)
-        add_custom_command(TARGET ShaderLabEditor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxcompiler.dll"
-                $<TARGET_FILE_DIR:ShaderLabEditor>
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxil.dll"
-                $<TARGET_FILE_DIR:ShaderLabEditor>
-        )
+        set(SHADERLAB_DXC_BIN_DIR "" CACHE PATH "Directory containing dxcompiler.dll and dxil.dll")
+        set(_shaderlab_dxc_bin_dir "${SHADERLAB_DXC_BIN_DIR}")
+
+        if(NOT _shaderlab_dxc_bin_dir)
+            file(GLOB _shaderlab_windows_sdk_bin_dirs "C:/Program Files (x86)/Windows Kits/10/bin/*/x64")
+            if(_shaderlab_windows_sdk_bin_dirs)
+                list(SORT _shaderlab_windows_sdk_bin_dirs ORDER DESCENDING)
+                list(GET _shaderlab_windows_sdk_bin_dirs 0 _shaderlab_dxc_bin_dir)
+            endif()
+        endif()
+
+        if(_shaderlab_dxc_bin_dir
+           AND EXISTS "${_shaderlab_dxc_bin_dir}/dxcompiler.dll"
+           AND EXISTS "${_shaderlab_dxc_bin_dir}/dxil.dll")
+            add_custom_command(TARGET ShaderLabEditor POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_shaderlab_dxc_bin_dir}/dxcompiler.dll"
+                    $<TARGET_FILE_DIR:ShaderLabEditor>
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_shaderlab_dxc_bin_dir}/dxil.dll"
+                    $<TARGET_FILE_DIR:ShaderLabEditor>
+            )
+        else()
+            message(WARNING "DXC runtime DLLs not found. Set SHADERLAB_DXC_BIN_DIR to a folder containing dxcompiler.dll and dxil.dll.")
+        endif()
     endif()
 endif()
 

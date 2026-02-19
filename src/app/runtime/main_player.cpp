@@ -120,6 +120,10 @@ bool HasAnyFlag(const std::vector<std::wstring>& args, const std::vector<std::ws
     return false;
 }
 
+bool IsArg(const std::wstring& arg, const wchar_t* value) {
+    return _wcsicmp(arg.c_str(), value) == 0;
+}
+
 } // namespace
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
@@ -128,8 +132,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     const auto args = GetCommandLineArgs();
     bool debugConsole = HasAnyFlag(args, {L"-d", L"--debug"});
     bool loopPlayback = !HasAnyFlag(args, {L"--no-loop", L"-noloop"});
+    bool vsyncEnabled = true;
     if (HasAnyFlag(args, {L"--loop", L"-loop"})) {
         loopPlayback = true;
+    }
+
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (IsArg(args[i], L"--no-vsync") || IsArg(args[i], L"--vsync-off") || IsArg(args[i], L"--unlimited-fps") || IsArg(args[i], L"--fps-unlimited")) {
+            vsyncEnabled = false;
+        } else if (IsArg(args[i], L"--vsync") || IsArg(args[i], L"--vsync-on")) {
+            vsyncEnabled = true;
+        }
     }
 
 #if SHADERLAB_RUNTIME_DEBUG_LOG
@@ -140,6 +153,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     options.debugConsole = debugConsole;
     options.loopPlayback = loopPlayback;
     options.screenSaverMode = false;
+    options.vsyncEnabled = vsyncEnabled;
 
     return ShaderLab::RunPlayerApp(hInstance, options);
 }

@@ -25,6 +25,9 @@ public:
 
     void Present(bool vsync = true);
     void Resize(uint32_t width, uint32_t height);
+    bool SetExclusiveFullscreen(bool enabled);
+    bool IsExclusiveFullscreen() const { return m_isExclusiveFullscreen; }
+    bool SupportsTearing() const { return m_allowTearing; }
 
     ID3D12Resource* GetCurrentBackBuffer() const;
     D3D12_CPU_DESCRIPTOR_HANDLE GetCurrentRTV() const;
@@ -48,6 +51,9 @@ private:
     uint32_t m_height = 0;
     uint32_t m_currentBackBuffer = 0;
     uint32_t m_rtvDescriptorSize = 0;
+    HWND m_hwnd = nullptr;
+    bool m_allowTearing = false;
+    bool m_isExclusiveFullscreen = false;
 };
 
 } // namespace ShaderLab

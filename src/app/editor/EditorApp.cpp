@@ -41,6 +41,15 @@ std::wstring ToWide(const std::string& value) {
     MultiByteToWideChar(codePage, 0, value.data(), (int)value.size(), wide.data(), size);
     return wide;
 }
+
+std::string GetShaderLabLogPath() {
+    char tempPath[MAX_PATH] = {};
+    DWORD len = GetTempPathA(MAX_PATH, tempPath);
+    if (len > 0 && len < MAX_PATH) {
+        return std::string(tempPath) + "shaderlab_log.txt";
+    }
+    return "shaderlab_log.txt";
+}
 }
 
 EditorApp::EditorApp() = default;
@@ -95,24 +104,25 @@ bool EditorApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
 
     // Initialize shader compiler
     m_shaderCompiler = std::make_unique<ShaderCompiler>();
-    FILE* f = fopen("C:\\temp\\shaderlab_log.txt", "a");
+    const std::string logPath = GetShaderLabLogPath();
+    FILE* f = fopen(logPath.c_str(), "a");
     if (f) { fprintf(f, "About to initialize shader compiler\n"); fclose(f); }
     if (!m_shaderCompiler->Initialize()) {
         MessageBoxW(hwnd, L"Failed to initialize Shader Compiler (DXC)", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
-    f = fopen("C:\\temp\\shaderlab_log.txt", "a");
+    f = fopen(logPath.c_str(), "a");
     if (f) { fprintf(f, "Shader compiler initialized\n"); fclose(f); }
 
     // Initialize preview renderer
     m_previewRenderer = std::make_unique<PreviewRenderer>();
-    f = fopen("C:\\temp\\shaderlab_log.txt", "a");
+    f = fopen(logPath.c_str(), "a");
     if (f) { fprintf(f, "About to initialize preview renderer\n"); fclose(f); }
     if (!m_previewRenderer->Initialize(m_device.get(), m_shaderCompiler.get(), DXGI_FORMAT_R8G8B8A8_UNORM, nullptr)) {
         MessageBoxW(hwnd, L"Failed to initialize Preview Renderer", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
-    f = fopen("C:\\temp\\shaderlab_log.txt", "a");
+    f = fopen(logPath.c_str(), "a");
     if (f) { fprintf(f, "Preview renderer initialized\n"); fclose(f); }
 
     // Pass preview renderer to UI system
@@ -120,7 +130,7 @@ bool EditorApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
     m_ui->SetAudioSystem(m_audio.get());
     m_ui->SetRestartCallback([this](int index) { RequestRestart(index); });
 
-    f = fopen("C:\\temp\\shaderlab_log.txt", "a");
+    f = fopen(logPath.c_str(), "a");
     if (f) { fprintf(f, "All initialization complete\n"); fclose(f); }
 
     m_initialized = true;
@@ -247,7 +257,8 @@ void EditorApp::Render() {
     m_commandQueue->ExecuteCommandList();
 
     // Present
-    m_swapchain->Present(true);
+    const bool previewVsyncEnabled = m_ui ? m_ui->IsPreviewVsyncEnabled() : true;
+    m_swapchain->Present(previewVsyncEnabled);
 
     // Wait for GPU (simple approach for now)
     m_commandQueue->WaitForGPU();
@@ -434,7 +445,8 @@ void EditorApp::UpdateWindowTitle() {
         }
 
         FILE* f = nullptr;
-        fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+        const std::string logPath = GetShaderLabLogPath();
+        fopen_s(&f, logPath.c_str(), "a");
         if (f) {
             fprintf(f, "Requested title len=%zu nullPos=%zu projectLen=%zu projectNull=%zu\n",
                 title.size(), titleNullPos, projectName.size(), projectNullPos);

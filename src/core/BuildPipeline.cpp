@@ -231,6 +231,82 @@ bool HasWindowsSdk(std::string& outPath) {
     return false;
 }
 
+struct BundledWindowsSdkInfo {
+    bool found = false;
+    fs::path root;
+    fs::path includeVersionDir;
+    fs::path libVersionDir;
+    fs::path binVersionDir;
+    std::string versionTag;
+};
+
+std::vector<fs::path> BundledWindowsSdkRoots(const fs::path& baseRoot) {
+    return {
+        baseRoot / "third_party" / "windows_sdk_bundle",
+        baseRoot / "windows_sdk_bundle"
+    };
+}
+
+bool ResolveBundledWindowsSdk(const fs::path& baseRoot, BundledWindowsSdkInfo& outInfo) {
+    std::error_code ec;
+    for (const auto& bundleRoot : BundledWindowsSdkRoots(baseRoot)) {
+        fs::path includeRoot = bundleRoot / "Include";
+        fs::path libRoot = bundleRoot / "Lib";
+        fs::path binRoot = bundleRoot / "bin";
+        if (!fs::exists(includeRoot, ec) || ec || !fs::exists(libRoot, ec) || ec || !fs::exists(binRoot, ec) || ec) {
+            continue;
+        }
+
+        std::vector<fs::path> versions;
+        for (const auto& entry : fs::directory_iterator(includeRoot, ec)) {
+            if (ec || !entry.is_directory()) continue;
+            versions.push_back(entry.path().filename());
+        }
+        if (versions.empty()) {
+            continue;
+        }
+
+        std::sort(versions.begin(), versions.end(), [](const fs::path& a, const fs::path& b) {
+            return a.string() > b.string();
+        });
+
+        for (const auto& versionName : versions) {
+            fs::path includeVersionDir = includeRoot / versionName;
+            fs::path libVersionDir = libRoot / versionName;
+            fs::path binVersionDir = binRoot / versionName;
+
+            bool hasHeaders = FileExists(includeVersionDir / "um" / "d3d12.h");
+            bool hasLibs = FileExists(libVersionDir / "um" / "x86" / "kernel32.lib")
+                && FileExists(libVersionDir / "um" / "x64" / "kernel32.lib")
+                && FileExists(libVersionDir / "ucrt" / "x86" / "ucrt.lib")
+                && FileExists(libVersionDir / "ucrt" / "x64" / "ucrt.lib");
+            bool hasTools = FileExists(binVersionDir / "x86" / "rc.exe")
+                && FileExists(binVersionDir / "x64" / "rc.exe");
+
+            if (hasHeaders && hasLibs && hasTools) {
+                outInfo.found = true;
+                outInfo.root = bundleRoot;
+                outInfo.includeVersionDir = includeVersionDir;
+                outInfo.libVersionDir = libVersionDir;
+                outInfo.binVersionDir = binVersionDir;
+                outInfo.versionTag = versionName.string();
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool HasBundledWindowsSdk(const fs::path& baseRoot, std::string& outPath) {
+    BundledWindowsSdkInfo info;
+    if (!ResolveBundledWindowsSdk(baseRoot, info)) {
+        return false;
+    }
+    outPath = info.root.string();
+    return true;
+}
+
 bool ResolveCrinklerPath(const fs::path& appRoot, std::string& outPath) {
     auto envToPath = [&](const char* varName) -> bool {
         char buffer[MAX_PATH] = {};
@@ -1778,10 +1854,11 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildM
     }
 
     std::string sdkPath;
-    report.hasWindowsSdk = HasWindowsSdk(sdkPath);
+    report.hasWindowsSdk = HasWindowsSdk(sdkPath) || HasBundledWindowsSdk(fs::path(appRoot), sdkPath);
     if (!report.hasWindowsSdk) {
         missing.push_back("Windows SDK 10 (d3d12.h)");
         guidance.push_back("Install Windows 10/11 SDK via Visual Studio Installer.");
+        guidance.push_back("Or create a local SDK bundle in third_party/windows_sdk_bundle (tools/bundle_windows_sdk.ps1).");
     }
 
     report.hasCMake = FindOnPath("cmake.exe") || FileExists("C:\\Program Files\\CMake\\bin\\cmake.exe");
@@ -1946,6 +2023,14 @@ BuildResult BuildPipeline::BuildSelfContained(
             return result;
         }
         log("Using isolated SDK source: " + sourceDir.string());
+    }
+
+    BundledWindowsSdkInfo bundledSdk;
+    if (!ResolveBundledWindowsSdk(sourceDir, bundledSdk)) {
+        ResolveBundledWindowsSdk(fs::path(request.appRoot), bundledSdk);
+    }
+    if (bundledSdk.found) {
+        log("Windows SDK bundle: " + bundledSdk.root.string() + " (version " + bundledSdk.versionTag + ")");
     }
 
     const bool hasNinja = FindOnPath("ninja.exe");
@@ -2198,10 +2283,76 @@ BuildResult BuildPipeline::BuildSelfContained(
         if (!requireVcvars || vcvars.empty()) {
             return innerCmd;
         }
+
+        auto normalizeForCmd = [](std::string value) {
+            std::replace(value.begin(), value.end(), '/', '\\');
+            return value;
+        };
+
+        auto appendEnvList = [&](std::string& script, const char* envName, const std::vector<fs::path>& paths) {
+            std::vector<std::string> existing;
+            for (const auto& path : paths) {
+                if (!FileExists(path)) {
+                    continue;
+                }
+                existing.push_back(normalizeForCmd(path.string()));
+            }
+            if (existing.empty()) {
+                return;
+            }
+
+            std::string merged;
+            for (size_t i = 0; i < existing.size(); ++i) {
+                if (i > 0) {
+                    merged += ';';
+                }
+                merged += existing[i];
+            }
+            merged += ";%";
+            merged += envName;
+            merged += "%";
+
+            script += "set \"";
+            script += envName;
+            script += "=";
+            script += merged;
+            script += "\"\n";
+        };
+
         std::string script;
         script += "set \"PATH=C:\\Windows\\System32;C:\\Windows\\System32\\downlevel;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\"\n";
         script += "call \"" + vcvars + "\"" + args + " >nul\n";
         script += "if errorlevel 1 exit /b %errorlevel%\n";
+
+        if (bundledSdk.found) {
+            const std::string arch = useX86Target ? "x86" : "x64";
+            const fs::path sdkDir = bundledSdk.root;
+
+            std::string sdkDirValue = normalizeForCmd(sdkDir.string());
+            if (!sdkDirValue.empty() && sdkDirValue.back() != '\\') {
+                sdkDirValue.push_back('\\');
+            }
+            script += "set \"WindowsSdkDir=" + sdkDirValue + "\"\n";
+            script += "set \"WindowsSDKVersion=" + bundledSdk.versionTag + "\\\"\n";
+
+            appendEnvList(script, "INCLUDE", {
+                bundledSdk.includeVersionDir / "ucrt",
+                bundledSdk.includeVersionDir / "shared",
+                bundledSdk.includeVersionDir / "um",
+                bundledSdk.includeVersionDir / "winrt",
+                bundledSdk.includeVersionDir / "cppwinrt"
+            });
+
+            appendEnvList(script, "LIB", {
+                bundledSdk.libVersionDir / "ucrt" / arch,
+                bundledSdk.libVersionDir / "um" / arch
+            });
+
+            appendEnvList(script, "PATH", {
+                bundledSdk.binVersionDir / arch
+            });
+        }
+
         script += innerCmd + "\n";
         return script;
     };

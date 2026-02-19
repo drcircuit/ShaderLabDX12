@@ -26,6 +26,8 @@ public:
     void LoadProject(const std::string& manifestPath);
     void SetLooping(bool enabled) { m_loopPlayback = enabled; }
     bool IsLooping() const { return m_loopPlayback; }
+    void SetVsyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
+    bool IsVsyncEnabled() const { return m_vsyncEnabled; }
     
     void Update(double wallTime, float dt);
     void Render(ID3D12GraphicsCommandList* commandList, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle);
@@ -118,6 +120,7 @@ private:
     std::vector<std::vector<int16_t>> m_microPostFxModuleIds;
     std::array<int16_t, 7> m_microTransitionModuleIds = { -1, -1, -1, -1, -1, -1, -1 };
     bool m_loopPlayback = true;
+    bool m_vsyncEnabled = true;
 };
 
 }

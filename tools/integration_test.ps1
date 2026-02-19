@@ -1,6 +1,6 @@
 param(
-    [string]$ProjectPath = "C:\Users\espen\code\DEMO.json",
-    [string]$OutputRoot = "C:\Users\espen\code\hobby\ShaderLab\build_integration",
+    [string]$ProjectPath = "",
+    [string]$OutputRoot = "",
     [int]$RegularMaxBytes = 262144
 )
 
@@ -9,8 +9,25 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $cliPath = Join-Path $repoRoot "build\bin\ShaderLabBuildCli.exe"
 
+if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+    $candidates = @(
+        (Join-Path $repoRoot "DEMO.json"),
+        (Join-Path (Split-Path $repoRoot -Parent) "DEMO.json")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            $ProjectPath = (Resolve-Path $candidate).Path
+            break
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $repoRoot "build_integration"
+}
+
 if (-not (Test-Path $ProjectPath)) {
-    throw "Project JSON not found: $ProjectPath"
+    throw "Project JSON not found: $ProjectPath. Pass -ProjectPath or add DEMO.json in repo root/parent."
 }
 
 if (-not (Test-Path $cliPath)) {

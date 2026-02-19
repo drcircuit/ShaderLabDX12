@@ -1,5 +1,5 @@
 param(
-    [string]$ProjectPath = "C:\Users\espen\code\DEMO.json",
+    [string]$ProjectPath = "",
     [string]$OutputRoot = ""
 )
 
@@ -7,8 +7,22 @@ $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $cli = Join-Path $repo "build\bin\ShaderLabBuildCli.exe"
+
+if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+    $candidates = @(
+        (Join-Path $repo "DEMO.json"),
+        (Join-Path (Split-Path $repo -Parent) "DEMO.json")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            $ProjectPath = (Resolve-Path $candidate).Path
+            break
+        }
+    }
+}
+
 if (-not (Test-Path $cli)) { throw "ShaderLabBuildCli missing: $cli" }
-if (-not (Test-Path $ProjectPath)) { throw "Project JSON missing: $ProjectPath" }
+if (-not (Test-Path $ProjectPath)) { throw "Project JSON missing: $ProjectPath. Pass -ProjectPath or add DEMO.json in repo root/parent." }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repo "build_smoke_crinkled_summary"

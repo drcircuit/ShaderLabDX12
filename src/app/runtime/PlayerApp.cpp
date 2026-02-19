@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <conio.h>
+#include <cstdio>
 #include <memory>
+#include <string>
 #ifndef SHADERLAB_TINY_PLAYER
 #define SHADERLAB_TINY_PLAYER 0
 #endif
@@ -38,6 +40,11 @@ DemoPlayer* g_Player = nullptr;
 bool g_DebugConsole = false;
 bool g_Windowed = false;
 bool g_ScreenSaverMode = false;
+bool g_VsyncEnabled = true;
+float g_LastMeasuredFps = 0.0f;
+double g_FpsAccumSeconds = 0.0;
+int g_FpsAccumFrames = 0;
+std::string g_BaseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo";
 RECT g_WindowedRect = { 0, 0, 1280, 720 };
 POINT g_LastMousePos = { 0, 0 };
 
@@ -62,26 +69,76 @@ void ToggleWindowVisibility(HWND hwnd) {
     }
 }
 
+void UpdateWindowTitleWithStats(HWND hwnd) {
+    if (!hwnd || g_ScreenSaverMode) {
+        return;
+    }
+
+    char title[512] = {};
+    std::snprintf(
+        title,
+        sizeof(title),
+        "%s | FPS: %.1f | VSync: %s | Fullscreen: %s",
+        g_BaseWindowTitle.c_str(),
+        g_LastMeasuredFps,
+        g_VsyncEnabled ? "On" : "Off",
+        g_Windowed ? "Windowed" : "Exclusive");
+    SetWindowTextA(hwnd, title);
+}
+
 void SetFullscreen(HWND hwnd) {
+    if (!hwnd) {
+        return;
+    }
+
+    if (g_Windowed) {
+        GetWindowRect(hwnd, &g_WindowedRect);
+    }
+
+    if (g_Swapchain) {
+        g_Swapchain->SetExclusiveFullscreen(false);
+    }
+
     g_Windowed = false;
     DWORD style = WS_POPUP | WS_VISIBLE;
     SetWindowLongPtr(hwnd, GWL_STYLE, style);
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     SetWindowPos(hwnd, HWND_TOP, 0, 0, screenW, screenH, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+    if (g_Swapchain) {
+        g_Swapchain->SetExclusiveFullscreen(true);
+    }
+
+    UpdateWindowTitleWithStats(hwnd);
 }
 
 void SetWindowed(HWND hwnd) {
+    if (!hwnd) {
+        return;
+    }
+
+    if (g_Swapchain) {
+        g_Swapchain->SetExclusiveFullscreen(false);
+    }
+
     g_Windowed = true;
     DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
     SetWindowLongPtr(hwnd, GWL_STYLE, style);
+
     int width = g_WindowedRect.right - g_WindowedRect.left;
     int height = g_WindowedRect.bottom - g_WindowedRect.top;
+    if (width <= 0 || height <= 0) {
+        width = 1280;
+        height = 720;
+    }
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     int x = (screenW - width) / 2;
     int y = (screenH - height) / 2;
     SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+    UpdateWindowTitleWithStats(hwnd);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -126,6 +183,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
+        case WM_SYSKEYDOWN:
+            if (!g_ScreenSaverMode && wParam == VK_RETURN && (lParam & (1 << 29))) {
+                if (g_Windowed) {
+                    SetFullscreen(hwnd);
+                } else {
+                    SetWindowed(hwnd);
+                }
+                return 0;
+            }
+            break;
         case WM_SIZE:
             if (g_Player && g_Swapchain) {
                 int w = LOWORD(lParam);
@@ -143,6 +210,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     g_DebugConsole = options.debugConsole;
     g_ScreenSaverMode = options.screenSaverMode;
+    g_VsyncEnabled = options.vsyncEnabled;
 
     struct HandleCloser {
         void operator()(void* handle) const {
@@ -177,15 +245,21 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
 
+    DWORD windowStyle = g_ScreenSaverMode ? (WS_POPUP | WS_VISIBLE) : (WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+    int windowW = g_ScreenSaverMode ? screenW : 1280;
+    int windowH = g_ScreenSaverMode ? screenH : 720;
+    int windowX = g_ScreenSaverMode ? 0 : (screenW - windowW) / 2;
+    int windowY = g_ScreenSaverMode ? 0 : (screenH - windowH) / 2;
+
     HWND hwnd = CreateWindowEx(
         0,
         CLASS_NAME,
         "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo",
-        WS_POPUP | WS_VISIBLE,
-        0,
-        0,
-        screenW,
-        screenH,
+        windowStyle,
+        windowX,
+        windowY,
+        windowW,
+        windowH,
         nullptr,
         nullptr,
         hInstance,
@@ -206,13 +280,21 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     if (!g_CommandQueue->Initialize(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT)) return -1;
 
     g_Swapchain = new Swapchain();
-    if (!g_Swapchain->Initialize(g_Device, g_CommandQueue, hwnd, screenW, screenH)) return -1;
+    if (!g_Swapchain->Initialize(g_Device, g_CommandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) return -1;
 
+    if (!g_ScreenSaverMode) {
+        SetWindowed(hwnd);
+        SetFullscreen(hwnd);
+    }
+
+    const int runtimeWidth = static_cast<int>(g_Swapchain->GetWidth());
+    const int runtimeHeight = static_cast<int>(g_Swapchain->GetHeight());
     g_Player = new DemoPlayer();
-    if (!g_Player->Initialize(hwnd, g_Device, g_Swapchain, screenW, screenH)) {
+    if (!g_Player->Initialize(hwnd, g_Device, g_Swapchain, runtimeWidth, runtimeHeight)) {
         return -1;
     }
     g_Player->SetLooping(options.loopPlayback);
+    g_Player->SetVsyncEnabled(g_VsyncEnabled);
 
 #if SHADERLAB_TINY_PLAYER
     const std::string projectPath = "assets/track.bin";
@@ -235,8 +317,8 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
 #endif
 
     if (!g_ScreenSaverMode) {
-        std::string title = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
-        SetWindowTextA(hwnd, title.c_str());
+        g_BaseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
+        UpdateWindowTitleWithStats(hwnd);
     }
 
     #if !SHADERLAB_TINY_PLAYER
@@ -299,12 +381,23 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
 
             g_Player->Render(cmdList, backBuffer, rtv);
 
+            g_VsyncEnabled = g_Player->IsVsyncEnabled();
+
             std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
             cmdList->ResourceBarrier(1, &barrier);
 
             g_CommandQueue->ExecuteCommandList();
-            g_Swapchain->Present();
+            g_Swapchain->Present(g_VsyncEnabled);
             g_CommandQueue->WaitForGPU();
+
+            g_FpsAccumSeconds += dt;
+            g_FpsAccumFrames += 1;
+            if (g_FpsAccumSeconds >= 0.25) {
+                g_LastMeasuredFps = static_cast<float>(g_FpsAccumFrames / g_FpsAccumSeconds);
+                g_FpsAccumSeconds = 0.0;
+                g_FpsAccumFrames = 0;
+                UpdateWindowTitleWithStats(hwnd);
+            }
         }
     }
 

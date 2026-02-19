@@ -13,6 +13,8 @@ if ([string]::IsNullOrWhiteSpace($BuildBin)) {
 }
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $repoRoot "artifacts"
+} elseif (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir = Join-Path $repoRoot $OutputDir
 }
 
 if (-not (Test-Path $BuildBin)) {
@@ -55,6 +57,7 @@ Copy-Item -Path (Join-Path $BuildBin "*") -Destination $stageApp -Recurse -Force
 
 $extraToCopy = @(
     "templates",
+    "editor_assets",
     "LICENSE-COMMUNITY.md",
     "LICENSE-COMMERCIAL.md",
     "README.md"
@@ -64,6 +67,13 @@ foreach ($item in $extraToCopy) {
     if (Test-Path $src) {
         Copy-Item -Path $src -Destination $stageApp -Recurse -Force
     }
+}
+
+$openFontIconsSrc = Join-Path $repoRoot "third_party\OpenFontIcons"
+if (Test-Path $openFontIconsSrc) {
+    $thirdPartyDest = Join-Path $stageApp "third_party"
+    New-Item -ItemType Directory -Force -Path $thirdPartyDest | Out-Null
+    Copy-Item -Path $openFontIconsSrc -Destination $thirdPartyDest -Recurse -Force
 }
 
 function Resolve-VcRedist {
@@ -160,8 +170,8 @@ $issLines = @(
     ('OutputDir={0}' -f $outputDirEsc),
     'Compression=lzma2',
     'SolidCompression=yes',
-    'ArchitecturesAllowed=x64',
-    'ArchitecturesInstallIn64BitMode=x64',
+    'ArchitecturesAllowed=x64compatible',
+    'ArchitecturesInstallIn64BitMode=x64compatible',
     ('LicenseFile={0}\LICENSE-COMMUNITY.md' -f $repoRootEsc),
     '',
     '[Languages]',

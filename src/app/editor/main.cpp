@@ -1,6 +1,45 @@
 #include "ShaderLab/App/EditorApp.h"
 #include <windows.h>
 #include <stdio.h>
+#include <filesystem>
+
+namespace {
+HICON LoadEditorIcon(int width, int height) {
+    namespace fs = std::filesystem;
+
+    fs::path iconPath = fs::path("editor_assets") / "shaderlab.ico.ico";
+    if (!fs::exists(iconPath)) {
+        std::error_code ec;
+        if (fs::exists("editor_assets", ec)) {
+            for (const auto& entry : fs::directory_iterator("editor_assets", ec)) {
+                if (ec) {
+                    break;
+                }
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const fs::path candidate = entry.path();
+                if (candidate.has_extension() && candidate.extension() == ".ico") {
+                    iconPath = candidate;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!fs::exists(iconPath)) {
+        return nullptr;
+    }
+
+    return static_cast<HICON>(LoadImageW(
+        nullptr,
+        iconPath.wstring().c_str(),
+        IMAGE_ICON,
+        width,
+        height,
+        LR_LOADFROMFILE));
+}
+}
 
 using namespace ShaderLab;
 
@@ -24,6 +63,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
+    wc.hIcon = LoadEditorIcon(32, 32);
+    wc.hIconSm = LoadEditorIcon(16, 16);
+    if (!wc.hIcon) {
+        wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+    }
+    if (!wc.hIconSm) {
+        wc.hIconSm = wc.hIcon;
+    }
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = L"ShaderLabEditorClass";
     if (!RegisterClassExW(&wc)) {
@@ -67,6 +114,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return -1;
     }
     printf("Window created\n");
+
+    SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)wc.hIcon);
+    SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)wc.hIconSm);
 
     // Create and initialize app
     EditorApp app;

@@ -15,6 +15,17 @@
 
 namespace ShaderLab {
 
+namespace {
+std::string GetShaderLabLogPath() {
+    char tempPath[MAX_PATH] = {};
+    DWORD len = GetTempPathA(MAX_PATH, tempPath);
+    if (len > 0 && len < MAX_PATH) {
+        return std::string(tempPath) + "shaderlab_log.txt";
+    }
+    return "shaderlab_log.txt";
+}
+}
+
 struct Vertex {
     float pos[3];
     float uv[2];
@@ -33,8 +44,9 @@ PreviewRenderer::~PreviewRenderer() {
 }
 
 bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_FORMAT renderTargetFormat, const std::vector<uint8_t>* precompiledVertexShader) {
+    const std::string logPath = GetShaderLabLogPath();
     FILE* f = nullptr;
-    fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+    fopen_s(&f, logPath.c_str(), "a");
     
     if (!device) {
         if (f) { fprintf(f, "PreviewRenderer: Invalid device or compiler\n"); fclose(f); }
@@ -47,15 +59,15 @@ bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_
 
     if (f) { fprintf(f, "PreviewRenderer: About to create root signature\n"); fclose(f); }
     if (!CreateRootSignature()) {
-        if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+        if (!f) fopen_s(&f, logPath.c_str(), "a");
         if (f) { fprintf(f, "PreviewRenderer: Failed to create root signature\n"); fclose(f); }
         return false;
     }
-    if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+    if (!f) fopen_s(&f, logPath.c_str(), "a");
     if (f) { fprintf(f, "PreviewRenderer: Root signature created\n"); fclose(f); }
 
     CreateFullscreenQuadVertices();
-    if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+    if (!f) fopen_s(&f, logPath.c_str(), "a");
     if (f) { fprintf(f, "PreviewRenderer: Fullscreen quad created\n"); fclose(f); }
 
     // Init Timestamps
@@ -144,11 +156,11 @@ PSInput main(VSInput input) {
 }
 )";
 
-    if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+    if (!f) fopen_s(&f, logPath.c_str(), "a");
     if (f) { fprintf(f, "PreviewRenderer: About to compile vertex shader\n"); fclose(f); }
     auto vsResult = m_compiler->CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl");
     if (!vsResult.success) {
-        if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+        if (!f) fopen_s(&f, logPath.c_str(), "a");
         if (f) { 
             fprintf(f, "PreviewRenderer: Failed to compile vertex shader\n");
             for (const auto& diag : vsResult.diagnostics) {
@@ -160,7 +172,7 @@ PSInput main(VSInput input) {
     }
     m_vertexShaderBytecode = vsResult.bytecode;
 
-    if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
+    if (!f) fopen_s(&f, logPath.c_str(), "a");
     if (f) { fprintf(f, "PreviewRenderer: Initialized successfully\n"); fclose(f); }
     return true;
 #endif
@@ -363,7 +375,7 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     // Set vertex buffer and draw
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-    commandList->DrawInstanced(6, 1, 0, 0);
+    commandList->DrawInstanced(3, 1, 0, 0);
     if (m_queryHeap && m_queryResultBuffer) {
         commandList->EndQuery(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
         commandList->ResolveQueryData(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, m_queryResultBuffer.Get(), 0);
@@ -462,15 +474,9 @@ bool PreviewRenderer::CreatePipelineState(const std::vector<uint8_t>& pixelShade
 
 void PreviewRenderer::CreateFullscreenQuadVertices() {
     Vertex vertices[] = {
-        // First triangle
-        { { -1.0f,  1.0f, 0.0f }, { 0.0f, 0.0f } },  // Top-left
-        { {  1.0f,  1.0f, 0.0f }, { 1.0f, 0.0f } },  // Top-right
-        { { -1.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },  // Bottom-left
-        
-        // Second triangle
-        { {  1.0f,  1.0f, 0.0f }, { 1.0f, 0.0f } },  // Top-right
-        { {  1.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },  // Bottom-right
-        { { -1.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } }   // Bottom-left
+        { { -1.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },
+        { { -1.0f,  3.0f, 0.0f }, { 0.0f,-1.0f } },
+        { {  3.0f, -1.0f, 0.0f }, { 2.0f, 1.0f } }
     };
 
     const UINT vertexBufferSize = sizeof(vertices);

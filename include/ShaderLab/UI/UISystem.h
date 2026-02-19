@@ -126,12 +126,14 @@ public:
     float GetTitlebarHeight() const { return m_titlebarHeight; }
     bool IsPointInTitlebarButtons(POINT screenPt) const;
     bool IsPointInTitlebarDrag(POINT screenPt) const;
+    bool IsPreviewVsyncEnabled() const { return m_previewVsyncEnabled; }
 
 private:
     void SetActiveScene(int index);
 
     void CreateDescriptorHeap(Device* device);
     void CreatePreviewTexture(uint32_t width, uint32_t height);
+    void CreateTitlebarIconTexture();
     void CreateDummyTexture();
     void EnsureSceneTexture(int sceneIndex, uint32_t width, uint32_t height);
     void RenderScene(ID3D12GraphicsCommandList* commandList, int sceneIndex, uint32_t width, uint32_t height, double time);
@@ -210,6 +212,8 @@ private:
     ComPtr<ID3D12DescriptorHeap> m_previewRtvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE m_previewRtvHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE m_previewSrvGpuHandle{};
+    ComPtr<ID3D12Resource> m_titlebarIconTexture;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_titlebarIconSrvGpuHandle{};
     uint32_t m_previewTextureWidth = 0;
     uint32_t m_previewTextureHeight = 0;
     
@@ -278,6 +282,7 @@ private:
     std::vector<Scene::PostFXEffect> m_postFxDraftChain;
 
     bool m_previewFullscreen = false;
+    bool m_previewVsyncEnabled = true;
 
     // Post FX preview resources (draft)
     ComPtr<ID3D12Resource> m_postFxPreviewTextureA;

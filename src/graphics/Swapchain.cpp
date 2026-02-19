@@ -20,6 +20,17 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
     m_commandQueue = commandQueue;
     m_width = width;
     m_height = height;
+    m_hwnd = hwnd;
+    m_allowTearing = false;
+    m_isExclusiveFullscreen = false;
+
+    ComPtr<IDXGIFactory5> factory5;
+    if (SUCCEEDED(device->GetFactory()->QueryInterface(IID_PPV_ARGS(&factory5)))) {
+        BOOL allowTearing = FALSE;
+        if (SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing))) && allowTearing) {
+            m_allowTearing = true;
+        }
+    }
 
     // Create swapchain
     DXGI_SWAP_CHAIN_DESC1 swapchainDesc = {};
@@ -34,7 +45,7 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
     swapchainDesc.Scaling = DXGI_SCALING_STRETCH;
     swapchainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapchainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-    swapchainDesc.Flags = 0;
+    swapchainDesc.Flags = m_allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
 
     ComPtr<IDXGISwapChain1> swapchain1;
     HRESULT hr = device->GetFactory()->CreateSwapChainForHwnd(
@@ -80,14 +91,20 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
 }
 
 void Swapchain::Shutdown() {
+    if (m_swapchain && m_isExclusiveFullscreen) {
+        m_swapchain->SetFullscreenState(FALSE, nullptr);
+        m_isExclusiveFullscreen = false;
+    }
     ReleaseBackBuffers();
     m_rtvHeap.Reset();
     m_swapchain.Reset();
+    m_hwnd = nullptr;
 }
 
 void Swapchain::Present(bool vsync) {
     UINT syncInterval = vsync ? 1 : 0;
-    m_swapchain->Present(syncInterval, 0);
+    UINT presentFlags = (!vsync && m_allowTearing && !m_isExclusiveFullscreen) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    m_swapchain->Present(syncInterval, presentFlags);
     m_currentBackBuffer = m_swapchain->GetCurrentBackBufferIndex();
 }
 
@@ -105,7 +122,7 @@ void Swapchain::Resize(uint32_t width, uint32_t height) {
         width,
         height,
         DXGI_FORMAT_R8G8B8A8_UNORM,
-        0
+        m_allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0
     );
 
     if (SUCCEEDED(hr)) {
@@ -114,6 +131,20 @@ void Swapchain::Resize(uint32_t width, uint32_t height) {
         m_currentBackBuffer = m_swapchain->GetCurrentBackBufferIndex();
         CreateRenderTargetViews();
     }
+}
+
+bool Swapchain::SetExclusiveFullscreen(bool enabled) {
+    if (!m_swapchain) {
+        return false;
+    }
+
+    HRESULT hr = m_swapchain->SetFullscreenState(enabled ? TRUE : FALSE, nullptr);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    m_isExclusiveFullscreen = enabled;
+    return true;
 }
 
 ID3D12Resource* Swapchain::GetCurrentBackBuffer() const {

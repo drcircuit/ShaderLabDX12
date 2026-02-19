@@ -639,6 +639,7 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     // Store device reference for texture creation
     m_deviceRef = device;
     m_swapchainRef = swapchain;
+    CreateTitlebarIconTexture();
 
     m_initialized = true;
     return true;
@@ -665,6 +666,8 @@ void UISystem::Shutdown() {
     }
 
     m_previewTexture.Reset();
+    m_titlebarIconTexture.Reset();
+    m_titlebarIconSrvGpuHandle = {};
     m_previewRtvHeap.Reset();
     m_srvHeap.Reset();
     m_initialized = false;
@@ -676,6 +679,128 @@ void UISystem::CreateDescriptorHeap(Device* device) {
     desc.NumDescriptors = 128;  // ImGui font (0), Preview (1), Thumbnails (2+)
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     device->GetDevice()->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_srvHeap));
+}
+
+void UISystem::CreateTitlebarIconTexture() {
+    m_titlebarIconTexture.Reset();
+    m_titlebarIconSrvGpuHandle = {};
+
+    if (!m_deviceRef || !m_srvHeap) {
+        return;
+    }
+
+    fs::path iconPath;
+    const fs::path preferred = fs::path(m_appRoot) / "editor_assets" / "shaderlab.ico.ico";
+    if (fs::exists(preferred)) {
+        iconPath = preferred;
+    } else {
+        const fs::path iconDir = fs::path(m_appRoot) / "editor_assets";
+        std::error_code ec;
+        if (fs::exists(iconDir, ec)) {
+            for (const auto& entry : fs::directory_iterator(iconDir, ec)) {
+                if (ec) {
+                    break;
+                }
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const fs::path candidate = entry.path();
+                if (candidate.has_extension() && candidate.extension() == ".ico") {
+                    iconPath = candidate;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (iconPath.empty()) {
+        return;
+    }
+
+    HICON icon = static_cast<HICON>(LoadImageW(
+        nullptr,
+        iconPath.wstring().c_str(),
+        IMAGE_ICON,
+        32,
+        32,
+        LR_LOADFROMFILE));
+    if (!icon) {
+        return;
+    }
+
+    ICONINFO iconInfo = {};
+    if (!GetIconInfo(icon, &iconInfo)) {
+        DestroyIcon(icon);
+        return;
+    }
+
+    BITMAP bitmap = {};
+    GetObject(iconInfo.hbmColor ? iconInfo.hbmColor : iconInfo.hbmMask, sizeof(bitmap), &bitmap);
+    int width = (bitmap.bmWidth > 0) ? bitmap.bmWidth : 32;
+    int height = (bitmap.bmHeight > 0) ? bitmap.bmHeight : 32;
+    if (!iconInfo.hbmColor && height > 1) {
+        height /= 2;
+    }
+    width = (std::max)(16, width);
+    height = (std::max)(16, height);
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    HDC hdc = CreateCompatibleDC(nullptr);
+    void* dibPixels = nullptr;
+    HBITMAP dib = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &dibPixels, nullptr, 0);
+    HGDIOBJ oldObject = SelectObject(hdc, dib);
+    PatBlt(hdc, 0, 0, width, height, BLACKNESS);
+    DrawIconEx(hdc, 0, 0, icon, width, height, 0, nullptr, DI_NORMAL);
+
+    std::vector<unsigned char> rgba(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0);
+    if (dibPixels) {
+        const unsigned char* bgra = static_cast<const unsigned char*>(dibPixels);
+        for (size_t i = 0; i < static_cast<size_t>(width) * static_cast<size_t>(height); ++i) {
+            rgba[i * 4 + 0] = bgra[i * 4 + 2];
+            rgba[i * 4 + 1] = bgra[i * 4 + 1];
+            rgba[i * 4 + 2] = bgra[i * 4 + 0];
+            rgba[i * 4 + 3] = bgra[i * 4 + 3];
+        }
+    }
+
+    SelectObject(hdc, oldObject);
+    DeleteObject(dib);
+    DeleteDC(hdc);
+    if (iconInfo.hbmColor) {
+        DeleteObject(iconInfo.hbmColor);
+    }
+    if (iconInfo.hbmMask) {
+        DeleteObject(iconInfo.hbmMask);
+    }
+    DestroyIcon(icon);
+
+    CreateTextureFromData(rgba.data(), width, height, 4, m_titlebarIconTexture);
+    if (!m_titlebarIconTexture) {
+        return;
+    }
+
+    constexpr UINT kTitlebarIconSrvIndex = 127;
+    const UINT descriptorSize = m_deviceRef->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += static_cast<SIZE_T>(kTitlebarIconSrvIndex) * descriptorSize;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    m_deviceRef->GetDevice()->CreateShaderResourceView(m_titlebarIconTexture.Get(), &srvDesc, cpuHandle);
+
+    m_titlebarIconSrvGpuHandle = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    m_titlebarIconSrvGpuHandle.ptr += static_cast<SIZE_T>(kTitlebarIconSrvIndex) * descriptorSize;
 }
 
 void UISystem::CreatePreviewTexture(uint32_t width, uint32_t height) {
@@ -1197,6 +1322,12 @@ void UISystem::ShowMainMenuBar() {
         ImGui::Dummy(ImVec2(UIConfig::MenuLeftPad, 0.0f));
         ImGui::SameLine(0.0f, 0.0f);
 
+        if (m_titlebarIconTexture && m_titlebarIconSrvGpuHandle.ptr != 0) {
+            const float iconSize = ImGui::GetFrameHeight();
+            ImGui::Image((ImTextureID)m_titlebarIconSrvGpuHandle.ptr, ImVec2(iconSize, iconSize));
+            ImGui::SameLine(0.0f, UIConfig::MenuItemSpacingX);
+        }
+
         m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
         m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
 
@@ -1300,13 +1431,34 @@ void UISystem::ShowMainMenuBar() {
         }
         menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
 
+        const float controlsStartX = menuMaxX + UIConfig::MenuItemSpacingX * 2.0f;
+        const float controlsStartY = ImGui::GetCursorScreenPos().y;
+        const float vsyncSlotWidth = 90.0f;
+        const float controlsSpacing = UIConfig::MenuItemSpacingX * 2.0f;
+        const float fpsSlotWidth = 90.0f;
+
+        ImGui::SetCursorScreenPos(ImVec2(controlsStartX, controlsStartY));
+        ImGui::Checkbox("VSync", &m_previewVsyncEnabled);
+
+        const float fpsX = controlsStartX + vsyncSlotWidth + controlsSpacing;
+        ImGui::SetCursorScreenPos(ImVec2(fpsX, controlsStartY));
+        ImFont* fpsFont = m_fontCodeSizes[static_cast<int>(CodeFontSize::XS)];
+        if (fpsFont) {
+            ImGui::PushFont(fpsFont);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, UIConfig::ColorTextDisabled);
+        ImGui::Text("FPS %.1f", ImGui::GetIO().Framerate);
+        ImGui::PopStyleColor();
+        if (fpsFont) {
+            ImGui::PopFont();
+        }
+
+        const float controlsEndX = fpsX + fpsSlotWidth;
+
         float buttonSize = ImGui::GetFrameHeight();
         float totalButtonsWidth = buttonSize * 2.0f + ImGui::GetStyle().ItemSpacing.x;
-        float cursorX = ImGui::GetCursorPosX();
-        float avail = ImGui::GetContentRegionAvail().x - UIConfig::MenuRightPad;
-        if (avail > totalButtonsWidth) {
-            ImGui::SetCursorPosX(cursorX + (avail - totalButtonsWidth));
-        }
+        const float buttonStartScreenX = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - UIConfig::MenuRightPad - totalButtonsWidth;
+        ImGui::SetCursorPosX(buttonStartScreenX - ImGui::GetWindowPos().x);
 
         const bool canUseWindow = m_hwnd != nullptr;
         m_titlebarButtonsMin = ImVec2(FLT_MAX, FLT_MAX);
@@ -1358,7 +1510,7 @@ void UISystem::ShowMainMenuBar() {
         ImVec2 barMin = ImGui::GetWindowPos();
         barMin.y += startY;
         ImVec2 barMax = ImVec2(barMin.x + ImGui::GetWindowWidth(), barMin.y + targetHeight);
-        float dragMinX = menuMaxX + UIConfig::MenuItemSpacingX;
+        float dragMinX = (std::max)(menuMaxX, controlsEndX) + UIConfig::MenuItemSpacingX;
         float dragMaxX = m_titlebarButtonsMin.x - UIConfig::MenuItemSpacingX;
         if (dragMaxX > dragMinX) {
             m_titlebarDragMin = ImVec2(dragMinX, barMin.y);
@@ -1366,6 +1518,34 @@ void UISystem::ShowMainMenuBar() {
         } else {
             m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
             m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
+        }
+
+        std::string demoTitle = "Untitled Demo";
+        if (!m_currentProjectPath.empty()) {
+            const std::string stem = fs::path(m_currentProjectPath).stem().string();
+            if (!stem.empty()) {
+                demoTitle = stem;
+            }
+        }
+
+        const float titleLeft = (std::max)(dragMinX + UIConfig::MenuItemSpacingX, controlsEndX + UIConfig::MenuItemSpacingX);
+        const float titleRight = dragMaxX - UIConfig::MenuItemSpacingX;
+        if (titleRight > titleLeft + 8.0f) {
+            if (m_fontMenuSmall) {
+                ImGui::PushFont(m_fontMenuSmall);
+            }
+            ImVec2 titleSize = ImGui::CalcTextSize(demoTitle.c_str());
+
+            float titleX = ((titleLeft + titleRight) - titleSize.x) * 0.5f;
+            titleX = (std::max)(titleLeft, (std::min)(titleX, titleRight - titleSize.x));
+            const float titleY = barMin.y + (targetHeight - titleSize.y) * 0.5f;
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(std::floor(titleX), std::floor(titleY)),
+                ImGui::GetColorU32(UIConfig::ColorText),
+                demoTitle.c_str());
+            if (m_fontMenuSmall) {
+                ImGui::PopFont();
+            }
         }
 
         ImGui::PopStyleVar(2);

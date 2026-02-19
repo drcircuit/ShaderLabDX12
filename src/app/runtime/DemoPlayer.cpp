@@ -1791,6 +1791,34 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+#if !SHADERLAB_TINY_PLAYER
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_width), 34.0f), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 7.0f));
+    if (ImGui::Begin("Runtime Titlebar", nullptr,
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoNav)) {
+        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(18.0f, 0.0f));
+        ImGui::SameLine();
+        bool vsyncEnabled = m_vsyncEnabled;
+        if (ImGui::Checkbox("VSync", &vsyncEnabled)) {
+            m_vsyncEnabled = vsyncEnabled;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", m_vsyncEnabled ? "Capped" : "Unlimited");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+#endif
     
     if (m_showDebug) {
         ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);

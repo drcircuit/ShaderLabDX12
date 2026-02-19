@@ -84,6 +84,25 @@ function Add-PathEntriesFromCfg {
     }
 }
 
+function Resolve-CrinklerPath {
+    if ($env:SHADERLAB_CRINKLER -and (Test-Path $env:SHADERLAB_CRINKLER)) {
+        return $env:SHADERLAB_CRINKLER
+    }
+
+    $cmd = Get-Command crinkler.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        return (Split-Path $cmd.Source -Parent)
+    }
+
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $repoCrinklerExe = Join-Path $repoRoot "third_party\Crinkler.exe"
+    if (Test-Path $repoCrinklerExe) {
+        return (Split-Path $repoCrinklerExe -Parent)
+    }
+
+    return $null
+}
+
 Write-Host "Loading ShaderLab developer environment..." -ForegroundColor Cyan
 $vcvars = Get-VcvarsPath
 if (Import-VcvarsEnv -VcvarsPath $vcvars) {
@@ -91,5 +110,11 @@ if (Import-VcvarsEnv -VcvarsPath $vcvars) {
 }
 
 Add-PathEntriesFromCfg -PathFile $ConfigPath
-$env:SHADERLAB_CRINKLER = "C:\tools\crinkler23\Win64"
+$resolvedCrinkler = Resolve-CrinklerPath
+if ($resolvedCrinkler) {
+    $env:SHADERLAB_CRINKLER = $resolvedCrinkler
+    Write-Host "Crinkler path: $resolvedCrinkler" -ForegroundColor Green
+} else {
+    Write-Host "Crinkler not found automatically. Set SHADERLAB_CRINKLER to crinkler.exe or its folder if needed." -ForegroundColor Yellow
+}
 Write-Host "Done." -ForegroundColor Cyan

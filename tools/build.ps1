@@ -16,7 +16,27 @@ if ($Clean -and (Test-Path "build")) {
 }
 
 # Find VS Build Tools
-$vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+function Get-VcvarsPath {
+    $vsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vsWhere) {
+        $vsPath = & $vsWhere -latest -property installationPath
+        if ($vsPath) {
+            $candidate = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path $candidate) {
+                return $candidate
+            }
+        }
+    }
+
+    $fallback = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    if (Test-Path $fallback) {
+        return $fallback
+    }
+
+    return $null
+}
+
+$vcvars = Get-VcvarsPath
 if (-not (Test-Path $vcvars)) {
     Write-Host "Visual Studio Build Tools not found!" -ForegroundColor Red
     exit 1

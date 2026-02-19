@@ -77,6 +77,22 @@ These are exposed in the editor Build Settings and should remain OFF for tiny/re
 - If toolset pinning fails, the build pipeline retries with default toolset resolution.
 - Validate your local `SHADERLAB_CRINKLER` path in environment setup when using crinkled outputs.
 
+### Optional: Bundle Windows SDK (deterministic micro builds)
+
+For size-sensitive micro/crinkled builds, you can bundle a known-good SDK slice directly in the repo.
+
+Create/update bundle:
+
+```powershell
+.\tools\bundle_windows_sdk.ps1
+```
+
+Default bundle location:
+
+- `third_party/windows_sdk_bundle/`
+
+When present, `BuildPipeline` prefers this bundled SDK for include/lib/rc tool resolution during vcvars-based builds.
+
 ## Build Outputs
 
 Typical outputs:
