@@ -8,3 +8,9 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 echo.
 echo Signing executable...
 powershell -ExecutionPolicy Bypass -File "%~dp0..\tools\sign_build.ps1"
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+echo.
+echo Building installer artifact...
+powershell -ExecutionPolicy Bypass -File "%~dp0..\tools\build_installer.ps1"
+if %errorlevel% neq 0 exit /b %errorlevel%

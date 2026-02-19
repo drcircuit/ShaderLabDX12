@@ -36,6 +36,19 @@ For release:
 cmd /c .\.vscode\build-release.bat
 ```
 
+Release builds now also produce a setup artifact automatically:
+
+- Installer script: `tools/build_installer.ps1`
+- Output folder: `artifacts/`
+- Preferred output: Inno Setup installer (`ShaderLabSetup-x64-...exe`)
+- Fallback output: portable zip (`ShaderLabSetup-x64-...-portable.zip`) when Inno Setup is unavailable
+
+VC++ runtime bundling for installer builds:
+
+- The installer script attempts to locate and bundle `vc_redist.x64.exe`
+- If found, installer runs it silently during setup (`/install /quiet /norestart`)
+- If not found, installer is still generated, but runtime installation is skipped
+
 ## Build Modes and Runtime Targets
 
 ShaderLab supports two practical runtime paths:
