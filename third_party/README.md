@@ -10,6 +10,13 @@ This directory contains third-party libraries used by ShaderLab.
 - **Usage**: UI framework
 - **Integration**: Copy `imgui/` directory here
 
+### ImGuiColorTextEdit
+- **License**: MIT
+- **Source**: https://github.com/BalazsJako/ImGuiColorTextEdit
+- **Usage**: Code editor widget (`TextEditor`) used in ShaderLab editor views
+- **Integration**: Vendored under `third_party/ImGuiColorTextEdit/`
+- **Local Notes**: This copy is adapted for ShaderLab-specific editor behavior and styling.
+
 ### miniaudio
 - **License**: MIT / Public Domain
 - **Source**: https://github.com/mackron/miniaudio
@@ -38,6 +45,9 @@ This directory contains third-party libraries used by ShaderLab.
    │   ├── imgui.h
    │   ├── imgui.cpp
    │   └── ...
+    ├── ImGuiColorTextEdit/
+    │   ├── TextEditor.h
+    │   └── TextEditor.cpp
    ├── miniaudio/
    │   └── miniaudio.h
    ├── json/
