@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <chrono>
 #include <string>
 #include <regex>
@@ -1010,6 +1009,7 @@ void TextEditor::Render()
 
 			// Render colorized text
 			auto prevColor = line.empty() ? mPalette[(int)PaletteIndex::Default] : GetGlyphColor(line[0]);
+			bool prevComment = line.empty() ? false : (line[0].mComment || line[0].mMultiLineComment);
 			ImVec2 bufferOffset;
 
 			for (int i = 0; i < line.size();)
@@ -1017,15 +1017,24 @@ void TextEditor::Render()
 				auto& glyph = line[i];
 				auto color = GetGlyphColor(glyph);
 
-				if ((color != prevColor || glyph.mChar == '\t' || glyph.mChar == ' ') && !mLineBuffer.empty())
+				bool currentComment = (glyph.mComment || glyph.mMultiLineComment);
+				if ((color != prevColor || glyph.mChar == '\t' || glyph.mChar == ' ' || currentComment != prevComment) && !mLineBuffer.empty())
 				{
 					const ImVec2 newOffset(textScreenPos.x + bufferOffset.x, textScreenPos.y + bufferOffset.y);
-					drawList->AddText(newOffset, prevColor, mLineBuffer.c_str());
-					auto textSize = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, mLineBuffer.c_str(), nullptr, nullptr);
-					bufferOffset.x += textSize.x;
+					if (prevComment && mCommentFont) {
+						const float size = mCommentFontSize > 0.0f ? mCommentFontSize : ImGui::GetFontSize();
+						drawList->AddText(mCommentFont, size, newOffset, prevColor, mLineBuffer.c_str());
+						auto textSize = mCommentFont->CalcTextSizeA(size, FLT_MAX, -1.0f, mLineBuffer.c_str(), nullptr, nullptr);
+						bufferOffset.x += textSize.x;
+					} else {
+						drawList->AddText(newOffset, prevColor, mLineBuffer.c_str());
+						auto textSize = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, mLineBuffer.c_str(), nullptr, nullptr);
+						bufferOffset.x += textSize.x;
+					}
 					mLineBuffer.clear();
 				}
 				prevColor = color;
+				prevComment = currentComment;
 
 				if (glyph.mChar == '\t')
 				{
@@ -1072,7 +1081,11 @@ void TextEditor::Render()
 			if (!mLineBuffer.empty())
 			{
 				const ImVec2 newOffset(textScreenPos.x + bufferOffset.x, textScreenPos.y + bufferOffset.y);
-				drawList->AddText(newOffset, prevColor, mLineBuffer.c_str());
+				if (prevComment && mCommentFont) {
+					drawList->AddText(mCommentFont, mCommentFontSize > 0.0f ? mCommentFontSize : ImGui::GetFontSize(), newOffset, prevColor, mLineBuffer.c_str());
+				} else {
+					drawList->AddText(newOffset, prevColor, mLineBuffer.c_str());
+				}
 				mLineBuffer.clear();
 			}
 
@@ -1933,6 +1946,21 @@ void TextEditor::Cut()
 	}
 	else
 	{
+		if (!HasSelection())
+		{
+			const auto cursor = GetActualCursorCoordinates();
+			const Coordinates lineStart(cursor.mLine, 0);
+			Coordinates lineEnd = lineStart;
+
+			if (cursor.mLine + 1 < (int)mLines.size())
+				lineEnd = Coordinates(cursor.mLine + 1, 0);
+			else
+				lineEnd = Coordinates(cursor.mLine, GetLineMaxColumn(cursor.mLine));
+
+			if (lineEnd > lineStart)
+				SetSelection(lineStart, lineEnd);
+		}
+
 		if (HasSelection())
 		{
 			UndoRecord u;
@@ -2374,7 +2402,7 @@ void TextEditor::ColorizeInternal()
 
 	if (mColorRangeMin < mColorRangeMax)
 	{
-		const int increment = (mLanguageDefinition.mTokenize == nullptr) ? 10 : 10000;
+		const int increment = (mLanguageDefinition.mTokenize == nullptr) ? 500 : 10000;
 		const int to = std::min(mColorRangeMin + increment, mColorRangeMax);
 		ColorizeRange(mColorRangeMin, to);
 		mColorRangeMin = to;
