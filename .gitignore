@@ -62,6 +62,9 @@ third_party/*
 *.bak
 *~
 
+# Release artifacts (produced by CI / build_installer.ps1)
+artifacts/
+
 # Local/diagnostic artifacts not intended for source control
 preprocessed.txt
 _codeql_detected_source_root
