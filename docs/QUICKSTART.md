@@ -54,6 +54,16 @@ From repository root:
 Debug logging flags used by runtime/compact track code are OFF by default.
 Only enable them for troubleshooting, not for final tiny outputs.
 
+## 7) Clean Solution Shader Sources
+
+When you export/build with a clean solution folder:
+
+- Shader source is written to `assets/shaders/hlsl/`
+- `project.json` stores shader links (`codePath` and `code` as `@file:<relative-path>`)
+- Full shader source is not embedded inline in clean-solution `project.json`
+
+This is the expected format for recompiling shaders directly from the exported solution.
+
 ## Next
 
 - Build and packaging details: `docs/BUILD.md`

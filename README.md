@@ -180,6 +180,7 @@ All contributions must be licensed under the Community License.
 - Tiny demo build presets target `MicroPlayer` on x86 for size-sensitive outputs.
 - Open/free presets target the full runtime on x64.
 - Runtime and compact-track debug logging are opt-in build flags and default OFF.
+- Clean solution exports now write HLSL source files under `assets/shaders/hlsl/` and store shader links in `project.json` (via `codePath` and `@file:`), instead of embedding full shader source in JSON.
 
 ## Credits
 

@@ -5,6 +5,14 @@
 #include <d3d12.h>
 #include <stdexcept>
 
+#ifndef SHADERLAB_TINY_PLAYER
+#define SHADERLAB_TINY_PLAYER 0
+#endif
+
+#ifndef SHADERLAB_TINY_RUNTIME_COMPILE
+#define SHADERLAB_TINY_RUNTIME_COMPILE 0
+#endif
+
 namespace ShaderLab {
 
 struct Vertex {
@@ -104,6 +112,11 @@ bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_
         return false;
     }
 
+#if SHADERLAB_TINY_PLAYER
+    if (f) { fprintf(f, "PreviewRenderer: Tiny build requires precompiled vertex shader\n"); fclose(f); }
+    return false;
+#else
+
     // Compile default vertex shader
     const char* vertexShaderSource = R"(
 cbuffer Constants : register(b0) {
@@ -150,6 +163,7 @@ PSInput main(VSInput input) {
     if (!f) fopen_s(&f, "C:\\temp\\shaderlab_log.txt", "a");
     if (f) { fprintf(f, "PreviewRenderer: Initialized successfully\n"); fclose(f); }
     return true;
+#endif
 }
 
 void PreviewRenderer::Shutdown() {
@@ -160,12 +174,29 @@ void PreviewRenderer::Shutdown() {
 }
 
 ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors) {
-    return CompileShader(shaderSource, textureDecls, outErrors, false);
+    return CompileShader(shaderSource, textureDecls, outErrors, false, "main");
 }
 
 ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors, bool flipFragCoord) {
+    return CompileShader(shaderSource, textureDecls, outErrors, flipFragCoord, "main");
+}
+
+ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& shaderSource,
+                                                           const std::vector<TextureDecl>& textureDecls,
+                                                           std::vector<std::string>& outErrors,
+                                                           bool flipFragCoord,
+                                                           const std::string& shaderEntryPoint) {
     outErrors.clear();
     m_lastCompiledPixelShaderSize = 0;
+
+#if SHADERLAB_TINY_PLAYER && !SHADERLAB_TINY_RUNTIME_COMPILE
+    (void)shaderSource;
+    (void)textureDecls;
+    (void)flipFragCoord;
+    (void)shaderEntryPoint;
+    outErrors.push_back("Runtime shader compilation is disabled in tiny player builds.");
+    return nullptr;
+#else
 
     // Wrap user shader code with proper entry point
     std::string wrappedSource = R"(
@@ -215,8 +246,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
     } else {
         wrappedSource += "    float2 fragCoord = input.fragCoord;\n";
     }
+    wrappedSource += "    return " + shaderEntryPoint + "(fragCoord, iResolution, iTime);\n";
     wrappedSource += R"(
-    return main(fragCoord, iResolution, iTime);
 }
 )";
 
@@ -235,6 +266,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         return pso;
     }
     return nullptr;
+#endif
 }
 
 ComPtr<ID3D12PipelineState> PreviewRenderer::CreatePSOFromBytecode(const std::vector<uint8_t>& psBytecode) {

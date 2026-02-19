@@ -6,16 +6,17 @@
 #include <cmath>
 #include <chrono>
 #include <ratio>
+#include <cstring>
 #include <filesystem>
 #include <cstdlib>
 #include <sstream>
 #include <unordered_set>
 #include <fstream>
+#include <system_error>
 #include <climits>
 #include <future>
 #include <mutex>
 #include <cstdint>
-#include <cstring>
 
 #include "ShaderLab/UI/UISystem.h"
 #include "ShaderLab/UI/UIConfig.h"
@@ -49,6 +50,60 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace {
+bool IsModifierKey(ImGuiKey key) {
+    return key == ImGuiKey_LeftCtrl || key == ImGuiKey_RightCtrl ||
+           key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift ||
+           key == ImGuiKey_LeftAlt || key == ImGuiKey_RightAlt ||
+           key == ImGuiKey_LeftSuper || key == ImGuiKey_RightSuper;
+}
+
+std::string BaseScreenKeyName(ImGuiKey key) {
+    switch (key) {
+        case ImGuiKey_Space: return "Space";
+        case ImGuiKey_Tab: return "Tab";
+        case ImGuiKey_Enter: return "Enter";
+        case ImGuiKey_KeypadEnter: return "Numpad Enter";
+        case ImGuiKey_Backspace: return "Backspace";
+
+        case ImGuiKey_LeftCtrl:
+        case ImGuiKey_RightCtrl:
+            return "Ctrl";
+        case ImGuiKey_LeftShift:
+        case ImGuiKey_RightShift:
+            return "Shift";
+        case ImGuiKey_LeftAlt:
+        case ImGuiKey_RightAlt:
+            return "Alt";
+        case ImGuiKey_LeftSuper:
+        case ImGuiKey_RightSuper:
+            return "Super";
+        default:
+            break;
+    }
+
+    const char* name = ImGui::GetKeyName(key);
+    return (name && name[0] != '\0') ? std::string(name) : std::string();
+}
+
+std::string FormatScreenKeyEntry(ImGuiKey key, const ImGuiIO& io) {
+    const std::string base = BaseScreenKeyName(key);
+    if (base.empty()) {
+        return {};
+    }
+
+    if (IsModifierKey(key)) {
+        return base;
+    }
+
+    std::string out;
+    if (io.KeyCtrl) out += "Ctrl+";
+    if (io.KeyShift) out += "Shift+";
+    if (io.KeyAlt) out += "Alt+";
+    if (io.KeySuper) out += "Super+";
+    out += base;
+    return out;
+}
+
 fs::path GetGlobalSnippetBaseDir(const std::string& appRoot) {
     fs::path baseDir;
     char* appData = nullptr;
@@ -66,6 +121,136 @@ fs::path GetGlobalSnippetBaseDir(const std::string& appRoot) {
 
 fs::path GetGlobalSnippetDirectory(const std::string& appRoot) {
     return GetGlobalSnippetBaseDir(appRoot) / "snippets";
+}
+
+fs::path GetUiSettingsPath(const std::string& appRoot) {
+    return GetGlobalSnippetBaseDir(appRoot) / "ui_settings.json";
+}
+
+SizeTargetPreset ParseSizePresetFromString(const std::string& value) {
+    if (value == "1k") return SizeTargetPreset::K1;
+    if (value == "2k") return SizeTargetPreset::K2;
+    if (value == "4k") return SizeTargetPreset::K4;
+    if (value == "16k") return SizeTargetPreset::K16;
+    if (value == "32k") return SizeTargetPreset::K32;
+    if (value == "64k") return SizeTargetPreset::K64;
+    return SizeTargetPreset::None;
+}
+
+std::string SizePresetToString(SizeTargetPreset preset) {
+    switch (preset) {
+        case SizeTargetPreset::K1: return "1k";
+        case SizeTargetPreset::K2: return "2k";
+        case SizeTargetPreset::K4: return "4k";
+        case SizeTargetPreset::K16: return "16k";
+        case SizeTargetPreset::K32: return "32k";
+        case SizeTargetPreset::K64: return "64k";
+        default: return "none";
+    }
+}
+
+BuildTargetKind ParseBuildTargetKindFromString(const std::string& value) {
+    if (value == "packaged") return BuildTargetKind::PackagedDemo;
+    if (value == "selfcontained-screensaver") return BuildTargetKind::SelfContainedScreenSaver;
+    if (value == "micro") return BuildTargetKind::MicroDemo;
+    return BuildTargetKind::SelfContainedDemo;
+}
+
+std::string BuildTargetKindToString(BuildTargetKind kind) {
+    switch (kind) {
+        case BuildTargetKind::PackagedDemo: return "packaged";
+        case BuildTargetKind::SelfContainedScreenSaver: return "selfcontained-screensaver";
+        case BuildTargetKind::MicroDemo: return "micro";
+        default: return "selfcontained";
+    }
+}
+
+void LoadUiBuildSettings(
+    const std::string& appRoot,
+    BuildTargetKind& targetKind,
+    BuildMode& mode,
+    SizeTargetPreset& sizeTarget,
+    bool& restrictedCompactTrack,
+    bool& runtimeDebugLog,
+    bool& compactTrackDebugLog,
+    bool& microDeveloperBuild,
+    std::string& cleanSolutionRootPath,
+    std::string& crinklerPath) {
+    const fs::path settingsPath = GetUiSettingsPath(appRoot);
+    std::ifstream in(settingsPath, std::ios::binary);
+    if (!in.is_open()) {
+        return;
+    }
+
+    json root;
+    try {
+        in >> root;
+    } catch (...) {
+        return;
+    }
+
+    const json build = root.value("build", json::object());
+    targetKind = ParseBuildTargetKindFromString(build.value("targetKind", std::string("selfcontained")));
+    const std::string modeStr = build.value("mode", std::string("release"));
+    mode = (modeStr == "crinkled" || modeStr == "release-crinkled")
+        ? BuildMode::ReleaseCrinkled
+        : BuildMode::Release;
+
+    sizeTarget = ParseSizePresetFromString(build.value("sizeTarget", std::string("none")));
+    restrictedCompactTrack = build.value("restrictedCompactTrack", false);
+    runtimeDebugLog = build.value("runtimeDebugLog", false);
+    compactTrackDebugLog = build.value("compactTrackDebugLog", false);
+    microDeveloperBuild = build.value("microDeveloperBuild", false);
+    cleanSolutionRootPath = build.value("cleanSolutionRootPath", std::string());
+    crinklerPath = build.value("crinklerPath", std::string());
+
+    if (!crinklerPath.empty()) {
+        SetEnvironmentVariableA("SHADERLAB_CRINKLER", crinklerPath.c_str());
+    }
+}
+
+void SaveUiBuildSettings(
+    const std::string& appRoot,
+    BuildTargetKind targetKind,
+    BuildMode mode,
+    SizeTargetPreset sizeTarget,
+    bool restrictedCompactTrack,
+    bool runtimeDebugLog,
+    bool compactTrackDebugLog,
+    bool microDeveloperBuild,
+    const std::string& cleanSolutionRootPath,
+    const std::string& crinklerPath) {
+    const fs::path settingsPath = GetUiSettingsPath(appRoot);
+    std::error_code ec;
+    fs::create_directories(settingsPath.parent_path(), ec);
+
+    json root;
+    std::ifstream in(settingsPath, std::ios::binary);
+    if (in.is_open()) {
+        try {
+            in >> root;
+        } catch (...) {
+            root = json::object();
+        }
+    }
+
+    json build;
+    build["targetKind"] = BuildTargetKindToString(targetKind);
+    build["mode"] = (mode == BuildMode::ReleaseCrinkled) ? "crinkled" : "release";
+    build["sizeTarget"] = SizePresetToString(sizeTarget);
+    build["restrictedCompactTrack"] = restrictedCompactTrack;
+    build["runtimeDebugLog"] = runtimeDebugLog;
+    build["compactTrackDebugLog"] = compactTrackDebugLog;
+    build["microDeveloperBuild"] = microDeveloperBuild;
+    build["cleanSolutionRootPath"] = cleanSolutionRootPath;
+    build["crinklerPath"] = crinklerPath;
+    root["build"] = build;
+
+    std::ofstream out(settingsPath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+    out << root.dump(2);
 }
 
 std::string SanitizeSnippetFileStem(const std::string& name) {
@@ -179,6 +364,18 @@ void OpenExternal(const std::string& target) {
 UISystem::UISystem() {
     // Store application root (assumed CWD at launch)
     m_appRoot = fs::current_path().string();
+
+    LoadUiBuildSettings(
+        m_appRoot,
+        m_buildSettingsTargetKind,
+        m_buildSettingsMode,
+        m_buildSettingsSizeTarget,
+        m_buildSettingsRestrictedCompactTrack,
+        m_buildSettingsRuntimeDebugLog,
+        m_buildSettingsCompactTrackDebugLog,
+        m_buildSettingsMicroDeveloperBuild,
+        m_buildSettingsCleanSolutionRootPath,
+        m_buildSettingsCrinklerPath);
 
     CreateDefaultScene();
     CreateDefaultTrack();
@@ -448,6 +645,18 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
 }
 
 void UISystem::Shutdown() {
+    SaveUiBuildSettings(
+        m_appRoot,
+        m_buildSettingsTargetKind,
+        m_buildSettingsMode,
+        m_buildSettingsSizeTarget,
+        m_buildSettingsRestrictedCompactTrack,
+        m_buildSettingsRuntimeDebugLog,
+        m_buildSettingsCompactTrackDebugLog,
+        m_buildSettingsMicroDeveloperBuild,
+        m_buildSettingsCleanSolutionRootPath,
+        m_buildSettingsCrinklerPath);
+
     if (m_initialized) {
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
@@ -795,11 +1004,50 @@ void UISystem::BeginFrame() {
 
     ImGuiIO& io = ImGui::GetIO();
     const bool altDown = io.KeyAlt;
+    const bool ctrlDown = io.KeyCtrl;
+    const bool shiftDown = io.KeyShift;
     if (altDown && ImGui::IsKeyPressed(ImGuiKey_D, false)) {
         m_shaderState.showPerformanceOverlay = !m_shaderState.showPerformanceOverlay;
     }
     if (altDown && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
         m_previewFullscreen = !m_previewFullscreen;
+    }
+    if (ctrlDown && !altDown && !io.KeySuper && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
+        OpenProject();
+    }
+    if (ctrlDown && !altDown && !io.KeySuper && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+        SaveProject();
+    }
+    if (ctrlDown && shiftDown && ImGui::IsKeyPressed(ImGuiKey_K, false)) {
+        m_screenKeysOverlayEnabled = !m_screenKeysOverlayEnabled;
+    }
+
+    if (m_screenKeysOverlayEnabled && m_currentMode == UIMode::Scene) {
+        for (int keyValue = (int)ImGuiKey_Keyboard_BEGIN; keyValue < (int)ImGuiKey_Keyboard_END; ++keyValue) {
+            const ImGuiKey key = static_cast<ImGuiKey>(keyValue);
+            if (!ImGui::IsKeyPressed(key, false)) {
+                continue;
+            }
+
+            if (key == ImGuiKey_K && ctrlDown && shiftDown) {
+                continue;
+            }
+
+            const bool isShortcutChord = io.KeyCtrl || io.KeyAlt || io.KeySuper;
+            if (isShortcutChord) {
+                continue;
+            }
+
+            std::string entry = FormatScreenKeyEntry(key, io);
+            if (entry.empty()) {
+                continue;
+            }
+
+            m_screenKeyLog.push_back(entry);
+            if (m_screenKeyLog.size() > 160) {
+                m_screenKeyLog.erase(m_screenKeyLog.begin(), m_screenKeyLog.begin() + (m_screenKeyLog.size() - 160));
+            }
+        }
     }
 
     // Setup fullscreen dockspace
@@ -978,8 +1226,20 @@ void UISystem::ShowMainMenuBar() {
                 SaveProjectAs();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Build Self-Contained EXE...")) {
+            if (ImGui::MenuItem("Build Packaged Demo...")) {
+                BuildPackagedDemoProject();
+            }
+            if (ImGui::MenuItem("Build Self-Contained Demo...")) {
                 BuildProject();
+            }
+            if (ImGui::MenuItem("Build Self-Contained Screensaver...")) {
+                BuildScreenSaverProject();
+            }
+            if (ImGui::MenuItem("Build Micro-Demo...")) {
+                BuildMicroDemoProject();
+            }
+            if (ImGui::MenuItem("Build Micro-Demo (Developer Overlay)...")) {
+                BuildMicroDeveloperDemoProject();
             }
             if (ImGui::MenuItem("Build Settings...")) {
                 m_showBuildSettings = true;
@@ -1149,8 +1409,17 @@ bool UISystem::CompileScene(int sceneIndex) {
         scene.pipelineState = pso;
         scene.compiledShaderBytes = m_previewRenderer->GetLastCompiledPixelShaderSize();
         scene.isDirty = false;
+        m_playbackBlockedByCompileError = false;
     } else {
         scene.compiledShaderBytes = 0;
+        m_playbackBlockedByCompileError = true;
+        if (m_transport.state == TransportState::Playing) {
+            m_transport.state = TransportState::Stopped;
+            if (m_audioSystem) {
+                m_audioSystem->Stop();
+            }
+            m_activeMusicIndex = -1;
+        }
     }
 
     // If this is the active scene, update the editor UI state too
@@ -1591,10 +1860,82 @@ void UISystem::RestoreState(const ProjectState& state) {
     m_layoutBuilt = false;
 }
 
+void UISystem::RefreshMicroUbershaderConflictCache() {
+    m_microUbershaderConflicts.clear();
+
+    if (m_currentProjectPath.empty()) {
+        m_microUbershaderConflictsDirty = false;
+        return;
+    }
+
+    m_microUbershaderConflicts = BuildPipeline::AnalyzeMicroUbershaderConflicts(m_currentProjectPath);
+
+    std::unordered_set<std::string> activeKeys;
+    for (const auto& conflict : m_microUbershaderConflicts) {
+        activeKeys.insert(conflict.signatureKey);
+
+        std::vector<std::string> validEntrypoints;
+        validEntrypoints.reserve(conflict.options.size());
+        for (const auto& option : conflict.options) {
+            validEntrypoints.push_back(option.moduleEntrypoint);
+        }
+
+        auto it = m_microUbershaderKeepEntrypointsBySignature.find(conflict.signatureKey);
+        if (it == m_microUbershaderKeepEntrypointsBySignature.end()) {
+            m_microUbershaderKeepEntrypointsBySignature[conflict.signatureKey] = validEntrypoints;
+            continue;
+        }
+
+        std::vector<std::string> filtered;
+        filtered.reserve(it->second.size());
+        for (const std::string& kept : it->second) {
+            if (std::find(validEntrypoints.begin(), validEntrypoints.end(), kept) != validEntrypoints.end()) {
+                filtered.push_back(kept);
+            }
+        }
+        if (filtered.empty()) {
+            filtered = validEntrypoints;
+        }
+        it->second = std::move(filtered);
+    }
+
+    for (auto it = m_microUbershaderKeepEntrypointsBySignature.begin(); it != m_microUbershaderKeepEntrypointsBySignature.end();) {
+        if (activeKeys.find(it->first) == activeKeys.end()) {
+            it = m_microUbershaderKeepEntrypointsBySignature.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    m_microUbershaderConflictsDirty = false;
+}
+
 void UISystem::ShowBuildSettingsWindow() {
+    const BuildTargetKind prevTargetKind = m_buildSettingsTargetKind;
+    const BuildMode prevMode = m_buildSettingsMode;
+    const SizeTargetPreset prevSizeTarget = m_buildSettingsSizeTarget;
+    const bool prevRestrictedCompactTrack = m_buildSettingsRestrictedCompactTrack;
+    const bool prevRuntimeDebugLog = m_buildSettingsRuntimeDebugLog;
+    const bool prevCompactTrackDebugLog = m_buildSettingsCompactTrackDebugLog;
+    const bool prevMicroDeveloperBuild = m_buildSettingsMicroDeveloperBuild;
+    const std::string prevCleanSolutionRootPath = m_buildSettingsCleanSolutionRootPath;
+
     if (m_buildSettingsRefreshRequested) {
         m_buildSettingsPrereq = BuildPipeline::CheckPrereqs(m_appRoot, m_buildSettingsMode);
         m_buildSettingsRefreshRequested = false;
+    }
+    if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo && m_microUbershaderConflictsDirty) {
+        RefreshMicroUbershaderConflictCache();
+    }
+
+    int unresolvedMicroConflictCount = 0;
+    if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo) {
+        for (const auto& conflict : m_microUbershaderConflicts) {
+            const auto it = m_microUbershaderKeepEntrypointsBySignature.find(conflict.signatureKey);
+            if (it == m_microUbershaderKeepEntrypointsBySignature.end() || it->second.empty()) {
+                ++unresolvedMicroConflictCount;
+            }
+        }
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1604,7 +1945,9 @@ void UISystem::ShowBuildSettingsWindow() {
         viewport->Pos.y + (viewport->Size.y - windowSize.y) * 0.5f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Appearing);
 
-    if (!ImGui::Begin("Build Settings", &m_showBuildSettings, ImGuiWindowFlags_NoCollapse)) {
+    bool canCloseBuildWindow = !m_isBuilding;
+    bool* openPtr = canCloseBuildWindow ? &m_showBuildSettings : nullptr;
+    if (!ImGui::Begin("Build Settings", openPtr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
@@ -1618,6 +1961,30 @@ void UISystem::ShowBuildSettingsWindow() {
         buildModeChanged = true;
         m_buildSettingsAutoSwitchedToCrinkled = false;
     }
+
+    int targetIndex = 1;
+    switch (m_buildSettingsTargetKind) {
+        case BuildTargetKind::PackagedDemo: targetIndex = 0; break;
+        case BuildTargetKind::SelfContainedDemo: targetIndex = 1; break;
+        case BuildTargetKind::SelfContainedScreenSaver: targetIndex = 2; break;
+        case BuildTargetKind::MicroDemo: targetIndex = 3; break;
+    }
+    const char* targetLabels[] = {
+        "Packaged Demo (.zip)",
+        "Self-Contained Demo (.exe)",
+        "Self-Contained Screen Saver (.scr)",
+        "Micro-Demo (.exe)"
+    };
+    if (ImGui::Combo("Build Target", &targetIndex, targetLabels, 4)) {
+        switch (targetIndex) {
+            case 0: m_buildSettingsTargetKind = BuildTargetKind::PackagedDemo; break;
+            case 2: m_buildSettingsTargetKind = BuildTargetKind::SelfContainedScreenSaver; break;
+            case 3: m_buildSettingsTargetKind = BuildTargetKind::MicroDemo; break;
+            default: m_buildSettingsTargetKind = BuildTargetKind::SelfContainedDemo; break;
+        }
+        m_microUbershaderConflictsDirty = true;
+    }
+    ImGui::TextDisabled("File menu build actions preselect this target.");
 
     ImGui::SeparatorText("Budget Target");
     static const SizeTargetPreset presets[] = {
@@ -1646,7 +2013,7 @@ void UISystem::ShowBuildSettingsWindow() {
         }
     }
 
-    const bool tinyTargetSelected = (m_buildSettingsSizeTarget != SizeTargetPreset::None);
+    const bool tinyTargetSelected = (m_buildSettingsSizeTarget != SizeTargetPreset::None) || m_buildSettingsTargetKind == BuildTargetKind::MicroDemo;
     bool autoSwitchedToCrinkled = false;
     const bool canAutoSwitchToCrinkled =
         tinyTargetSelected &&
@@ -1675,6 +2042,127 @@ void UISystem::ShowBuildSettingsWindow() {
     ImGui::Checkbox("Include compact-track debug logs", &m_buildSettingsCompactTrackDebugLog);
     ImGui::TextDisabled("Compiles compact timeline decode diagnostics (adds bytes to final executable).");
 
+    if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo) {
+        ImGui::Checkbox("Micro developer build (overlay console)", &m_buildSettingsMicroDeveloperBuild);
+        ImGui::TextDisabled("Enables tiny on-screen diagnostics; this variant is for debugging only.");
+        if (m_buildSettingsMicroDeveloperBuild && !m_buildSettingsRuntimeDebugLog) {
+            m_buildSettingsRuntimeDebugLog = true;
+        }
+
+        bool microConflictSelectionChanged = false;
+        ImGui::SeparatorText("Micro Ubershader Conflicts");
+        ImGui::TextDisabled("Duplicate helper signatures are shown side-by-side. Highlight one or more implementations to keep.");
+
+        if (IconButton("ResetMicroConflictKeepAll", OpenFontIcons::kRefresh, "Reset all conflicts to keep all implementations", ImVec2(180.0f, 0.0f))) {
+            for (const auto& conflict : m_microUbershaderConflicts) {
+                auto& keep = m_microUbershaderKeepEntrypointsBySignature[conflict.signatureKey];
+                keep.clear();
+                keep.reserve(conflict.options.size());
+                for (const auto& option : conflict.options) {
+                    keep.push_back(option.moduleEntrypoint);
+                }
+            }
+            microConflictSelectionChanged = true;
+        }
+
+        if (m_currentProjectPath.empty()) {
+            ImGui::TextDisabled("Save the project to analyze micro ubershader conflicts.");
+        } else if (m_microUbershaderConflicts.empty()) {
+            ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "No duplicate local function signatures detected.");
+        } else {
+            for (size_t conflictIndex = 0; conflictIndex < m_microUbershaderConflicts.size(); ++conflictIndex) {
+                auto& conflict = m_microUbershaderConflicts[conflictIndex];
+                auto& keep = m_microUbershaderKeepEntrypointsBySignature[conflict.signatureKey];
+
+                ImGui::PushID(static_cast<int>(conflictIndex));
+                ImGui::SeparatorText(conflict.signatureDisplay.c_str());
+                if (keep.empty()) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Unresolved: choose one or more implementations to keep.");
+                }
+                const int columnCount = (std::max)(1, static_cast<int>(conflict.options.size()));
+                if (ImGui::BeginTable("MicroConflictOptions", columnCount, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame)) {
+                    for (const auto& option : conflict.options) {
+                        std::string colName = option.moduleLabel + " (" + option.moduleEntrypoint + ")";
+                        ImGui::TableSetupColumn(colName.c_str());
+                    }
+                    ImGui::TableNextRow();
+
+                    for (size_t optionIndex = 0; optionIndex < conflict.options.size(); ++optionIndex) {
+                        const auto& option = conflict.options[optionIndex];
+                        ImGui::TableSetColumnIndex(static_cast<int>(optionIndex));
+                        const bool selected = std::find(keep.begin(), keep.end(), option.moduleEntrypoint) != keep.end();
+
+                        std::string toggleLabel = std::string(selected ? "[KEEP] " : "[skip] ") + option.moduleEntrypoint;
+                        if (ImGui::Selectable(toggleLabel.c_str(), selected, 0, ImVec2(-FLT_MIN, 0.0f))) {
+                            if (selected) {
+                                keep.erase(std::remove(keep.begin(), keep.end(), option.moduleEntrypoint), keep.end());
+                                microConflictSelectionChanged = true;
+                            } else {
+                                keep.push_back(option.moduleEntrypoint);
+                                microConflictSelectionChanged = true;
+                            }
+                        }
+
+                        ImGui::BeginChild(("Snippet_" + std::to_string(optionIndex)).c_str(), ImVec2(0.0f, 110.0f), true);
+                        ImGui::TextUnformatted(option.snippet.c_str());
+                        ImGui::EndChild();
+                    }
+
+                    ImGui::EndTable();
+                }
+
+                if (conflict.options.size() >= 2) {
+                    const std::string left = conflict.options[0].moduleEntrypoint;
+                    const std::string right = conflict.options[1].moduleEntrypoint;
+                    if (ImGui::Button("Keep Left")) {
+                        keep = {left};
+                        microConflictSelectionChanged = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Keep Right")) {
+                        keep = {right};
+                        microConflictSelectionChanged = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Keep Both")) {
+                        keep = {left, right};
+                        microConflictSelectionChanged = true;
+                    }
+                }
+                ImGui::PopID();
+            }
+        }
+
+        if (microConflictSelectionChanged && !m_currentProjectPath.empty()) {
+            SaveProjectUiSettings();
+        }
+    } else {
+        m_buildSettingsMicroDeveloperBuild = false;
+    }
+
+    ImGui::SeparatorText("Clean Solution Export");
+    {
+        static char cleanRootBuffer[1024] = {};
+        static bool initialized = false;
+        if (!initialized) {
+            const size_t copyLen = (std::min)(m_buildSettingsCleanSolutionRootPath.size(), sizeof(cleanRootBuffer) - 1);
+            if (copyLen > 0) {
+                memcpy(cleanRootBuffer, m_buildSettingsCleanSolutionRootPath.c_str(), copyLen);
+            }
+            cleanRootBuffer[copyLen] = '\0';
+            initialized = true;
+        }
+
+        if (ImGui::InputText("Solution Root (required)", cleanRootBuffer, sizeof(cleanRootBuffer))) {
+            m_buildSettingsCleanSolutionRootPath = cleanRootBuffer;
+        }
+        if (IconButton("ClearSolutionRoot", OpenFontIcons::kTrash2, "Clear custom solution root", ImVec2(150, 0))) {
+            m_buildSettingsCleanSolutionRootPath.clear();
+            cleanRootBuffer[0] = '\0';
+        }
+        ImGui::TextDisabled("Build root is mandatory. Existing content is versioned and replaced on each build.");
+    }
+
     if (m_buildSettingsRuntimeDebugLog && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
         ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Warning: Runtime debug logs increase binary size and can hurt tiny targets.");
     }
@@ -1688,6 +2176,12 @@ void UISystem::ShowBuildSettingsWindow() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("Mode: %s", BuildModeLabel(m_buildSettingsMode));
+    ImGui::SameLine();
+    const char* targetLabel = "Self-Contained Demo (.exe)";
+    if (m_buildSettingsTargetKind == BuildTargetKind::PackagedDemo) targetLabel = "Packaged Demo (.zip)";
+    else if (m_buildSettingsTargetKind == BuildTargetKind::SelfContainedScreenSaver) targetLabel = "Self-Contained Screen Saver (.scr)";
+    else if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo) targetLabel = "Micro-Demo (.exe)";
+    ImGui::TextDisabled("Target: %s", targetLabel);
 
     const bool crinklerPossible =
         (m_buildSettingsMode == BuildMode::ReleaseCrinkled) &&
@@ -1764,6 +2258,7 @@ void UISystem::ShowBuildSettingsWindow() {
             ofn.nFilterIndex = 1;
             ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
             if (GetOpenFileNameA(&ofn)) {
+                m_buildSettingsCrinklerPath = pathBuf;
                 SetEnvironmentVariableA("SHADERLAB_CRINKLER", pathBuf);
                 m_buildSettingsRefreshRequested = true;
             }
@@ -1785,12 +2280,22 @@ void UISystem::ShowBuildSettingsWindow() {
     }
 
     ImGui::Separator();
-    if (IconButton("CloseBuildSettings", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0))) {
+    if (!canCloseBuildWindow) {
+        ImGui::BeginDisabled();
+    }
+    if (IconButton("CloseBuildSettings", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0)) && canCloseBuildWindow) {
         m_showBuildSettings = false;
     }
+    if (!canCloseBuildWindow) {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Build in progress... window closes after completion.");
+    }
     ImGui::SameLine();
-    const bool canBuild = m_buildSettingsPrereq.ok;
-    if (!canBuild) {
+    const bool hasCleanRoot = !m_buildSettingsCleanSolutionRootPath.empty();
+    const bool canBuild = m_buildSettingsPrereq.ok && hasCleanRoot;
+    const bool canStartBuild = canBuild && !m_isBuilding;
+    if (!canStartBuild) {
         ImGui::BeginDisabled();
     }
     if (IconButton("BuildFromSettings", OpenFontIcons::kPlay, "Choose output path and build", ImVec2(220, 0))) {
@@ -1811,18 +2316,65 @@ void UISystem::ShowBuildSettingsWindow() {
             SaveProject();
         }
 
-        char szFile[260] = { 0 };
-        OPENFILENAMEA ofn = { 0 };
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
-        ofn.lpstrFile = szFile;
-        ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = "Executable (*.exe)\0*.exe\0All Files\0*.*\0";
-        ofn.nFilterIndex = 1;
-        ofn.lpstrDefExt = "exe";
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+        const BuildTargetKind buildTargetKind = m_buildSettingsTargetKind;
+        const bool buildScreenSaver = buildTargetKind == BuildTargetKind::SelfContainedScreenSaver;
+        const bool buildPackaged = buildTargetKind == BuildTargetKind::PackagedDemo;
+        std::string targetOutputPath;
+        const std::string defaultBinaryName = (m_currentProjectPath.empty() ? "MyDemo" : fs::path(m_currentProjectPath).stem().string()) + (buildPackaged ? ".zip" : (buildScreenSaver ? ".scr" : ".exe"));
 
-        if (GetSaveFileNameA(&ofn)) {
+        fs::path outputDir = fs::path(m_buildSettingsCleanSolutionRootPath);
+        std::error_code makeDirEc;
+        fs::create_directories(outputDir, makeDirEc);
+        if (makeDirEc) {
+            std::lock_guard<std::mutex> lock(m_buildLogMutex);
+            m_buildLog += "Error: Failed to create clean solution root directory for output binary.\n";
+            m_buildLog += "Path: " + outputDir.string() + "\n";
+            m_buildLog += "Details: " + makeDirEc.message() + "\n";
+            ImGui::End();
+            return;
+        }
+        targetOutputPath = (outputDir / defaultBinaryName).string();
+
+        if (!targetOutputPath.empty()) {
+            if (buildTargetKind == BuildTargetKind::MicroDemo) {
+                {
+                    std::lock_guard<std::mutex> lock(m_buildLogMutex);
+                    m_buildLog += "[Micro Step 1/2] Preflight: assembling conflict state for ubershader...\n";
+                }
+                m_microUbershaderConflictsDirty = true;
+                RefreshMicroUbershaderConflictCache();
+
+                bool hasUnresolvedConflicts = false;
+                for (const auto& conflict : m_microUbershaderConflicts) {
+                    const auto it = m_microUbershaderKeepEntrypointsBySignature.find(conflict.signatureKey);
+                    if (it == m_microUbershaderKeepEntrypointsBySignature.end() || it->second.empty()) {
+                        hasUnresolvedConflicts = true;
+                        break;
+                    }
+                }
+
+                if (hasUnresolvedConflicts) {
+                    std::lock_guard<std::mutex> lock(m_buildLogMutex);
+                    m_buildLog += "[Micro Step 1/2] Conflict(s) detected and unresolved. Resolve them in 'Micro Ubershader Conflicts' before build.\n";
+                    m_buildLog += "Build not started.\n";
+                    ImGui::End();
+                    return;
+                }
+
+                {
+                    std::error_code cleanupEc;
+                    const fs::path stalePackShaders = fs::path(m_buildSettingsCleanSolutionRootPath) / "build_selfcontained_pack" / "assets" / "shaders";
+                    fs::remove(stalePackShaders / "ubershader.hlsl", cleanupEc);
+                    cleanupEc.clear();
+                    fs::remove(stalePackShaders / "ubershader.bin", cleanupEc);
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(m_buildLogMutex);
+                    m_buildLog += "[Micro Step 2/2] Conflicts resolved. Rebuilding ubershader + runtime from scratch...\n";
+                }
+            }
+
             m_isBuilding = true;
             m_buildComplete = false;
             m_buildSuccess = false;
@@ -1832,21 +2384,28 @@ void UISystem::ShowBuildSettingsWindow() {
             m_buildLog += std::string("Restricted Compact Track: ") + (m_buildSettingsRestrictedCompactTrack ? "Enabled" : "Disabled") + "\n";
             m_buildLog += std::string("Runtime Debug Logs: ") + (m_buildSettingsRuntimeDebugLog ? "Enabled" : "Disabled") + "\n";
             m_buildLog += std::string("Compact Track Debug Logs: ") + (m_buildSettingsCompactTrackDebugLog ? "Enabled" : "Disabled") + "\n";
+            m_buildLog += std::string("Output Type: ") + (buildPackaged ? "Packaged Demo (.zip)" : (buildScreenSaver ? "Screen Saver (.scr)" : "Executable (.exe)")) + "\n";
+            m_buildLog += std::string("Clean Solution Root: ") + m_buildSettingsCleanSolutionRootPath + "\n";
+            m_buildLog += std::string("Output Binary: ") + targetOutputPath + "\n";
             if (m_buildSettingsAutoSwitchedToCrinkled) {
                 m_buildLog += "Build Mode Auto-Switch: Release -> Release Crinkled (tiny target with Crinkler+Ninja detected)\n";
                 m_buildSettingsAutoSwitchedToCrinkled = false;
             }
 
-            const std::string targetExePath = szFile;
+            const std::string targetExePath = targetOutputPath;
             const std::string projectPath = m_currentProjectPath;
             const std::string appRoot = m_appRoot;
+            const BuildTargetKind selectedTargetKind = m_buildSettingsTargetKind;
             const BuildMode selectedMode = m_buildSettingsMode;
             const SizeTargetPreset selectedSizeTarget = m_buildSettingsSizeTarget;
             const bool selectedRestrictedCompactTrack = m_buildSettingsRestrictedCompactTrack;
             const bool selectedRuntimeDebugLog = m_buildSettingsRuntimeDebugLog;
             const bool selectedCompactTrackDebugLog = m_buildSettingsCompactTrackDebugLog;
+            const bool selectedMicroDeveloperBuild = m_buildSettingsMicroDeveloperBuild;
+            const std::string selectedCleanSolutionRootPath = m_buildSettingsCleanSolutionRootPath;
+            const auto selectedMicroKeepEntrypointsBySignature = m_microUbershaderKeepEntrypointsBySignature;
 
-            m_buildFuture = std::async(std::launch::async, [this, targetExePath, projectPath, appRoot, selectedMode, selectedSizeTarget, selectedRestrictedCompactTrack, selectedRuntimeDebugLog, selectedCompactTrackDebugLog]() {
+            m_buildFuture = std::async(std::launch::async, [this, targetExePath, projectPath, appRoot, selectedTargetKind, selectedMode, selectedSizeTarget, selectedRestrictedCompactTrack, selectedRuntimeDebugLog, selectedCompactTrackDebugLog, selectedMicroDeveloperBuild, selectedCleanSolutionRootPath, selectedMicroKeepEntrypointsBySignature]() {
                 auto Log = [&](const std::string& msg) {
                     std::lock_guard<std::mutex> lock(m_buildLogMutex);
                     m_buildLog += msg;
@@ -1859,11 +2418,17 @@ void UISystem::ShowBuildSettingsWindow() {
                 request.appRoot = appRoot;
                 request.projectPath = projectPath;
                 request.targetExePath = targetExePath;
+                request.targetKind = selectedTargetKind;
                 request.mode = selectedMode;
                 request.sizeTarget = selectedSizeTarget;
                 request.restrictedCompactTrack = selectedRestrictedCompactTrack;
                 request.runtimeDebugLog = selectedRuntimeDebugLog;
                 request.compactTrackDebugLog = selectedCompactTrackDebugLog;
+                request.microDeveloperBuild = selectedMicroDeveloperBuild;
+                request.cleanSolutionRootPath = selectedCleanSolutionRootPath;
+                if (selectedTargetKind == BuildTargetKind::MicroDemo) {
+                    request.microUbershaderKeepEntrypointsBySignature = selectedMicroKeepEntrypointsBySignature;
+                }
 
                 BuildResult result = BuildPipeline::BuildSelfContained(request, Log);
                 m_buildSuccess = result.success;
@@ -1871,66 +2436,99 @@ void UISystem::ShowBuildSettingsWindow() {
             });
         }
     }
-    if (!canBuild) {
+    if (!canStartBuild) {
         ImGui::EndDisabled();
+        if (!canBuild) {
+            ImGui::SameLine();
+            if (!hasCleanRoot) {
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Set Clean Solution Root to enable build.");
+            } else {
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Resolve required dependencies to enable build.");
+            }
+        } else if (m_isBuilding) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Build already running...");
+        }
+    }
+    if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo && unresolvedMicroConflictCount > 0) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Resolve required dependencies to enable build.");
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Unresolved conflicts: %d", unresolvedMicroConflictCount);
+    }
+
+    if (m_isBuilding || !m_buildLog.empty()) {
+        static bool autoCopyOnFailure = false;
+        static bool didAutoCopy = false;
+
+        ImGui::SeparatorText("Build Console");
+        ImGui::BeginChild("BuildConsoleRegion", ImVec2(0.0f, 220.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+        {
+            std::lock_guard<std::mutex> lock(m_buildLogMutex);
+            ImGui::TextUnformatted(m_buildLog.c_str());
+            if (m_isBuilding && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+        }
+        ImGui::EndChild();
+
+        if (!m_isBuilding && m_buildComplete) {
+            if (m_buildSuccess) {
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Build Completed Successfully!");
+            } else {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Build Failed.");
+                if (autoCopyOnFailure && !didAutoCopy) {
+                    std::lock_guard<std::mutex> lock(m_buildLogMutex);
+                    ImGui::SetClipboardText(m_buildLog.c_str());
+                    didAutoCopy = true;
+                }
+            }
+        } else if (m_isBuilding) {
+            didAutoCopy = false;
+            static float time = 0.0f;
+            time += ImGui::GetIO().DeltaTime;
+            const char* dots = (int(time * 2) % 4) == 0 ? ".   " : (int(time * 2) % 4) == 1 ? "..  " : (int(time * 2) % 4) == 2 ? "... " : "....";
+            ImGui::Text("Building%s", dots);
+        }
+
+        if (IconButton("CopyBuildLogInline", OpenFontIcons::kCopy, "Copy build log", ImVec2(140, 0))) {
+            std::lock_guard<std::mutex> lock(m_buildLogMutex);
+            ImGui::SetClipboardText(m_buildLog.c_str());
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Auto-copy on failure", &autoCopyOnFailure);
+    }
+
+    const bool settingsChanged =
+        prevTargetKind != m_buildSettingsTargetKind ||
+        prevMode != m_buildSettingsMode ||
+        prevSizeTarget != m_buildSettingsSizeTarget ||
+        prevRestrictedCompactTrack != m_buildSettingsRestrictedCompactTrack ||
+        prevRuntimeDebugLog != m_buildSettingsRuntimeDebugLog ||
+        prevCompactTrackDebugLog != m_buildSettingsCompactTrackDebugLog ||
+        prevMicroDeveloperBuild != m_buildSettingsMicroDeveloperBuild ||
+        prevCleanSolutionRootPath != m_buildSettingsCleanSolutionRootPath;
+    if (settingsChanged) {
+        SaveUiBuildSettings(
+            m_appRoot,
+            m_buildSettingsTargetKind,
+            m_buildSettingsMode,
+            m_buildSettingsSizeTarget,
+            m_buildSettingsRestrictedCompactTrack,
+            m_buildSettingsRuntimeDebugLog,
+            m_buildSettingsCompactTrackDebugLog,
+            m_buildSettingsMicroDeveloperBuild,
+            m_buildSettingsCleanSolutionRootPath,
+            m_buildSettingsCrinklerPath);
+        if (!m_currentProjectPath.empty()) {
+            SaveProjectUiSettings();
+        }
     }
 
     ImGui::End();
 }
 
 void UISystem::UpdateBuildLogic() {
-    if (m_isBuilding) {
-        static bool autoCopyOnFailure = false;
-        static bool didAutoCopy = false;
-
-        if (ImGui::Begin("Build Status", &m_isBuilding, ImGuiWindowFlags_AlwaysAutoResize)) {
-            // Progress Log
-            ImGui::BeginChild("LogRegion", ImVec2(500, 300), true, ImGuiWindowFlags_HorizontalScrollbar);
-            {
-                std::lock_guard<std::mutex> lock(m_buildLogMutex);
-                ImGui::TextUnformatted(m_buildLog.c_str());
-                if (m_buildComplete && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-                    ImGui::SetScrollHereY(1.0f);
-                }
-            }
-            ImGui::EndChild();
-
-            ImGui::Separator();
-            if (!m_buildComplete) {
-                didAutoCopy = false;
-            }
-
-            if (IconButton("CopyBuildLog", OpenFontIcons::kCopy, "Copy log", ImVec2(120, 0))) {
-                std::lock_guard<std::mutex> lock(m_buildLogMutex);
-                ImGui::SetClipboardText(m_buildLog.c_str());
-            }
-            ImGui::SameLine();
-            ImGui::Checkbox("Auto-copy on failure", &autoCopyOnFailure);
-
-            if (m_buildComplete) {
-                if (m_buildSuccess) {
-                    ImGui::TextColored(ImVec4(0,1,0,1), "Build Completed Successfully!");
-                } else {
-                    ImGui::TextColored(ImVec4(1,0,0,1), "Build Failed.");
-                    if (autoCopyOnFailure && !didAutoCopy) {
-                        std::lock_guard<std::mutex> lock(m_buildLogMutex);
-                        ImGui::SetClipboardText(m_buildLog.c_str());
-                        didAutoCopy = true;
-                    }
-                }
-                if (IconButton("CloseBuildStatus", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0))) {
-                    m_isBuilding = false;
-                }
-            } else {
-                static float time = 0.0f;
-                time += ImGui::GetIO().DeltaTime;
-                const char* dots = (int(time * 2) % 4) == 0 ? ".   " : (int(time * 2) % 4) == 1 ? "..  " : (int(time * 2) % 4) == 2 ? "... " : "....";
-                ImGui::Text("Building%s", dots);
-            }
-        }
-        ImGui::End();
+    if (m_isBuilding && m_buildComplete) {
+        m_isBuilding = false;
     }
 }
 

@@ -61,3 +61,9 @@ third_party/*
 *.tmp
 *.bak
 *~
+
+# Local/diagnostic artifacts not intended for source control
+preprocessed.txt
+_codeql_detected_source_root
+.tmp_*.bat
+*.shaderlab.user.json

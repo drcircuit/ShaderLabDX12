@@ -273,7 +273,7 @@ void UISystem::ShowDemoPlaylist() {
         SetNextNumericFieldWidth(70.0f);
         int bars = (track.lengthBeats + 3) / 4;
         PushNumericFont();
-        if (ImGui::InputInt("##TrackBars", &bars, 4, 16)) {
+        if (ImGui::InputInt("##TrackBars", &bars, 1, 4)) {
             if (bars < 1) bars = 1;
             track.lengthBeats = bars * 4;
         }
@@ -913,13 +913,32 @@ void UISystem::ShowTransportControls() {
         ImGui::PopFont();
     }
 
+    ImGuiIO& io = ImGui::GetIO();
     const bool altDown = ImGui::IsKeyDown(ImGuiKey_LeftAlt) || ImGui::IsKeyDown(ImGuiKey_RightAlt);
-    const bool hotkeyToggle = altDown && ImGui::IsKeyPressed(ImGuiKey_Space, false);
-    const bool hotkeyStop = altDown && ImGui::IsKeyPressed(ImGuiKey_X, false);
+    const bool allowTransportHotkeys = !io.WantTextInput;
+    const bool hotkeyToggle = allowTransportHotkeys && altDown && ImGui::IsKeyPressed(ImGuiKey_Space, false);
+    const bool hotkeyStop = allowTransportHotkeys && altDown && ImGui::IsKeyPressed(ImGuiKey_X, false);
+
+    if (m_playbackBlockedByCompileError &&
+        m_activeSceneIndex >= 0 &&
+        m_activeSceneIndex < (int)m_scenes.size()) {
+        const auto& activeScene = m_scenes[m_activeSceneIndex];
+        if (activeScene.pipelineState && !activeScene.isDirty && m_shaderState.status != CompileStatus::Error) {
+            m_playbackBlockedByCompileError = false;
+        }
+    }
+
+    const bool playBlocked = m_playbackBlockedByCompileError;
 
     // Play/Pause/Stop buttons
+    ImGui::BeginDisabled(playBlocked);
     ImGui::Button(m_transport.state == TransportState::Playing ? "Pause" : "Play");
-    const bool playPausePressed = ImGui::IsItemClicked(ImGuiMouseButton_Left) || hotkeyToggle;
+    const bool playPausePressed = (ImGui::IsItemClicked(ImGuiMouseButton_Left) || hotkeyToggle) && !playBlocked;
+    const bool playHovered = ImGui::IsItemHovered();
+    ImGui::EndDisabled();
+    if (playBlocked && playHovered) {
+        ImGui::SetTooltip("Playback disabled: compile active shader successfully to re-enable");
+    }
     if (playPausePressed) {
         if (m_transport.state == TransportState::Playing) {
             m_transport.state = TransportState::Paused;
@@ -979,9 +998,16 @@ void UISystem::ShowTransportControls() {
             if (compilationFailed && m_currentMode == UIMode::Demo) {
                 m_hasDemoCompiledSize = false;
                 m_lastDemoCompiledSizeBytes = 0;
+                m_playbackBlockedByCompileError = true;
+                m_transport.state = TransportState::Stopped;
+                if (m_audioSystem) {
+                    m_audioSystem->Stop();
+                }
+                m_activeMusicIndex = -1;
             }
 
             if (!compilationFailed) {
+                m_playbackBlockedByCompileError = false;
                 if (m_currentMode == UIMode::Demo) {
                     std::vector<bool> referencedScenes(m_scenes.size(), false);
                     for (const auto& row : m_track.rows) {
@@ -1009,32 +1035,54 @@ void UISystem::ShowTransportControls() {
                 }
 
                 if (m_transport.state == TransportState::Stopped) {
-                    // Reset Transport
-                    m_transport.timeSeconds = 0.0;
-                    m_transport.lastFrameWallSeconds = 0.0;
-                    m_track.currentBeat = 0;
-                    m_track.lastTriggeredBeat = -1;
-                    m_transitionActive = false;
-                    m_pendingActiveScene = -2;
-                    m_transitionFromIndex = -1;
-                    m_transitionToIndex = -1;
-                    m_transitionFromOffset = 0.0f;
-                    m_transitionToOffset = 0.0f;
-                    m_transitionStartBeat = 0.0;
-                    m_transitionDurationBeats = 1.0;
-                    m_currentTransitionType = TransitionType::None;
+                    if (m_currentMode == UIMode::Demo) {
+                        // Reset Transport and derive active scene from tracker start in Demo mode.
+                        m_transport.timeSeconds = 0.0;
+                        m_transport.lastFrameWallSeconds = 0.0;
+                        m_track.currentBeat = 0;
+                        m_track.lastTriggeredBeat = -1;
+                        m_transitionActive = false;
+                        m_pendingActiveScene = -2;
+                        m_transitionFromIndex = -1;
+                        m_transitionToIndex = -1;
+                        m_transitionFromOffset = 0.0f;
+                        m_transitionToOffset = 0.0f;
+                        m_transitionStartBeat = 0.0;
+                        m_transitionDurationBeats = 1.0;
+                        m_currentTransitionType = TransitionType::None;
 
-                    m_activeSceneIndex = -1;
-                    m_activeSceneOffset = 0.0f;
-                    m_activeSceneStartBeat = 0.0;
-                    m_transitionFromStartBeat = 0.0;
-                    m_transitionToStartBeat = 0.0;
-                    m_transitionJustCompletedBeat = -1;
+                        m_activeSceneIndex = -1;
+                        m_activeSceneOffset = 0.0f;
+                        m_activeSceneStartBeat = 0.0;
+                        m_transitionFromStartBeat = 0.0;
+                        m_transitionToStartBeat = 0.0;
+                        m_transitionJustCompletedBeat = -1;
 
-                    if (m_audioSystem) m_audioSystem->Stop();
-                    m_activeMusicIndex = -1;
+                        if (m_audioSystem) m_audioSystem->Stop();
+                        m_activeMusicIndex = -1;
 
-                    SeekToBeat(0);
+                        SeekToBeat(0);
+                    } else {
+                        // Scene/PostFX: keep current active scene for preview while restarting playback.
+                        m_transport.timeSeconds = 0.0;
+                        m_transport.lastFrameWallSeconds = 0.0;
+                        m_track.currentBeat = 0;
+                        m_track.lastTriggeredBeat = -1;
+                        m_transitionActive = false;
+                        m_pendingActiveScene = -2;
+                        m_transitionFromIndex = -1;
+                        m_transitionToIndex = -1;
+                        m_transitionFromOffset = 0.0f;
+                        m_transitionToOffset = 0.0f;
+                        m_transitionStartBeat = 0.0;
+                        m_transitionDurationBeats = 1.0;
+                        m_currentTransitionType = TransitionType::None;
+                        m_transitionFromStartBeat = 0.0;
+                        m_transitionToStartBeat = 0.0;
+                        m_transitionJustCompletedBeat = -1;
+                        if (m_audioSystem) m_audioSystem->Stop();
+                        m_activeMusicIndex = -1;
+                    }
                 }
                 m_transport.state = TransportState::Playing;
                 m_transport.lastFrameWallSeconds = 0.0;
@@ -1052,7 +1100,8 @@ void UISystem::ShowTransportControls() {
     }
     ImGui::SameLine();
 
-    bool stopPressed = ImGui::Button("Stop");
+    ImGui::Button("Stop");
+    const bool stopPressed = ImGui::IsItemClicked(ImGuiMouseButton_Left);
     if (stopPressed || hotkeyStop) {
         m_transport.state = TransportState::Stopped;
         m_transport.timeSeconds = 0.0;
@@ -1069,9 +1118,11 @@ void UISystem::ShowTransportControls() {
         m_transitionDurationBeats = 1.0;
         m_currentTransitionType = TransitionType::None;
 
-        m_activeSceneIndex = -1;
-        m_activeSceneOffset = 0.0f;
-        m_activeSceneStartBeat = 0.0;
+        if (m_currentMode == UIMode::Demo) {
+            m_activeSceneIndex = -1;
+            m_activeSceneOffset = 0.0f;
+            m_activeSceneStartBeat = 0.0;
+        }
         m_transitionFromStartBeat = 0.0;
         m_transitionToStartBeat = 0.0;
         m_transitionJustCompletedBeat = -1;

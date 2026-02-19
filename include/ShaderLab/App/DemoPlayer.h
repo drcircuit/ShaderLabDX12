@@ -24,6 +24,8 @@ public:
 
     bool Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int width, int height);
     void LoadProject(const std::string& manifestPath);
+    void SetLooping(bool enabled) { m_loopPlayback = enabled; }
+    bool IsLooping() const { return m_loopPlayback; }
     
     void Update(double wallTime, float dt);
     void Render(ID3D12GraphicsCommandList* commandList, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle);
@@ -38,7 +40,7 @@ private:
     std::string GetTransitionShader(TransitionType type);
     void EnsurePostFxResources(Scene& scene);
     void EnsurePostFxHistory(Scene::PostFXEffect& effect);
-    bool CompilePostFxEffect(Scene::PostFXEffect& effect);
+    bool CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex);
     ID3D12Resource* ApplyPostFxChain(ID3D12GraphicsCommandList* commandList,
                                     Scene& scene,
                                     ID3D12Resource* inputTexture,
@@ -111,6 +113,11 @@ private:
     std::vector<int> m_renderStack;
     std::vector<uint8_t> m_precompiledVertexShader;
     std::array<std::vector<uint8_t>, 7> m_transitionBytecode;
+    std::vector<std::vector<uint8_t>> m_microModuleBytecode;
+    std::vector<int16_t> m_microSceneModuleIds;
+    std::vector<std::vector<int16_t>> m_microPostFxModuleIds;
+    std::array<int16_t, 7> m_microTransitionModuleIds = { -1, -1, -1, -1, -1, -1, -1 };
+    bool m_loopPlayback = true;
 };
 
 }

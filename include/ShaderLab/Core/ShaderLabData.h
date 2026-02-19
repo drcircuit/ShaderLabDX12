@@ -68,12 +68,14 @@ struct Transport { // Renamed from PreviewTransport for genera use
 struct Scene {
     std::string name;
     std::string shaderCode;
+    std::string shaderCodePath;
     std::vector<TextureBinding> bindings;
     TextureType outputType = TextureType::Texture2D;
 
     struct PostFXEffect {
         std::string name;
         std::string shaderCode;
+        std::string shaderCodePath;
         bool enabled = true;
         bool isDirty = true;
         std::string lastCompiledCode;

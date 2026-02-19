@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 project(ShaderLab VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -17,11 +20,17 @@ option(SHADERLAB_ENABLE_DXC "Enable DXC shader compiler (requires dxcompiler.dll
 option(SHADERLAB_STATIC_RUNTIME "Link MSVC runtime statically" OFF)
 option(SHADERLAB_USE_CRINKLER "Use Crinkler as the linker (self-contained builds)" OFF)
 option(SHADERLAB_CRINKLER_TINYIMPORT "Enable Crinkler /TINYIMPORT optimization" ON)
+set(SHADERLAB_CRINKLER_HASH_SIZE_MB "64" CACHE STRING "Crinkler hash table size in MB")
+set(SHADERLAB_CRINKLER_HASH_TRIES "1" CACHE STRING "Crinkler hash optimization tries")
+set(SHADERLAB_CRINKLER_ORDER_TRIES "1" CACHE STRING "Crinkler code reordering tries")
 option(SHADERLAB_RUNTIME_IMGUI "Enable ImGui debug overlay in runtime player" ON)
 option(SHADERLAB_COMPACT_TRACK_DEBUG "Enable compact track runtime debug logs" OFF)
 option(SHADERLAB_RUNTIME_DEBUG_LOG "Enable general runtime debug logs" OFF)
 option(SHADERLAB_TINY_PLAYER "Enable ultra-minimal runtime profile (strips optional subsystems)" OFF)
 option(SHADERLAB_BUILD_MICRO_PLAYER "Build ultra-minimal benchmark runtime target" OFF)
+option(SHADERLAB_TINY_RUNTIME_COMPILE "Enable runtime shader compilation in tiny player" ON)
+option(SHADERLAB_TINY_TRACE "Enable lean tiny-player diagnostics via OutputDebugString" OFF)
+option(SHADERLAB_TINY_DEV_OVERLAY "Enable tiny-player on-screen diagnostic overlay" OFF)
 set(CRINKLER_PATH "" CACHE FILEPATH "Path to crinkler.exe")
 
 # Platform check
@@ -31,8 +40,14 @@ endif()
 
 if(SHADERLAB_BUILD_MICRO_PLAYER)
     add_executable(ShaderLabMicroPlayer WIN32
-        src/app/runtime/main_micro_player.cpp
+        src/app/runtime/main_player.cpp
+        src/app/runtime/PlayerApp.cpp
+        src/app/runtime/DemoPlayer.cpp
+        include/ShaderLab/App/DemoPlayer.h
+        include/ShaderLab/App/PlayerApp.h
     )
+
+    target_link_libraries(ShaderLabMicroPlayer PRIVATE ShaderLabCore)
 
     target_include_directories(ShaderLabMicroPlayer PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -55,20 +70,31 @@ if(SHADERLAB_BUILD_MICRO_PLAYER)
 
         if(SHADERLAB_USE_CRINKLER)
             target_link_options(ShaderLabMicroPlayer PRIVATE
-                /ENTRY:WinMainCRTStartup
+                /ENTRY:WinMain
                 /INCREMENTAL:NO
                 /MANIFEST:NO
                 /RELEASE
-                /COMPMODE:SLOW
-                /ORDERTRIES:120
+                /COMPMODE:FAST
+                /HASHSIZE:${SHADERLAB_CRINKLER_HASH_SIZE_MB}
+                /HASHTRIES:${SHADERLAB_CRINKLER_HASH_TRIES}
+                /ORDERTRIES:${SHADERLAB_CRINKLER_ORDER_TRIES}
                 /UNALIGNCODE
             )
+            if(NOT SHADERLAB_STATIC_RUNTIME)
+                target_link_libraries(ShaderLabMicroPlayer PRIVATE
+                    msvcprt
+                    msvcrt
+                    vcruntime
+                    ucrt
+                    legacy_stdio_definitions
+                    oldnames
+                )
+            endif()
             if(SHADERLAB_CRINKLER_TINYIMPORT)
                 target_link_options(ShaderLabMicroPlayer PRIVATE /TINYIMPORT)
             endif()
         else()
             target_link_options(ShaderLabMicroPlayer PRIVATE
-                /ENTRY:WinMainCRTStartup
                 /INCREMENTAL:NO
                 /OPT:REF
                 /OPT:ICF
@@ -142,6 +168,7 @@ set(SHADERLAB_CORE_HEADER_SOURCES
     include/ShaderLab/Core/RuntimeExporter.h
     include/ShaderLab/Core/PackageManager.h
     include/ShaderLab/Core/ShaderLabData.h
+    include/ShaderLab/App/PlayerApp.h
     third_party/ImGuiColorTextEdit/TextEditor.h
 )
 
@@ -207,6 +234,24 @@ else()
     target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_PLAYER=0)
 endif()
 
+if(SHADERLAB_TINY_RUNTIME_COMPILE)
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_RUNTIME_COMPILE=1)
+else()
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_RUNTIME_COMPILE=0)
+endif()
+
+if(SHADERLAB_TINY_TRACE)
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_TRACE=1)
+else()
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_TRACE=0)
+endif()
+
+if(SHADERLAB_TINY_DEV_OVERLAY)
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_DEV_OVERLAY=1)
+else()
+    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_DEV_OVERLAY=0)
+endif()
+
 # Compiler flags
 if(MSVC)
     target_compile_options(ShaderLabCore PRIVATE
@@ -238,11 +283,10 @@ if(MSVC)
         target_compile_options(ShaderLabCore PRIVATE
             /Os
             /Oy
-            /Oi
-            /fp:fast
+                msvcprt
             /GS-
-            /GR-
-            /Gy
+                vcruntime
+                ucrt
             /Gw
             /GF
             /Zc:threadSafeInit-
@@ -291,12 +335,26 @@ if(SHADERLAB_BUILD_EDITOR)
     endif()
 endif()
 
+if(SHADERLAB_BUILD_EDITOR)
+    add_executable(ShaderLabBuildCli
+        src/app/tools/build_cli.cpp
+    )
+
+    target_link_libraries(ShaderLabBuildCli PRIVATE ShaderLabCore)
+
+    target_include_directories(ShaderLabBuildCli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+endif()
+
 # Runtime executable
 if(SHADERLAB_BUILD_RUNTIME)
     add_executable(ShaderLabPlayer WIN32
         src/app/runtime/main_player.cpp
+        src/app/runtime/PlayerApp.cpp
         src/app/runtime/DemoPlayer.cpp
         include/ShaderLab/App/DemoPlayer.h
+        include/ShaderLab/App/PlayerApp.h
     )
     
     target_link_libraries(ShaderLabPlayer PRIVATE ShaderLabCore)
@@ -317,6 +375,44 @@ if(SHADERLAB_BUILD_RUNTIME)
             )
         else()
             target_link_options(ShaderLabPlayer PRIVATE
+                /INCREMENTAL:NO
+                /OPT:REF
+                /OPT:ICF
+                /LTCG
+                /MANIFEST:NO
+                /RELEASE
+            )
+        endif()
+    endif()
+
+    add_executable(ShaderLabScreenSaver WIN32
+        src/app/runtime/main_screensaver.cpp
+        src/app/runtime/PlayerApp.cpp
+        src/app/runtime/DemoPlayer.cpp
+        include/ShaderLab/App/DemoPlayer.h
+        include/ShaderLab/App/PlayerApp.h
+    )
+
+    target_link_libraries(ShaderLabScreenSaver PRIVATE ShaderLabCore)
+
+    target_include_directories(ShaderLabScreenSaver PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    set_target_properties(ShaderLabScreenSaver PROPERTIES SUFFIX ".scr")
+
+    if(MSVC AND SHADERLAB_TINY_PLAYER)
+        if(SHADERLAB_USE_CRINKLER)
+            target_link_options(ShaderLabScreenSaver PRIVATE
+                /INCREMENTAL:NO
+                /MANIFEST:NO
+                /RELEASE
+                /COMPMODE:SLOW
+                /ORDERTRIES:80
+                /UNALIGNCODE
+            )
+        else()
+            target_link_options(ShaderLabScreenSaver PRIVATE
                 /INCREMENTAL:NO
                 /OPT:REF
                 /OPT:ICF

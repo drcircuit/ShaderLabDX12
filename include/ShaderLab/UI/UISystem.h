@@ -11,6 +11,7 @@
 #include <mutex>
 #include <fstream>
 #include <cstddef>
+#include <unordered_map>
 #include "TextEditor.h"
 #include "ShaderLab/Core/BuildPipeline.h"
 #include "ShaderLab/Core/ShaderLabData.h"
@@ -288,12 +289,22 @@ private:
 
     std::vector<std::string> m_demoLog;
     bool m_demoLogAutoScroll = true;
+    bool m_playbackBlockedByCompileError = false;
+    bool m_screenKeysOverlayEnabled = false;
+    std::vector<std::string> m_screenKeyLog;
 
     void SaveProject();
     void SaveProjectAs();
     void OpenProject();
+    void LoadProjectUiSettings();
+    void SaveProjectUiSettings() const;
     void BuildProject();
+    void BuildScreenSaverProject();
+    void BuildPackagedDemoProject();
+    void BuildMicroDemoProject();
+    void BuildMicroDeveloperDemoProject();
     void ShowBuildSettingsWindow();
+    void RefreshMicroUbershaderConflictCache();
     void ExportRuntimePackage();
     void SeekToBeat(int beat);
 
@@ -309,14 +320,21 @@ private:
     bool m_buildComplete = false;
     bool m_buildSuccess = false;
     bool m_showBuildSettings = false;
+    BuildTargetKind m_buildSettingsTargetKind = BuildTargetKind::SelfContainedDemo;
     BuildMode m_buildSettingsMode = BuildMode::Release;
     SizeTargetPreset m_buildSettingsSizeTarget = SizeTargetPreset::K16;
     bool m_buildSettingsRestrictedCompactTrack = false;
     bool m_buildSettingsRuntimeDebugLog = false;
     bool m_buildSettingsCompactTrackDebugLog = false;
+    bool m_buildSettingsMicroDeveloperBuild = false;
+    std::string m_buildSettingsCleanSolutionRootPath;
+    std::string m_buildSettingsCrinklerPath;
     BuildPrereqReport m_buildSettingsPrereq;
     bool m_buildSettingsRefreshRequested = true;
     bool m_buildSettingsAutoSwitchedToCrinkled = false;
+    std::vector<MicroUbershaderConflict> m_microUbershaderConflicts;
+    std::unordered_map<std::string, std::vector<std::string>> m_microUbershaderKeepEntrypointsBySignature;
+    bool m_microUbershaderConflictsDirty = true;
     void UpdateBuildLogic();
 
     void RenderAboutLogo(ID3D12GraphicsCommandList* commandList);

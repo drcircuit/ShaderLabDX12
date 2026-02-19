@@ -27,6 +27,7 @@ public:
 private:
     PackageManager() = default;
 
+    bool m_initialized = false;
     bool m_isPacked = false;
     std::string m_exePath;
     uint64_t m_packRequestOffset = 0; // Where the pack data starts in the file

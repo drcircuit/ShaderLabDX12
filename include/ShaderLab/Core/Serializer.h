@@ -24,6 +24,11 @@ namespace Serializer {
     // Packs an executable with assets
     bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath);
     bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath, const std::vector<PackedExtraFile>& extraFiles);
+    bool PackExecutable(const std::string& sourceExe,
+                        const std::string& outputExe,
+                        const std::string& projectJsonPath,
+                        const std::vector<PackedExtraFile>& extraFiles,
+                        bool includeProjectManifest);
 
 }
 }

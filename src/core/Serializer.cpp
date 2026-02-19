@@ -9,6 +9,65 @@ using json = nlohmann::json;
 
 namespace ShaderLab {
 
+namespace {
+
+std::string NormalizePathSlashes(std::string value) {
+    std::replace(value.begin(), value.end(), '\\', '/');
+    return value;
+}
+
+bool TryReadTextFile(const fs::path& filePath, std::string& outContent) {
+    std::ifstream input(filePath, std::ios::binary);
+    if (!input.is_open()) {
+        return false;
+    }
+    outContent.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    return true;
+}
+
+bool TryParseCodeLink(const std::string& codeField, std::string& outPath) {
+    constexpr const char* kPrefix = "@file:";
+    if (codeField.rfind(kPrefix, 0) != 0) {
+        return false;
+    }
+    outPath = NormalizePathSlashes(codeField.substr(6));
+    return !outPath.empty();
+}
+
+void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirectory) {
+    auto resolveShader = [&](std::string& shaderCode, std::string& shaderCodePath) {
+        if (shaderCodePath.empty()) {
+            std::string linkedPath;
+            if (TryParseCodeLink(shaderCode, linkedPath)) {
+                shaderCodePath = linkedPath;
+            }
+        }
+
+        if (shaderCodePath.empty()) {
+            return;
+        }
+
+        fs::path sourcePath = fs::path(shaderCodePath);
+        if (!sourcePath.is_absolute()) {
+            sourcePath = projectDirectory / sourcePath;
+        }
+
+        std::string fileContent;
+        if (TryReadTextFile(sourcePath, fileContent)) {
+            shaderCode = fileContent;
+        }
+    };
+
+    for (auto& scene : project.scenes) {
+        resolveShader(scene.shaderCode, scene.shaderCodePath);
+        for (auto& fx : scene.postFxChain) {
+            resolveShader(fx.shaderCode, fx.shaderCodePath);
+        }
+    }
+}
+
+} // namespace
+
     // Helper conversions - Moved to ShaderLab namespace for ADL
     NLOHMANN_JSON_SERIALIZE_ENUM(TextureType, {
         {TextureType::Texture2D, "Texture2D"},
@@ -73,12 +132,14 @@ namespace ShaderLab {
             {"code", e.shaderCode},
             {"enabled", e.enabled}
         };
+        if (!e.shaderCodePath.empty()) j["codePath"] = e.shaderCodePath;
         if (!e.precompiledPath.empty()) j["precompiled"] = e.precompiledPath;
     }
 
     void from_json(const json& j, Scene::PostFXEffect& e) {
         j.at("name").get_to(e.name);
-        j.at("code").get_to(e.shaderCode);
+        if (j.contains("code")) j.at("code").get_to(e.shaderCode);
+        if (j.contains("codePath")) j.at("codePath").get_to(e.shaderCodePath);
         if (j.contains("enabled")) j.at("enabled").get_to(e.enabled);
         if (j.contains("precompiled")) j.at("precompiled").get_to(e.precompiledPath);
         e.isDirty = true;
@@ -95,13 +156,15 @@ namespace ShaderLab {
             {"bindings", s.bindings},
             {"outputType", s.outputType}
         };
+        if (!s.shaderCodePath.empty()) j["codePath"] = s.shaderCodePath;
         if (!s.postFxChain.empty()) j["postfx"] = s.postFxChain;
         if (!s.precompiledPath.empty()) j["precompiled"] = s.precompiledPath;
     }
 
     void from_json(const json& j, Scene& s) {
         j.at("name").get_to(s.name);
-        j.at("code").get_to(s.shaderCode);
+        if (j.contains("code")) j.at("code").get_to(s.shaderCode);
+        if (j.contains("codePath")) j.at("codePath").get_to(s.shaderCodePath);
         j.at("bindings").get_to(s.bindings);
         if(j.contains("outputType")) j.at("outputType").get_to(s.outputType);
         if(j.contains("postfx")) j.at("postfx").get_to(s.postFxChain);
@@ -206,6 +269,7 @@ namespace Serializer {
         json j;
         i >> j;
         outProject = j.get<ProjectData>();
+        ResolveLinkedShaderCode(outProject, fs::path(filepath).parent_path());
         return true;
     }
 
@@ -304,8 +368,7 @@ namespace Serializer {
 
         auto normalizePath = [](const std::string& p) -> std::string {
              std::string s = p;
-             std::replace(s.begin(), s.end(), '\\', '/');
-             return s;
+               return NormalizePathSlashes(s);
         };
 
         auto isInside = [&](const fs::path& p, const fs::path& root) {
@@ -414,7 +477,11 @@ namespace Serializer {
         uint64_t size;
     };
 
-    bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath, const std::vector<PackedExtraFile>& extraFiles) {
+    bool PackExecutable(const std::string& sourceExe,
+                        const std::string& outputExe,
+                        const std::string& projectJsonPath,
+                        const std::vector<PackedExtraFile>& extraFiles,
+                        bool includeProjectManifest) {
         // 1. Read Source EXE
         std::ifstream src(sourceExe, std::ios::binary);
         if (!src.is_open()) return false;
@@ -423,14 +490,16 @@ namespace Serializer {
 
         // 2. Load Project to find assets
         ProjectData project;
-        if (!LoadProject(projectJsonPath, project)) return false;
+        const bool hasProjectJsonPath = !projectJsonPath.empty();
+        const bool loadProjectAssets = hasProjectJsonPath && includeProjectManifest;
+        if (loadProjectAssets && !LoadProject(projectJsonPath, project)) return false;
 
         // 3. Prepare Pack Data
         std::vector<uint8_t> packBlob;
         std::vector<PackedEntryInfo> entries;
         
         // Add project.json
-        {
+        if (includeProjectManifest && hasProjectJsonPath) {
             std::ifstream f(projectJsonPath, std::ios::binary);
             std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
             PackedEntryInfo info;
@@ -442,22 +511,25 @@ namespace Serializer {
         }
 
         // Add Assets (Audio)
-        for(const auto& clip : project.audioLibrary) {
-            fs::path p = fs::path(projectJsonPath).parent_path() / clip.path;
-            if (fs::exists(p)) {
-                 std::ifstream f(p, std::ios::binary);
-                 std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                 PackedEntryInfo info;
-                 info.path = clip.path; // Store relative path as used in JSON
-                 std::replace(info.path.begin(), info.path.end(), '\\', '/');
-                 info.offset = packBlob.size();
-                 info.size = data.size();
-                 entries.push_back(info);
-                 packBlob.insert(packBlob.end(), data.begin(), data.end());
+        if (loadProjectAssets) {
+            for(const auto& clip : project.audioLibrary) {
+                fs::path p = fs::path(projectJsonPath).parent_path() / clip.path;
+                if (fs::exists(p)) {
+                     std::ifstream f(p, std::ios::binary);
+                     std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                     PackedEntryInfo info;
+                     info.path = clip.path; // Store relative path as used in JSON
+                     std::replace(info.path.begin(), info.path.end(), '\\', '/');
+                     info.offset = packBlob.size();
+                     info.size = data.size();
+                     entries.push_back(info);
+                     packBlob.insert(packBlob.end(), data.begin(), data.end());
+                }
             }
         }
         
         // Add Assets (Texture Bindings & Precompiled Shaders)
+        if (loadProjectAssets) {
         for(const auto& scene : project.scenes) {
             // Textures
             for(const auto& bind : scene.bindings) {
@@ -522,6 +594,7 @@ namespace Serializer {
                 }
             }
         }
+        }
 
         for (const auto& extra : extraFiles) {
             fs::path p = extra.sourcePath;
@@ -574,6 +647,17 @@ namespace Serializer {
 
         // 5. Write Output EXE
         // Layout: [EXE][PACK_DATA][DIRECTORY_BLOB][DIR_OFFSET_U64][MAGIC]
+        {
+            std::error_code ec;
+            fs::path outputPath(outputExe);
+            if (!outputPath.parent_path().empty()) {
+                fs::create_directories(outputPath.parent_path(), ec);
+                if (ec) {
+                    return false;
+                }
+            }
+        }
+
         std::ofstream out(outputExe, std::ios::binary);
         if (!out.is_open()) return false;
         
@@ -588,12 +672,17 @@ namespace Serializer {
         out.write((const char*)&dirStartOffset, sizeof(uint64_t));
         const char MAGIC[] = "SHADERLAB_PACK";
         out.write(MAGIC, 14); // 14 bytes
-        
-        return true;
+
+        out.flush();
+        return out.good();
+    }
+
+    bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath, const std::vector<PackedExtraFile>& extraFiles) {
+        return PackExecutable(sourceExe, outputExe, projectJsonPath, extraFiles, true);
     }
 
     bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath) {
-        return PackExecutable(sourceExe, outputExe, projectJsonPath, {});
+        return PackExecutable(sourceExe, outputExe, projectJsonPath, {}, true);
     }
 
 

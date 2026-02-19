@@ -31,6 +31,11 @@ public:
     // Compile and return pipeline state.
     ComPtr<ID3D12PipelineState> CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors);
     ComPtr<ID3D12PipelineState> CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors, bool flipFragCoord);
+    ComPtr<ID3D12PipelineState> CompileShader(const std::string& shaderSource,
+                                              const std::vector<TextureDecl>& textureDecls,
+                                              std::vector<std::string>& outErrors,
+                                              bool flipFragCoord,
+                                              const std::string& shaderEntryPoint);
     
     // Create pipeline state from pre-compiled bytecode
     ComPtr<ID3D12PipelineState> CreatePSOFromBytecode(const std::vector<uint8_t>& psBytecode);

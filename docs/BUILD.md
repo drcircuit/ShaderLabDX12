@@ -72,6 +72,16 @@ Typical outputs:
 - Runtime/player outputs: under active build directory `bin/`
 - Packaged assets: `build_selfcontained_pack/` when packaging is used
 
+## Clean Solution Export Format
+
+For all build modes/targets, the exported clean solution folder uses linked shader sources:
+
+- `project.json` stores shader references (`codePath` and `code` as `@file:<relative-path>`)
+- Scene and post-FX HLSL files are written under `assets/shaders/hlsl/`
+- Shader source is not embedded inline in clean-solution `project.json`
+
+This keeps the clean solution recompile-friendly when you edit and rebuild shaders directly from source files.
+
 ## Troubleshooting
 
 - Missing compiler headers (`cstdint`, `string`, `excpt.h`) usually means MSVC environment is not loaded correctly.

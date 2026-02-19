@@ -185,6 +185,63 @@ void UISystem::ShowModeWindows() {
             ImGui::Dummy(drawSize);
         }
 
+        if (m_currentMode == UIMode::Scene && m_screenKeysOverlayEnabled) {
+            ImGui::SetNextWindowPos(ImVec2(screenStart.x + 8.0f, screenStart.y + 8.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.68f);
+            ImGuiWindowFlags overlayFlags =
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoDocking |
+                ImGuiWindowFlags_NoNav |
+                ImGuiWindowFlags_NoFocusOnAppearing;
+
+            ImGui::SetNextWindowSize(ImVec2(330.0f, 200.0f), ImGuiCond_Always);
+
+            if (ImGui::Begin("##ScreenKeysOverlay", nullptr, overlayFlags)) {
+                if (m_fontMenuSmall) {
+                    ImGui::PushFont(m_fontMenuSmall);
+                }
+
+                ImGui::TextUnformatted("Screen Keys");
+                ImGui::SameLine();
+                if (IconButton("ScreenKeysCopy", OpenFontIcons::kCopy, "Copy key log", CompactActionSize())) {
+                    std::string clipboard;
+                    clipboard.reserve(m_screenKeyLog.size() * 8);
+                    for (size_t i = 0; i < m_screenKeyLog.size(); ++i) {
+                        if (i > 0) {
+                            clipboard.push_back('\n');
+                        }
+                        clipboard += m_screenKeyLog[i];
+                    }
+                    if (clipboard.empty()) {
+                        clipboard = "(empty)";
+                    }
+                    ImGui::SetClipboardText(clipboard.c_str());
+                }
+                ImGui::SameLine();
+                if (IconButton("ScreenKeysClear", OpenFontIcons::kTrash2, "Clear key log", CompactActionSize())) {
+                    m_screenKeyLog.clear();
+                }
+
+                ImGui::Separator();
+                if (m_screenKeyLog.empty()) {
+                    ImGui::TextDisabled("No keys yet");
+                } else {
+                    ImGui::BeginChild("ScreenKeyLogScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                    for (int i = 0; i < (int)m_screenKeyLog.size(); ++i) {
+                        ImGui::TextUnformatted(m_screenKeyLog[i].c_str());
+                    }
+                    ImGui::SetScrollHereY(1.0f);
+                    ImGui::EndChild();
+                }
+
+                if (m_fontMenuSmall) {
+                    ImGui::PopFont();
+                }
+            }
+            ImGui::End();
+        }
+
         ImGui::SetCursorPos(cursorStart);
         ImGui::Dummy(avail);
 
@@ -788,7 +845,16 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
         // Properties for active scene
         if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
             auto& scene = m_scenes[m_activeSceneIndex];
-            ImGui::Text("Scene Config: %s", scene.name.c_str());
+            ImGui::Text("Scene Config");
+
+            char sceneNameBuffer[128];
+            std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "%s", scene.name.c_str());
+            if (ImGui::InputText("Scene Name", sceneNameBuffer, sizeof(sceneNameBuffer))) {
+                if (sceneNameBuffer[0] == '\0') {
+                    std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "Scene %d", m_activeSceneIndex + 1);
+                }
+                scene.name = sceneNameBuffer;
+            }
 
             // Audio/Tracker settings moved to Demo Playlist view
             ImGui::TextDisabled("Audio managed in 'Demo: Playlist'");
@@ -1158,9 +1224,11 @@ void UISystem::ShowShaderEditor() {
 
                         if (anyErrors) {
                             m_shaderState.status = CompileStatus::Error;
+                            m_playbackBlockedByCompileError = true;
                         } else {
                             m_shaderState.status = CompileStatus::Success;
                             m_shaderState.lastCompiledText = m_shaderState.text;
+                            m_playbackBlockedByCompileError = false;
                         }
                     } else {
                         m_shaderState.status = CompileStatus::Error;
@@ -1197,11 +1265,13 @@ void UISystem::ShowShaderEditor() {
 
                         m_shaderState.status = CompileStatus::Success;
                         m_shaderState.lastCompiledText = m_shaderState.text;
+                        m_playbackBlockedByCompileError = false;
                     } else {
                         if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
                             m_scenes[m_activeSceneIndex].compiledShaderBytes = 0;
                         }
                         m_shaderState.status = CompileStatus::Error;
+                        m_playbackBlockedByCompileError = true;
                         for (const auto& error : errors) {
                             Diagnostic diag;
                             diag.message = error;
@@ -1406,6 +1476,7 @@ void UISystem::ShowShaderEditor() {
         if (ctrlEnterPressed) {
             m_textEditor.SetHandleKeyboardInputs(false);
         }
+        m_textEditor.SetHandleMouseInputs(true);
         int codeFontIndex = (std::max)(0, (std::min)(4, (int)m_shaderState.codeFontSize));
         ImFont* activeCodeFont = m_fontCodeSizes[codeFontIndex] ? m_fontCodeSizes[codeFontIndex] : m_fontCode;
         if (activeCodeFont) {

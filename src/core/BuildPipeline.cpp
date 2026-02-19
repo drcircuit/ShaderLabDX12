@@ -3,10 +3,14 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ShaderLab/Core/Serializer.h"
@@ -35,6 +39,16 @@ const char* SizePresetName(SizeTargetPreset preset) {
     }
 }
 
+const char* BuildTargetName(BuildTargetKind target) {
+    switch (target) {
+        case BuildTargetKind::PackagedDemo: return "Packaged Demo";
+        case BuildTargetKind::SelfContainedDemo: return "Self-Contained Demo";
+        case BuildTargetKind::SelfContainedScreenSaver: return "Self-Contained Screensaver";
+        case BuildTargetKind::MicroDemo: return "Micro-Demo";
+        default: return "Self-Contained Demo";
+    }
+}
+
 uint64_t SizePresetToBytes(SizeTargetPreset preset) {
     switch (preset) {
         case SizeTargetPreset::K1: return 1024ull;
@@ -58,6 +72,18 @@ bool IsTinySizeTarget(SizeTargetPreset preset) {
             return true;
         default:
             return false;
+    }
+}
+
+int TransitionIndex(TransitionType type) {
+    switch (type) {
+        case TransitionType::Crossfade: return 0;
+        case TransitionType::DipToBlack: return 1;
+        case TransitionType::FadeOut: return 2;
+        case TransitionType::FadeIn: return 3;
+        case TransitionType::Glitch: return 4;
+        case TransitionType::Pixelate: return 5;
+        default: return 6;
     }
 }
 
@@ -205,7 +231,7 @@ bool HasWindowsSdk(std::string& outPath) {
     return false;
 }
 
-bool ResolveCrinklerPath(std::string& outPath) {
+bool ResolveCrinklerPath(const fs::path& appRoot, std::string& outPath) {
     auto envToPath = [&](const char* varName) -> bool {
         char buffer[MAX_PATH] = {};
         DWORD len = GetEnvironmentVariableA(varName, buffer, MAX_PATH);
@@ -232,6 +258,21 @@ bool ResolveCrinklerPath(std::string& outPath) {
     if (envToPath("CRINKLER_PATH")) return true;
 
     if (FindOnPathFull("crinkler.exe", outPath)) return true;
+
+    const fs::path bundledCandidates[] = {
+        appRoot / "third_party" / "crinkler.exe",
+        appRoot / "third_party" / "Crinkler.exe",
+        appRoot / "third_party" / "crinkler" / "Win64" / "crinkler.exe",
+        appRoot / "third_party" / "Crinkler" / "Win64" / "crinkler.exe",
+        appRoot / "third_party" / "crinkler" / "Win32" / "crinkler.exe",
+        appRoot / "third_party" / "Crinkler" / "Win32" / "crinkler.exe"
+    };
+    for (const auto& candidate : bundledCandidates) {
+        if (FileExists(candidate)) {
+            outPath = candidate.string();
+            return true;
+        }
+    }
 
     const char* knownPaths[] = {
         "C:\\Program Files\\Crinkler\\crinkler.exe",
@@ -279,7 +320,22 @@ bool HasDxcRuntime(const fs::path& appRoot) {
 
 std::string BuildPixelShaderSource(const std::string& shaderSource,
                                    const std::vector<PreviewRenderer::TextureDecl>& textureDecls,
-                                   bool flipFragCoord = false) {
+                                   bool flipFragCoord = false,
+                                   const std::string& shaderEntryPoint = "main") {
+    int declaredChannels = -1;
+    for (int i = 0; i < 8; ++i) {
+        if (shaderSource.find("iChannel" + std::to_string(i)) != std::string::npos ||
+            shaderSource.find("iSampler" + std::to_string(i)) != std::string::npos) {
+            declaredChannels = (std::max)(declaredChannels, i);
+        }
+    }
+    for (const auto& decl : textureDecls) {
+        if (decl.slot >= 0 && decl.slot < 8) {
+            declaredChannels = (std::max)(declaredChannels, decl.slot);
+        }
+    }
+    const int slotCount = declaredChannels + 1;
+
     std::string wrapped = R"(
 cbuffer Constants : register(b0) {
     float iTime;
@@ -287,7 +343,7 @@ cbuffer Constants : register(b0) {
 };
 )";
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < slotCount; ++i) {
         std::string type = "Texture2D";
         for (const auto& decl : textureDecls) {
             if (decl.slot == i) {
@@ -299,7 +355,7 @@ cbuffer Constants : register(b0) {
     }
 
     wrapped += "\n";
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < slotCount; ++i) {
         wrapped += "SamplerState iSampler" + std::to_string(i) + " : register(s" + std::to_string(i) + ");\n";
     }
 
@@ -321,8 +377,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
     } else {
         wrapped += "    float2 fragCoord = input.fragCoord;\n";
     }
+    wrapped += "    return " + shaderEntryPoint + "(fragCoord, iResolution, iTime);\n";
     wrapped += R"(
-    return main(fragCoord, iResolution, iTime);
 }
 )";
     return wrapped;
@@ -344,6 +400,106 @@ bool WriteBinaryFile(const fs::path& path, const std::vector<uint8_t>& data, std
     return true;
 }
 
+bool EnsureOutputArtifactWritable(const fs::path& outputPath, std::string& outError) {
+    std::error_code ec;
+    if (!outputPath.parent_path().empty()) {
+        fs::create_directories(outputPath.parent_path(), ec);
+        if (ec) {
+            outError = "Failed to create output directory: " + outputPath.parent_path().string();
+            return false;
+        }
+    }
+
+    if (!fs::exists(outputPath, ec) || ec) {
+        return true;
+    }
+
+    const std::string outputPathString = outputPath.string();
+    HANDLE outputHandle = CreateFileA(outputPathString.c_str(),
+                                      GENERIC_WRITE,
+                                      FILE_SHARE_READ,
+                                      nullptr,
+                                      OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL,
+                                      nullptr);
+    if (outputHandle == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_ACCESS_DENIED) {
+            outError = "Output artifact is in use or write-protected: " + outputPathString +
+                       ". Close any running instance before rebuilding.";
+        } else {
+            outError = "Unable to open output artifact for overwrite: " + outputPathString +
+                       " (Win32 error " + std::to_string(static_cast<unsigned int>(error)) + ").";
+        }
+        return false;
+    }
+
+    CloseHandle(outputHandle);
+    return true;
+}
+
+bool WriteTextFile(const fs::path& path, const std::string& content, std::string& outError) {
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    std::ofstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        outError = "Failed to write: " + path.string();
+        return false;
+    }
+    file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    if (!file.good()) {
+        outError = "Failed to write: " + path.string();
+        return false;
+    }
+    return true;
+}
+
+bool WriteMicroUbershaderBytecodeBlob(const std::vector<std::vector<uint8_t>>& modules,
+                                      const fs::path& outputPath,
+                                      std::string& outError) {
+    std::vector<uint8_t> blob;
+    const uint32_t magic = 0x30425553u; // 'SUB0'
+    const uint16_t version = 1;
+    const uint16_t moduleCount = static_cast<uint16_t>((std::min)(modules.size(), static_cast<size_t>(65535)));
+
+    auto appendU16 = [&blob](uint16_t value) {
+        blob.push_back(static_cast<uint8_t>(value & 0xFFu));
+        blob.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+    };
+    auto appendU32 = [&blob](uint32_t value) {
+        blob.push_back(static_cast<uint8_t>(value & 0xFFu));
+        blob.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+        blob.push_back(static_cast<uint8_t>((value >> 16) & 0xFFu));
+        blob.push_back(static_cast<uint8_t>((value >> 24) & 0xFFu));
+    };
+
+    appendU32(magic);
+    appendU16(version);
+    appendU16(moduleCount);
+
+    const size_t tableOffset = blob.size();
+    blob.resize(blob.size() + static_cast<size_t>(moduleCount) * 8u, 0u);
+
+    auto writeU32At = [&blob](size_t pos, uint32_t value) {
+        blob[pos + 0] = static_cast<uint8_t>(value & 0xFFu);
+        blob[pos + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+        blob[pos + 2] = static_cast<uint8_t>((value >> 16) & 0xFFu);
+        blob[pos + 3] = static_cast<uint8_t>((value >> 24) & 0xFFu);
+    };
+
+    for (uint16_t moduleIndex = 0; moduleIndex < moduleCount; ++moduleIndex) {
+        const auto& bytecode = modules[moduleIndex];
+        const uint32_t offset = static_cast<uint32_t>(blob.size());
+        const uint32_t size = static_cast<uint32_t>(bytecode.size());
+        const size_t rowPos = tableOffset + static_cast<size_t>(moduleIndex) * 8u;
+        writeU32At(rowPos, offset);
+        writeU32At(rowPos + 4u, size);
+        blob.insert(blob.end(), bytecode.begin(), bytecode.end());
+    }
+
+    return WriteBinaryFile(outputPath, blob, outError);
+}
+
 constexpr uint32_t kEmbeddedTrackMagic = 0x4B52544Du; // 'MTRK'
 
 struct EmbeddedTrackFooter {
@@ -358,9 +514,479 @@ void AppendValue(std::vector<uint8_t>& output, const T& value) {
     output.insert(output.end(), ptr, ptr + sizeof(T));
 }
 
-bool BuildCompactTrackBinary(const DemoTrack& track, std::vector<uint8_t>& outData) {
+std::string GetTransitionShaderSourceForBuild(TransitionType type);
+std::string MinifyShaderTextForPack(const std::string& input);
+
+struct TinyModuleMap {
+    std::vector<std::string> modules;
+    std::vector<std::string> moduleEntrypoints;
+    std::vector<std::string> moduleLabels;
+    std::vector<int16_t> sceneModuleIndices;
+    std::vector<std::vector<int16_t>> postFxModuleIndices;
+    int16_t transitionModuleIndices[7] = { -1, -1, -1, -1, -1, -1, -1 };
+};
+
+struct ParsedFunctionDecl {
+    std::string signatureKey;
+    std::string signatureDisplay;
+    std::string functionName;
+    size_t signatureStart = 0;
+    size_t bodyStart = 0;
+    size_t bodyEnd = 0;
+};
+
+struct ModuleConflictBinding {
+    int moduleIndex = -1;
+    std::string moduleEntrypoint;
+    std::string moduleLabel;
+    std::string signature;
+    std::string snippet;
+    std::string functionName;
+    size_t signatureStart = 0;
+    size_t bodyEnd = 0;
+};
+
+bool IsIdentifierStart(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_';
+}
+
+bool IsIdentifierChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+}
+
+std::string ReadIdentifier(const std::string& source, size_t& pos) {
+    if (pos >= source.size() || !IsIdentifierStart(source[pos])) {
+        return {};
+    }
+    const size_t start = pos;
+    ++pos;
+    while (pos < source.size() && IsIdentifierChar(source[pos])) {
+        ++pos;
+    }
+    return source.substr(start, pos - start);
+}
+
+void SkipWhitespace(const std::string& source, size_t& pos) {
+    while (pos < source.size() && std::isspace(static_cast<unsigned char>(source[pos])) != 0) {
+        ++pos;
+    }
+}
+
+size_t FindMatchingPair(const std::string& source, size_t openPos, char open, char close) {
+    if (openPos >= source.size() || source[openPos] != open) {
+        return std::string::npos;
+    }
+    int depth = 0;
+    for (size_t i = openPos; i < source.size(); ++i) {
+        if (source[i] == open) {
+            ++depth;
+        } else if (source[i] == close) {
+            --depth;
+            if (depth == 0) {
+                return i;
+            }
+        }
+    }
+    return std::string::npos;
+}
+
+std::vector<ParsedFunctionDecl> ParseTopLevelFunctions(const std::string& source) {
+    std::vector<ParsedFunctionDecl> out;
+
+    size_t scan = 0;
+    while (scan < source.size()) {
+        size_t cursor = scan;
+        const size_t signatureStart = cursor;
+        const std::string returnType = ReadIdentifier(source, cursor);
+        if (returnType.empty()) {
+            ++scan;
+            continue;
+        }
+
+        SkipWhitespace(source, cursor);
+        const std::string functionName = ReadIdentifier(source, cursor);
+        if (functionName.empty()) {
+            scan = cursor;
+            continue;
+        }
+
+        SkipWhitespace(source, cursor);
+        if (cursor >= source.size() || source[cursor] != '(') {
+            scan = cursor;
+            continue;
+        }
+
+        const size_t closeParen = FindMatchingPair(source, cursor, '(', ')');
+        if (closeParen == std::string::npos) {
+            break;
+        }
+
+        size_t bodyCursor = closeParen + 1;
+        SkipWhitespace(source, bodyCursor);
+        if (bodyCursor >= source.size() || source[bodyCursor] != '{') {
+            scan = cursor + 1;
+            continue;
+        }
+
+        const size_t bodyEnd = FindMatchingPair(source, bodyCursor, '{', '}');
+        if (bodyEnd == std::string::npos) {
+            break;
+        }
+
+        const std::string params = source.substr(cursor + 1, closeParen - cursor - 1);
+        ParsedFunctionDecl decl;
+        decl.signatureKey = returnType + " " + functionName + "(" + params + ")";
+        decl.signatureDisplay = returnType + " " + functionName + "(" + params + ")";
+        decl.functionName = functionName;
+        decl.signatureStart = signatureStart;
+        decl.bodyStart = bodyCursor;
+        decl.bodyEnd = bodyEnd;
+        out.push_back(std::move(decl));
+
+        scan = bodyEnd + 1;
+    }
+
+    return out;
+}
+
+std::unordered_map<std::string, std::vector<ModuleConflictBinding>> BuildMicroConflictBindings(const TinyModuleMap& map) {
+    std::unordered_map<std::string, std::vector<ModuleConflictBinding>> grouped;
+    for (size_t moduleIndex = 0; moduleIndex < map.modules.size(); ++moduleIndex) {
+        const std::string& moduleCode = map.modules[moduleIndex];
+        const std::string moduleEntrypoint =
+            (moduleIndex < map.moduleEntrypoints.size()) ? map.moduleEntrypoints[moduleIndex] : std::string();
+        const std::string moduleLabel =
+            (moduleIndex < map.moduleLabels.size()) ? map.moduleLabels[moduleIndex] : std::string();
+
+        const auto functions = ParseTopLevelFunctions(moduleCode);
+        for (const auto& fn : functions) {
+            if (fn.functionName.empty() || fn.functionName == moduleEntrypoint) {
+                continue;
+            }
+
+            ModuleConflictBinding binding;
+            binding.moduleIndex = static_cast<int>(moduleIndex);
+            binding.moduleEntrypoint = moduleEntrypoint;
+            binding.moduleLabel = moduleLabel;
+            binding.signature = fn.signatureDisplay;
+            binding.functionName = fn.functionName;
+            binding.signatureStart = fn.signatureStart;
+            binding.bodyEnd = fn.bodyEnd;
+
+            const size_t snippetEnd = (std::min)(fn.bodyEnd + 1, fn.signatureStart + static_cast<size_t>(320));
+            binding.snippet = moduleCode.substr(fn.signatureStart, snippetEnd - fn.signatureStart);
+
+            grouped[fn.signatureKey].push_back(std::move(binding));
+        }
+    }
+    return grouped;
+}
+
+std::string ScopeLocalFunctionsForModule(
+    const std::string& shaderCode,
+    const std::string& entrypointName,
+    const std::unordered_set<std::string>* preserveGlobalNames = nullptr) {
+    auto isIdentStart = [](char c) {
+        return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_';
+    };
+    auto isIdentChar = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+    };
+
+    auto readIdent = [&](const std::string& src, size_t& pos) -> std::string {
+        if (pos >= src.size() || !isIdentStart(src[pos])) {
+            return {};
+        }
+        const size_t start = pos;
+        ++pos;
+        while (pos < src.size() && isIdentChar(src[pos])) {
+            ++pos;
+        }
+        return src.substr(start, pos - start);
+    };
+
+    auto skipWhitespace = [](const std::string& src, size_t& pos) {
+        while (pos < src.size() && std::isspace(static_cast<unsigned char>(src[pos])) != 0) {
+            ++pos;
+        }
+    };
+
+    auto findMatchingParen = [](const std::string& src, size_t openPos) -> size_t {
+        if (openPos >= src.size() || src[openPos] != '(') {
+            return std::string::npos;
+        }
+        int depth = 0;
+        for (size_t i = openPos; i < src.size(); ++i) {
+            if (src[i] == '(') {
+                ++depth;
+            } else if (src[i] == ')') {
+                --depth;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return std::string::npos;
+    };
+
+    std::unordered_map<std::string, std::string> renameMap;
+    size_t scan = 0;
+    while (scan < shaderCode.size()) {
+        size_t cursor = scan;
+        std::string returnType = readIdent(shaderCode, cursor);
+        if (returnType.empty()) {
+            ++scan;
+            continue;
+        }
+
+        skipWhitespace(shaderCode, cursor);
+        std::string funcName = readIdent(shaderCode, cursor);
+        if (funcName.empty()) {
+            scan = cursor;
+            continue;
+        }
+
+        skipWhitespace(shaderCode, cursor);
+        if (cursor >= shaderCode.size() || shaderCode[cursor] != '(') {
+            scan = cursor;
+            continue;
+        }
+
+        const size_t closeParen = findMatchingParen(shaderCode, cursor);
+        if (closeParen == std::string::npos) {
+            break;
+        }
+
+        size_t bodyCursor = closeParen + 1;
+        skipWhitespace(shaderCode, bodyCursor);
+        if (bodyCursor < shaderCode.size() && shaderCode[bodyCursor] == '{') {
+            if (funcName != entrypointName && (!preserveGlobalNames || preserveGlobalNames->find(funcName) == preserveGlobalNames->end())) {
+                renameMap[funcName] = "__" + entrypointName + "_" + funcName;
+            }
+            scan = bodyCursor + 1;
+            continue;
+        }
+
+        scan = cursor + 1;
+    }
+
+    if (renameMap.empty()) {
+        return shaderCode;
+    }
+
+    std::string out;
+    out.reserve(shaderCode.size() + renameMap.size() * 16);
+
+    size_t pos = 0;
+    while (pos < shaderCode.size()) {
+        if (!isIdentStart(shaderCode[pos])) {
+            out.push_back(shaderCode[pos]);
+            ++pos;
+            continue;
+        }
+
+        size_t tokenStart = pos;
+        ++pos;
+        while (pos < shaderCode.size() && isIdentChar(shaderCode[pos])) {
+            ++pos;
+        }
+        const std::string token = shaderCode.substr(tokenStart, pos - tokenStart);
+
+        size_t lookahead = pos;
+        while (lookahead < shaderCode.size() && std::isspace(static_cast<unsigned char>(shaderCode[lookahead])) != 0) {
+            ++lookahead;
+        }
+
+        const auto it = renameMap.find(token);
+        if (it != renameMap.end() && lookahead < shaderCode.size() && shaderCode[lookahead] == '(') {
+            out += it->second;
+        } else {
+            out += token;
+        }
+    }
+
+    return out;
+}
+
+std::string RemapMainToEntrypoint(const std::string& shaderCode, const std::string& entrypointName) {
+    auto isIdentChar = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+    };
+
+    auto hasDeclaredFunction = [&](const std::string& source, const std::string& name) -> bool {
+        static const char* returnTypes[] = {"float4", "half4", "fixed4"};
+        for (const char* returnType : returnTypes) {
+            const std::string signatureA = std::string(returnType) + " " + name + "(";
+            const std::string signatureB = std::string(returnType) + " " + name + " (";
+            if (source.find(signatureA) != std::string::npos || source.find(signatureB) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto appendAdapter = [&](std::string& source, const std::string& fromName) {
+        source += "\nfloat4 " + entrypointName + "(float2 fragCoord, float2 iResolution, float iTime){ return " +
+                  fromName + "(fragCoord, iResolution, iTime); }\n";
+    };
+
+    auto replaceFunctionDeclName = [&](std::string& source, const std::string& oldName) -> bool {
+        static const char* returnTypes[] = {"float4", "half4", "fixed4"};
+        for (const char* returnType : returnTypes) {
+            const std::string prefix = std::string(returnType) + " ";
+            const std::string compact = prefix + oldName + "(";
+            size_t pos = source.find(compact);
+            if (pos != std::string::npos) {
+                source.replace(pos + prefix.size(), oldName.size(), entrypointName);
+                return true;
+            }
+
+            const std::string spaced = prefix + oldName + " (";
+            pos = source.find(spaced);
+            if (pos != std::string::npos) {
+                source.replace(pos + prefix.size(), oldName.size(), entrypointName);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    std::string out = shaderCode;
+    if (hasDeclaredFunction(out, entrypointName)) {
+        return out;
+    }
+
+    if (replaceFunctionDeclName(out, "main")) {
+        return out;
+    }
+
+    static const char* friendlyEntrypoints[] = {
+        "mainImage",
+        "sceneMain",
+        "postFxMain",
+        "transitionMain",
+        "scene",
+        "postfx",
+        "transition",
+        "fxMain",
+        "effectMain",
+        "render"
+    };
+
+    for (const char* candidate : friendlyEntrypoints) {
+        const std::string name(candidate);
+        if (hasDeclaredFunction(out, name)) {
+            appendAdapter(out, name);
+            return out;
+        }
+    }
+
+    size_t scan = 0;
+    while (true) {
+        scan = out.find("float4", scan);
+        if (scan == std::string::npos) {
+            break;
+        }
+        size_t i = scan + 6;
+        while (i < out.size() && std::isspace(static_cast<unsigned char>(out[i])) != 0) {
+            ++i;
+        }
+        size_t nameStart = i;
+        while (i < out.size() && isIdentChar(out[i])) {
+            ++i;
+        }
+        if (i <= nameStart) {
+            scan += 6;
+            continue;
+        }
+        const std::string fnName = out.substr(nameStart, i - nameStart);
+        while (i < out.size() && std::isspace(static_cast<unsigned char>(out[i])) != 0) {
+            ++i;
+        }
+        if (i < out.size() && out[i] == '(' && fnName != entrypointName) {
+            appendAdapter(out, fnName);
+            return out;
+        }
+        scan += 6;
+    }
+
+    out += "\nfloat4 " + entrypointName + "(float2 fragCoord, float2 iResolution, float iTime){ return float4(1.0, 0.0, 1.0, 1.0); }\n";
+    return out;
+}
+
+TinyModuleMap BuildTinyModuleMap(const ProjectData& project, bool scopeLocalFunctionsForUbershader) {
+    TinyModuleMap map;
+    map.sceneModuleIndices.resize(project.scenes.size(), -1);
+    map.postFxModuleIndices.resize(project.scenes.size());
+
+    int postFxCounter = 0;
+    int transitionCounter = 0;
+
+    bool usedTransitions[7] = {};
+    for (const auto& row : project.track.rows) {
+        if (row.transition == TransitionType::None) continue;
+        const int idx = TransitionIndex(row.transition);
+        if (idx >= 0 && idx < 7) usedTransitions[idx] = true;
+    }
+
+    const TransitionType transitions[] = {
+        TransitionType::Crossfade,
+        TransitionType::DipToBlack,
+        TransitionType::FadeOut,
+        TransitionType::FadeIn,
+        TransitionType::Glitch,
+        TransitionType::Pixelate
+    };
+
+    auto appendModule = [&](const std::string& shaderCode, const std::string& entrypointName, const std::string& moduleLabel) -> int16_t {
+        const int16_t moduleId = static_cast<int16_t>((std::min)(static_cast<size_t>(32767), map.modules.size()));
+        const std::string remapped = RemapMainToEntrypoint(shaderCode, entrypointName);
+        const std::string scoped = scopeLocalFunctionsForUbershader
+            ? ScopeLocalFunctionsForModule(remapped, entrypointName)
+            : remapped;
+        const std::string compact = MinifyShaderTextForPack(scoped);
+        if (compact.empty()) {
+            return -1;
+        }
+        map.modules.push_back(compact);
+        map.moduleEntrypoints.push_back(entrypointName);
+        map.moduleLabels.push_back(moduleLabel);
+        return moduleId;
+    };
+
+    for (TransitionType type : transitions) {
+        const int idx = TransitionIndex(type);
+        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) continue;
+        const std::string entrypoint = "t" + std::to_string(transitionCounter++);
+        map.transitionModuleIndices[idx] = appendModule(GetTransitionShaderSourceForBuild(type), entrypoint, "Transition " + std::to_string(idx));
+    }
+
+    for (size_t sceneIndex = 0; sceneIndex < project.scenes.size(); ++sceneIndex) {
+        const auto& scene = project.scenes[sceneIndex];
+        map.sceneModuleIndices[sceneIndex] = appendModule(scene.shaderCode, "s" + std::to_string(sceneIndex), "Scene " + std::to_string(sceneIndex));
+
+        auto& fxModules = map.postFxModuleIndices[sceneIndex];
+        fxModules.resize(scene.postFxChain.size(), -1);
+        for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
+            const auto& fx = scene.postFxChain[fxIndex];
+            if (!fx.enabled) continue;
+            fxModules[fxIndex] = appendModule(fx.shaderCode, "p" + std::to_string(postFxCounter++), "Scene " + std::to_string(sceneIndex) + " PostFX " + std::to_string(fxIndex));
+        }
+    }
+
+    return map;
+}
+
+bool BuildCompactTrackBinary(const ProjectData& project, std::vector<uint8_t>& outData) {
+    const DemoTrack& track = project.track;
+    const TinyModuleMap moduleMap = BuildTinyModuleMap(project, false);
+
     outData.clear();
-    outData.reserve(10 + track.rows.size() * 9);
+    size_t fxMappingCount = 0;
+    for (const auto& sceneFx : moduleMap.postFxModuleIndices) {
+        fxMappingCount += sceneFx.size();
+    }
+    outData.reserve(24 + (project.scenes.size() * 6) + (fxMappingCount * 2) + track.rows.size() * 9);
 
     const auto appendU8 = [&outData](uint8_t value) {
         outData.push_back(value);
@@ -382,13 +1008,41 @@ bool BuildCompactTrackBinary(const DemoTrack& track, std::vector<uint8_t>& outDa
         (std::max)(0, (std::min)(65535, track.lengthBeats)));
     const uint16_t rowCount = static_cast<uint16_t>(
         (std::min)(static_cast<size_t>(65535), track.rows.size()));
+    const uint16_t sceneCount = static_cast<uint16_t>(
+        (std::min)(static_cast<size_t>(65535), project.scenes.size()));
 
-    // Header v2 (10 bytes): magic('TKR2'), bpmQ8, lengthBeats, rowCount
+    // Header v3 (14 bytes): magic('TKR3'), bpmQ8, lengthBeats, rowCount, sceneCount, transitionSlotCount(6), reserved
     appendU16(0x4B54u); // 'TK'
-    appendU16(0x3252u); // 'R2'
+    appendU16(0x3352u); // 'R3'
     appendU16(bpmQ8);
     appendU16(lengthBeats);
     appendU16(rowCount);
+    appendU16(sceneCount);
+    appendU8(6u);
+    appendU8(0u);
+
+    for (int i = 0; i < 6; ++i) {
+        appendI16(moduleMap.transitionModuleIndices[i]);
+    }
+
+    for (uint16_t sceneIndex = 0; sceneIndex < sceneCount; ++sceneIndex) {
+        int16_t sceneModule = -1;
+        if (sceneIndex < moduleMap.sceneModuleIndices.size()) {
+            sceneModule = moduleMap.sceneModuleIndices[sceneIndex];
+        }
+        appendI16(sceneModule);
+
+        const std::vector<int16_t>* fxModulesPtr = nullptr;
+        if (sceneIndex < moduleMap.postFxModuleIndices.size()) {
+            fxModulesPtr = &moduleMap.postFxModuleIndices[sceneIndex];
+        }
+        const size_t fxModuleCount = fxModulesPtr ? fxModulesPtr->size() : 0;
+        const uint16_t fxCountU16 = static_cast<uint16_t>((std::min)(static_cast<size_t>(65535), fxModuleCount));
+        appendU16(fxCountU16);
+        for (uint16_t fxIndex = 0; fxIndex < fxCountU16; ++fxIndex) {
+            appendI16((*fxModulesPtr)[fxIndex]);
+        }
+    }
 
     for (size_t i = 0; i < rowCount; ++i) {
         const auto& src = track.rows[i];
@@ -417,9 +1071,18 @@ bool BuildCompactTrackBinary(const DemoTrack& track, std::vector<uint8_t>& outDa
     return true;
 }
 
+bool WriteCompactTrackBinary(const ProjectData& project, const fs::path& outputPath, std::string& outError);
+bool EmbedCompactTrackIntoExecutable(const ProjectData& project, const fs::path& exePath, std::string& outError);
+
 bool WriteCompactTrackBinary(const DemoTrack& track, const fs::path& outputPath, std::string& outError) {
+    ProjectData project;
+    project.track = track;
+    return WriteCompactTrackBinary(project, outputPath, outError);
+}
+
+bool WriteCompactTrackBinary(const ProjectData& project, const fs::path& outputPath, std::string& outError) {
     std::vector<uint8_t> data;
-    if (!BuildCompactTrackBinary(track, data)) {
+    if (!BuildCompactTrackBinary(project, data)) {
         outError = "Failed to build compact track binary.";
         return false;
     }
@@ -427,8 +1090,14 @@ bool WriteCompactTrackBinary(const DemoTrack& track, const fs::path& outputPath,
 }
 
 bool EmbedCompactTrackIntoExecutable(const DemoTrack& track, const fs::path& exePath, std::string& outError) {
+    ProjectData project;
+    project.track = track;
+    return EmbedCompactTrackIntoExecutable(project, exePath, outError);
+}
+
+bool EmbedCompactTrackIntoExecutable(const ProjectData& project, const fs::path& exePath, std::string& outError) {
     std::vector<uint8_t> payload;
-    if (!BuildCompactTrackBinary(track, payload)) {
+    if (!BuildCompactTrackBinary(project, payload)) {
         outError = "Failed to build compact track payload.";
         return false;
     }
@@ -470,11 +1139,11 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
 }
 )";
         case TransitionType::FadeOut: return common + R"(
-    return lerp(colA, float4(0,0,0,1), t);
+    return lerp(colA, colB, t);
 }
 )";
         case TransitionType::FadeIn: return common + R"(
-    return lerp(float4(0,0,0,1), colB, t);
+    return lerp(colA, colB, t);
 }
 )";
         case TransitionType::Glitch: return common + R"(
@@ -506,10 +1175,10 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
 
 const char* GetTransitionPackedPath(TransitionType type) {
     switch (type) {
-        case TransitionType::Crossfade: return "assets/shaders/transition_crossfade.cso";
+        case TransitionType::Crossfade: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::DipToBlack: return "assets/shaders/transition_dip_to_black.cso";
-        case TransitionType::FadeOut: return "assets/shaders/transition_fade_out.cso";
-        case TransitionType::FadeIn: return "assets/shaders/transition_fade_in.cso";
+        case TransitionType::FadeOut: return "assets/shaders/transition_fade_a_b.cso";
+        case TransitionType::FadeIn: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::Glitch: return "assets/shaders/transition_glitch.cso";
         case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
         default: return "";
@@ -518,6 +1187,436 @@ const char* GetTransitionPackedPath(TransitionType type) {
 
 const char* GetPackedVertexShaderPath() {
     return "assets/shaders/vertex.cso";
+}
+
+std::string MinifyShaderTextForPack(const std::string& input) {
+    std::string noComments;
+    noComments.reserve(input.size());
+
+    bool inLineComment = false;
+    bool inBlockComment = false;
+    for (size_t i = 0; i < input.size(); ++i) {
+        const char ch = input[i];
+        const char next = (i + 1 < input.size()) ? input[i + 1] : '\0';
+
+        if (inLineComment) {
+            if (ch == '\n') {
+                inLineComment = false;
+                noComments.push_back(ch);
+            }
+            continue;
+        }
+
+        if (inBlockComment) {
+            if (ch == '*' && next == '/') {
+                inBlockComment = false;
+                ++i;
+            }
+            continue;
+        }
+
+        if (ch == '/' && next == '/') {
+            inLineComment = true;
+            ++i;
+            continue;
+        }
+
+        if (ch == '/' && next == '*') {
+            inBlockComment = true;
+            ++i;
+            continue;
+        }
+
+        noComments.push_back(ch);
+    }
+
+    std::string out;
+    out.reserve(noComments.size());
+    bool prevSpace = false;
+    for (char ch : noComments) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (std::isspace(uch)) {
+            if (!prevSpace) {
+                out.push_back(' ');
+                prevSpace = true;
+            }
+            continue;
+        }
+        out.push_back(ch);
+        prevSpace = false;
+    }
+    return TrimString(out);
+}
+
+std::string BuildMicroUbershaderSource(const TinyModuleMap& map) {
+    std::string source;
+    for (const auto& moduleCode : map.modules) {
+        source += moduleCode;
+        source.push_back('\n');
+    }
+
+    std::ostringstream out;
+    out << "U:" << source.size() << '\n';
+    out << source;
+    return out.str();
+}
+
+bool RunCommand(const std::string& command, const std::function<void(const std::string&)>& log);
+
+fs::path GetCleanSolutionDirectoryPath(const BuildRequest& request) {
+    fs::path outputPath(request.targetExePath);
+    fs::path parent;
+    if (!request.cleanSolutionRootPath.empty()) {
+        parent = fs::path(request.cleanSolutionRootPath);
+    } else {
+        parent = outputPath.parent_path();
+    }
+    if (parent.empty()) {
+        parent = fs::path(request.appRoot) / "build_exports";
+    }
+
+    std::string stem = outputPath.stem().string();
+    if (stem.empty()) {
+        stem = "ShaderLabDemo";
+    }
+
+    return parent / (stem + "_solution");
+}
+
+std::string BuildTimestampTag() {
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    char buffer[32] = {};
+    sprintf_s(buffer, "%04u%02u%02u_%02u%02u%02u",
+        st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond);
+    return std::string(buffer);
+}
+
+bool PrepareCleanBuildRoot(const fs::path& root, const std::function<void(const std::string&)>& log, std::string& outError) {
+    if (root.empty()) {
+        outError = "Build root path is empty.";
+        return false;
+    }
+
+    fs::path normalizedRoot = root.lexically_normal();
+    if (normalizedRoot.empty()) {
+        outError = "Build root path is invalid.";
+        return false;
+    }
+
+    fs::path renameSource = normalizedRoot;
+    while (!renameSource.empty() && renameSource.filename().empty()) {
+        renameSource = renameSource.parent_path();
+    }
+    if (renameSource.empty() || renameSource.root_path() == renameSource) {
+        outError = "Build root path is invalid for versioning: " + normalizedRoot.string();
+        return false;
+    }
+
+    std::error_code ec;
+    if (fs::exists(renameSource, ec) && !ec) {
+        fs::path rolledBase = renameSource.parent_path() /
+            (renameSource.filename().string() + "_prev_" + BuildTimestampTag());
+        fs::path rolled = rolledBase;
+        int suffix = 1;
+        while (fs::exists(rolled, ec) && !ec) {
+            rolled = renameSource.parent_path() /
+                (renameSource.filename().string() + "_prev_" + BuildTimestampTag() + "_" + std::to_string(suffix++));
+        }
+
+        fs::rename(renameSource, rolled, ec);
+        if (ec) {
+            outError = "Failed to version existing build root: " + renameSource.string() + " (" + ec.message() + ")";
+            return false;
+        }
+        log("Existing build root moved to: " + rolled.string());
+    }
+
+    ec.clear();
+    fs::create_directories(normalizedRoot, ec);
+    if (ec) {
+        outError = "Failed to create build root: " + normalizedRoot.string();
+        return false;
+    }
+    return true;
+}
+
+bool CopyPathRecursive(const fs::path& source, const fs::path& destination, std::string& outError);
+
+bool CreateIsolatedSdkSourceDirectory(
+    const BuildRequest& request,
+    const fs::path& buildRoot,
+    fs::path& outSourceRoot,
+    std::string& outError) {
+    const fs::path appRoot(request.appRoot);
+    outSourceRoot = buildRoot / "sdk_source";
+
+    std::error_code ec;
+    fs::remove_all(outSourceRoot, ec);
+    ec.clear();
+    fs::create_directories(outSourceRoot, ec);
+    if (ec) {
+        outError = "Failed to create isolated SDK source directory: " + outSourceRoot.string();
+        return false;
+    }
+
+    const fs::path templateCmake = appRoot / "templates" / "Standalone_CMakeLists.txt";
+    if (!FileExists(templateCmake)) {
+        outError = "Missing Standalone CMake template: " + templateCmake.string();
+        return false;
+    }
+
+    struct CopyEntry {
+        fs::path source;
+        fs::path destination;
+    };
+
+    const std::vector<CopyEntry> entries = {
+        {templateCmake, outSourceRoot / "CMakeLists.txt"},
+        {appRoot / "include", outSourceRoot / "include"},
+        {appRoot / "src", outSourceRoot / "src"},
+        {appRoot / "third_party", outSourceRoot / "third_party"}
+    };
+
+    for (const auto& entry : entries) {
+        if (!CopyPathRecursive(entry.source, entry.destination, outError)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool CopyPathRecursive(const fs::path& source, const fs::path& destination, std::string& outError) {
+    std::error_code ec;
+    if (!fs::exists(source, ec) || ec) {
+        outError = "Missing source path: " + source.string();
+        return false;
+    }
+
+    if (fs::is_directory(source, ec) && !ec) {
+        fs::create_directories(destination, ec);
+        if (ec) {
+            outError = "Failed to create directory: " + destination.string();
+            return false;
+        }
+
+        fs::copy(source, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            outError = "Failed to copy directory: " + source.string() + " -> " + destination.string();
+            return false;
+        }
+        return true;
+    }
+
+    fs::create_directories(destination.parent_path(), ec);
+    if (ec) {
+        outError = "Failed to create directory: " + destination.parent_path().string();
+        return false;
+    }
+
+    fs::copy_file(source, destination, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        outError = "Failed to copy file: " + source.string() + " -> " + destination.string();
+        return false;
+    }
+    return true;
+}
+
+bool ExportCleanSolutionDirectory(
+    const BuildRequest& request,
+    const fs::path& packRoot,
+    bool useScreenSaver,
+    bool useMicroPlayer,
+    bool useCrinkler,
+    bool staticRuntime,
+    fs::path& outSolutionRoot,
+    std::string& outError) {
+    outSolutionRoot = GetCleanSolutionDirectoryPath(request);
+
+    std::error_code ec;
+    fs::remove_all(outSolutionRoot, ec);
+    ec.clear();
+    fs::create_directories(outSolutionRoot, ec);
+    if (ec) {
+        outError = "Failed to create clean solution directory: " + outSolutionRoot.string();
+        return false;
+    }
+
+    const fs::path appRoot(request.appRoot);
+    const fs::path templateCmake = appRoot / "templates" / "Standalone_CMakeLists.txt";
+    const fs::path fallbackCmake = appRoot / "CMakeLists.txt";
+
+    if (FileExists(templateCmake)) {
+        if (!CopyPathRecursive(templateCmake, outSolutionRoot / "CMakeLists.txt", outError)) {
+            return false;
+        }
+    } else if (FileExists(fallbackCmake)) {
+        if (!CopyPathRecursive(fallbackCmake, outSolutionRoot / "CMakeLists.txt", outError)) {
+            return false;
+        }
+    } else {
+        outError = "Missing CMake template for clean solution export.";
+        return false;
+    }
+
+    struct CopyEntry {
+        fs::path source;
+        fs::path destination;
+    };
+
+    const std::vector<CopyEntry> entries = {
+        {appRoot / "include", outSolutionRoot / "include"},
+        {appRoot / "src" / "app" / "runtime", outSolutionRoot / "src" / "app" / "runtime"},
+        {appRoot / "src" / "audio", outSolutionRoot / "src" / "audio"},
+        {appRoot / "src" / "core", outSolutionRoot / "src" / "core"},
+        {appRoot / "src" / "graphics", outSolutionRoot / "src" / "graphics"},
+        {appRoot / "src" / "shader", outSolutionRoot / "src" / "shader"},
+        {appRoot / "third_party", outSolutionRoot / "third_party"},
+        {packRoot / "project.json", outSolutionRoot / "project.json"},
+        {packRoot / "assets", outSolutionRoot / "assets"}
+    };
+
+    for (const auto& entry : entries) {
+        if (!CopyPathRecursive(entry.source, entry.destination, outError)) {
+            return false;
+        }
+    }
+
+    ProjectData solutionProject;
+    if (!Serializer::LoadProject(request.projectPath, solutionProject)) {
+        if (!Serializer::LoadProject((outSolutionRoot / "project.json").string(), solutionProject)) {
+            outError = "Failed to load project data for clean solution export.";
+            return false;
+        }
+    }
+
+    if (!Serializer::ConsolidateProject(solutionProject, outSolutionRoot.string())) {
+        outError = "Failed to consolidate clean solution project assets.";
+        return false;
+    }
+
+    const fs::path shaderSourceDir = outSolutionRoot / "assets" / "shaders" / "hlsl";
+    fs::create_directories(shaderSourceDir, ec);
+    if (ec) {
+        outError = "Failed to create shader source directory: " + shaderSourceDir.string();
+        return false;
+    }
+
+    for (size_t sceneIndex = 0; sceneIndex < solutionProject.scenes.size(); ++sceneIndex) {
+        auto& scene = solutionProject.scenes[sceneIndex];
+        const std::string sceneSourceRel = "assets/shaders/hlsl/scene_" + std::to_string(sceneIndex) + ".hlsl";
+        if (!WriteTextFile(outSolutionRoot / sceneSourceRel, scene.shaderCode, outError)) {
+            return false;
+        }
+        scene.shaderCodePath = sceneSourceRel;
+        scene.shaderCode = "@file:" + sceneSourceRel;
+
+        for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
+            auto& fx = scene.postFxChain[fxIndex];
+            const std::string fxSourceRel = "assets/shaders/hlsl/scene_" + std::to_string(sceneIndex) + "_fx_" + std::to_string(fxIndex) + ".hlsl";
+            if (!WriteTextFile(outSolutionRoot / fxSourceRel, fx.shaderCode, outError)) {
+                return false;
+            }
+            fx.shaderCodePath = fxSourceRel;
+            fx.shaderCode = "@file:" + fxSourceRel;
+        }
+    }
+
+    if (!Serializer::SaveProject(solutionProject, (outSolutionRoot / "project.json").string())) {
+        outError = "Failed to write linked-shader clean solution project.json.";
+        return false;
+    }
+
+    std::ofstream readme(outSolutionRoot / "README_SOLUTION.txt", std::ios::binary);
+    if (!readme.is_open()) {
+        outError = "Failed to create README_SOLUTION.txt in clean solution directory.";
+        return false;
+    }
+
+    readme << "ShaderLab Clean Solution Directory\n";
+    readme << "===============================\n\n";
+    readme << "This folder is regenerated on each build/export to keep a clean, reproducible workspace.\n";
+    readme << "It contains source, third_party dependencies, and packed project assets for standalone builds.\n\n";
+    readme << "Suggested configure command (PowerShell in this folder):\n";
+    readme << "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release";
+    if (useMicroPlayer) {
+        readme << " -DSHADERLAB_BUILD_MICRO_PLAYER=ON -DSHADERLAB_BUILD_RUNTIME=OFF -DSHADERLAB_TINY_PLAYER=ON";
+    } else {
+        readme << " -DSHADERLAB_BUILD_MICRO_PLAYER=OFF -DSHADERLAB_BUILD_RUNTIME=ON -DSHADERLAB_TINY_PLAYER=OFF";
+    }
+    if (useCrinkler) {
+        readme << " -DSHADERLAB_USE_CRINKLER=ON";
+    }
+    if (staticRuntime) {
+        readme << " -DSHADERLAB_STATIC_RUNTIME=ON";
+    }
+    readme << "\n\n";
+    readme << "Then build:\n";
+    if (useScreenSaver) {
+        readme << "  cmake --build build --target ShaderLabScreenSaver --config Release\n";
+    } else if (useMicroPlayer) {
+        readme << "  cmake --build build --target ShaderLabMicroPlayer --config Release\n";
+    } else {
+        readme << "  cmake --build build --target ShaderLabPlayer --config Release\n";
+    }
+
+    return true;
+}
+
+std::string EscapePowerShellLiteral(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (char ch : value) {
+        if (ch == '\'') {
+            escaped += "''";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    return escaped;
+}
+
+bool CreatePackagedZip(
+    const fs::path& packageDir,
+    const fs::path& zipPath,
+    const std::function<void(const std::string&)>& log,
+    std::string& outError) {
+    std::error_code ec;
+    fs::create_directories(zipPath.parent_path(), ec);
+    if (ec) {
+        outError = "Failed to create zip output directory: " + zipPath.parent_path().string();
+        return false;
+    }
+
+    if (fs::exists(zipPath, ec) && !ec) {
+        fs::remove(zipPath, ec);
+        if (ec) {
+            outError = "Failed to replace existing zip: " + zipPath.string();
+            return false;
+        }
+    }
+
+    const std::string packageGlob = (packageDir / "*").string();
+    const std::string psCommand =
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Compress-Archive -Path '" +
+        EscapePowerShellLiteral(packageGlob) +
+        "' -DestinationPath '" +
+        EscapePowerShellLiteral(zipPath.string()) +
+        "' -Force\"";
+
+    if (!RunCommand(psCommand, log)) {
+        outError = "Compress-Archive failed for packaged demo zip.";
+        return false;
+    }
+
+    if (!fs::exists(zipPath)) {
+        outError = "Zip archive was not created: " + zipPath.string();
+        return false;
+    }
+
+    return true;
 }
 
 bool RunCommand(const std::string& command, const std::function<void(const std::string&)>& log) {
@@ -541,7 +1640,45 @@ bool RunCommand(const std::string& command, const std::function<void(const std::
     si.hStdError = writePipe;
 
     PROCESS_INFORMATION pi = {};
-    std::string cmdLine = "cmd.exe /C " + command;
+    std::string cmdLine;
+    fs::path tempBatchPath;
+
+    const bool useBatchFile = true;
+    if (useBatchFile) {
+        std::error_code ec;
+        tempBatchPath = fs::temp_directory_path(ec) / ("shaderlab_cmd_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()) + ".bat");
+        std::ofstream batch(tempBatchPath, std::ios::binary);
+        if (!batch.is_open()) {
+            CloseHandle(readPipe);
+            CloseHandle(writePipe);
+            log("Error: Failed to create temporary command script.");
+            return false;
+        }
+        batch << "@echo off\r\n";
+        std::string normalized;
+        normalized.reserve(command.size() + 16);
+        for (size_t i = 0; i < command.size(); ++i) {
+            const char c = command[i];
+            if (c == '\r') {
+                if (i + 1 < command.size() && command[i + 1] == '\n') {
+                    ++i;
+                }
+                normalized += "\r\n";
+            } else if (c == '\n') {
+                normalized += "\r\n";
+            } else {
+                normalized.push_back(c);
+            }
+        }
+        if (normalized.empty() || (normalized.size() < 2 || normalized.substr(normalized.size() - 2) != "\r\n")) {
+            normalized += "\r\n";
+        }
+        batch << normalized;
+        batch.close();
+        cmdLine = "cmd.exe /C \"" + tempBatchPath.string() + "\"";
+    } else {
+        cmdLine = "cmd.exe /C " + command;
+    }
 
     BOOL created = CreateProcessA(
         NULL,
@@ -560,24 +1697,68 @@ bool RunCommand(const std::string& command, const std::function<void(const std::
 
     if (!created) {
         CloseHandle(readPipe);
+        if (!tempBatchPath.empty()) {
+            std::error_code ec;
+            fs::remove(tempBatchPath, ec);
+        }
         log("Error: Failed to launch build command.");
         return false;
     }
 
-    char buffer[256];
-    DWORD bytesRead = 0;
-    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-        buffer[bytesRead] = '\0';
-        log(std::string(buffer));
+    const DWORD heartbeatMs = 15000;
+    ULONGLONG lastOutputTick = GetTickCount64();
+
+    char buffer[512];
+    auto readAvailableOutput = [&]() {
+        DWORD available = 0;
+        if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr)) {
+            return;
+        }
+
+        while (available > 0) {
+            DWORD bytesRead = 0;
+            const DWORD toRead = (std::min)(available, static_cast<DWORD>(sizeof(buffer) - 1));
+            if (!ReadFile(readPipe, buffer, toRead, &bytesRead, nullptr) || bytesRead == 0) {
+                break;
+            }
+            buffer[bytesRead] = '\0';
+            log(std::string(buffer));
+            lastOutputTick = GetTickCount64();
+
+            if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr)) {
+                break;
+            }
+        }
+    };
+
+    while (true) {
+        const DWORD waitResult = WaitForSingleObject(pi.hProcess, 100);
+        readAvailableOutput();
+
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
+
+        const ULONGLONG nowTick = GetTickCount64();
+        if (nowTick - lastOutputTick >= heartbeatMs) {
+            log("...build still running (long step in progress)...");
+            lastOutputTick = nowTick;
+        }
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    readAvailableOutput();
+
     DWORD exitCode = 1;
     GetExitCodeProcess(pi.hProcess, &exitCode);
 
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     CloseHandle(readPipe);
+
+    if (!tempBatchPath.empty()) {
+        std::error_code ec;
+        fs::remove(tempBatchPath, ec);
+    }
 
     return exitCode == 0;
 }
@@ -616,7 +1797,7 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildM
     }
 
     std::string crinklerPath;
-    report.hasCrinkler = ResolveCrinklerPath(crinklerPath);
+    report.hasCrinkler = ResolveCrinklerPath(fs::path(appRoot), crinklerPath);
     report.hasNinja = FindOnPath("ninja.exe");
     if (mode == BuildMode::ReleaseCrinkled) {
         if (!report.hasCrinkler) {
@@ -674,13 +1855,79 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildM
     return report;
 }
 
+std::vector<MicroUbershaderConflict> BuildPipeline::AnalyzeMicroUbershaderConflicts(const std::string& projectPath) {
+    std::vector<MicroUbershaderConflict> result;
+
+    ProjectData project;
+    if (!Serializer::LoadProject(projectPath, project)) {
+        return result;
+    }
+
+    const TinyModuleMap map = BuildTinyModuleMap(project, false);
+    const auto grouped = BuildMicroConflictBindings(map);
+    for (const auto& [signatureKey, bindings] : grouped) {
+        if (bindings.size() < 2) {
+            continue;
+        }
+
+        MicroUbershaderConflict conflict;
+        conflict.signatureKey = signatureKey;
+        conflict.signatureDisplay = bindings.front().signature;
+        conflict.options.reserve(bindings.size());
+
+        for (const auto& binding : bindings) {
+            MicroUbershaderConflictOption option;
+            option.moduleEntrypoint = binding.moduleEntrypoint;
+            option.moduleLabel = binding.moduleLabel;
+            option.signature = binding.signature;
+            option.snippet = binding.snippet;
+            conflict.options.push_back(std::move(option));
+        }
+
+        result.push_back(std::move(conflict));
+    }
+
+    std::sort(result.begin(), result.end(), [](const MicroUbershaderConflict& a, const MicroUbershaderConflict& b) {
+        return a.signatureDisplay < b.signatureDisplay;
+    });
+
+    return result;
+}
+
 BuildResult BuildPipeline::BuildSelfContained(
     const BuildRequest& request,
     const std::function<void(const std::string&)>& log) {
     BuildResult result{};
 
+    const BuildTargetKind targetKind = request.targetKind;
+    const bool budgetedBuild = IsTinySizeTarget(request.sizeTarget);
+    const bool isPackagedDemo = targetKind == BuildTargetKind::PackagedDemo;
+    const bool requestedScreenSaver = targetKind == BuildTargetKind::SelfContainedScreenSaver;
+    const bool useMicroPlayer = targetKind == BuildTargetKind::MicroDemo || budgetedBuild;
+    const bool useScreenSaver = requestedScreenSaver && !useMicroPlayer;
+    const bool tinyProfile = useMicroPlayer || budgetedBuild;
+    const bool microDeveloperBuild = useMicroPlayer && request.microDeveloperBuild;
+    bool staticRuntime = !tinyProfile;
+
+    if (request.cleanSolutionRootPath.empty()) {
+        log("Error: Clean build root is required. Set 'Clean Solution Root' in Build Settings.");
+        return result;
+    }
+
+    fs::path buildRootPath = fs::path(request.cleanSolutionRootPath);
+    std::string cleanRootError;
+    if (!PrepareCleanBuildRoot(buildRootPath, log, cleanRootError)) {
+        log("Error: " + cleanRootError);
+        return result;
+    }
+    log("[0/6] Build root prepared: " + buildRootPath.string());
+
+    log(std::string("Build Target: ") + BuildTargetName(targetKind));
     log(std::string("Build Mode: ") + BuildModeName(request.mode));
     log(std::string("Size Target: ") + SizePresetName(request.sizeTarget));
+    if (budgetedBuild && targetKind != BuildTargetKind::MicroDemo) {
+        log("Budgeted build detected; forcing MicroPlayer runtime path.");
+    }
     log("Application Root: " + request.appRoot);
     log("Project Path: " + request.projectPath);
     log("Target Output: " + request.targetExePath);
@@ -688,33 +1935,57 @@ BuildResult BuildPipeline::BuildSelfContained(
     fs::path sourceDir = fs::path(request.appRoot) / "dev_kit";
     bool isDevKit = fs::exists(sourceDir) && fs::exists(sourceDir / "CMakeLists.txt");
 
-    if (!isDevKit) {
-        fs::path appRootCmake = fs::path(request.appRoot) / "CMakeLists.txt";
+    if (isDevKit) {
+        log("Using Dev Kit source: " + sourceDir.string());
+    } else {
         log("Dev Kit not found at " + (fs::path(request.appRoot) / "dev_kit").string());
-        if (fs::exists(appRootCmake)) {
-            sourceDir = request.appRoot;
-            log("Falling back to App Root (Development Mode)");
-        } else {
-            log("Error: Dev Kit missing. Distributed builds require dev_kit with CMakeLists.txt.");
+        std::string sdkError;
+        if (!CreateIsolatedSdkSourceDirectory(request, buildRootPath, sourceDir, sdkError)) {
+            log("Error: Failed to create isolated SDK source directory.");
+            log("Details: " + sdkError);
             return result;
         }
-    } else {
-        log("Using Dev Kit source: " + sourceDir.string());
+        log("Using isolated SDK source: " + sourceDir.string());
     }
 
     const bool hasNinja = FindOnPath("ninja.exe");
+    std::string ninjaExePath;
+    if (hasNinja) {
+        FindOnPathFull("ninja.exe", ninjaExePath);
+    }
+    std::string cmakeExePath;
+    if (!FindOnPathFull("cmake.exe", cmakeExePath)) {
+        fs::path defaultCmake = "C:\\Program Files\\CMake\\bin\\cmake.exe";
+        if (FileExists(defaultCmake)) {
+            cmakeExePath = defaultCmake.string();
+        } else {
+            cmakeExePath = "cmake";
+        }
+    }
     std::string crinklerPath;
-    const bool hasCrinkler = ResolveCrinklerPath(crinklerPath);
+    const bool hasCrinkler = ResolveCrinklerPath(fs::path(request.appRoot), crinklerPath);
     const bool wantCrinkler = request.mode == BuildMode::ReleaseCrinkled;
-    const bool useCrinkler = wantCrinkler && hasNinja && hasCrinkler;
-    const bool tinyProfile = IsTinySizeTarget(request.sizeTarget);
-    const bool useMicroPlayer = tinyProfile;
-    const bool useX86Target = useMicroPlayer;
-    const bool staticRuntime = !tinyProfile;
+    bool useCrinkler = wantCrinkler && hasNinja && hasCrinkler;
+    bool useX86Target = useMicroPlayer;
+    const bool useNinjaGenerator = useCrinkler;
+
+    if (useCrinkler && useX86Target) {
+        fs::path currentCrinkler = fs::path(crinklerPath);
+        fs::path parentDir = currentCrinkler.parent_path();
+        std::string parentName = parentDir.filename().string();
+        std::transform(parentName.begin(), parentName.end(), parentName.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (parentName == "win64") {
+            fs::path win32Candidate = parentDir.parent_path() / "Win32" / currentCrinkler.filename();
+            if (FileExists(win32Candidate)) {
+                crinklerPath = win32Candidate.string();
+                log("Crinkler: switched to Win32 binary for x86 target (" + crinklerPath + ")");
+            }
+        }
+    }
 
     if (tinyProfile) {
         log("Tiny Player Profile: ON (1K-64K size target)");
-        log("Tiny Profile Runtime: dynamic CRT (/MD) for maximum size reduction");
+        log("Tiny Profile Runtime: dynamic CRT (/MD) for compatibility and size");
     } else {
         log("Tiny Player Profile: OFF (full runtime profile)");
     }
@@ -722,14 +1993,20 @@ BuildResult BuildPipeline::BuildSelfContained(
     log(std::string("Target Architecture: ") + (useX86Target ? "x86" : "x64"));
 
     if (useMicroPlayer) {
+        if (microDeveloperBuild) {
+            log("MicroPlayer developer mode: ON (overlay diagnostics enabled)");
+        }
         if (useCrinkler) {
             log("MicroPlayer mode: ON (tiny preset path, ShaderLabMicroPlayer + Crinkler)");
         } else {
             log("MicroPlayer mode: ON (tiny preset path, ShaderLabMicroPlayer)");
-            log("Note: Crinkler is disabled; this is a tiny benchmark runtime path.");
         }
     } else {
         log("MicroPlayer mode: OFF (full runtime path)");
+    }
+
+    if (useScreenSaver) {
+        log("Runtime wrapper: ShaderLabScreenSaver (.scr contract)");
     }
 
     if (wantCrinkler && !useCrinkler) {
@@ -751,56 +2028,94 @@ BuildResult BuildPipeline::BuildSelfContained(
         log("Crinkler: disabled (standard release linker)");
     }
     fs::path buildDir;
-    if (hasNinja) {
+    if (useNinjaGenerator) {
         if (useMicroPlayer && useCrinkler) {
-            buildDir = fs::path(request.appRoot) / "build_selfcontained_ninja_crinkled_micro_x86";
+            buildDir = buildRootPath / "build_selfcontained_ninja_crinkled_micro_x86";
         } else if (useMicroPlayer) {
-            buildDir = fs::path(request.appRoot) / "build_selfcontained_ninja_release_micro";
+            buildDir = buildRootPath / (microDeveloperBuild ? "build_selfcontained_ninja_release_micro_dev_x86" : "build_selfcontained_ninja_release_micro_x86");
         } else {
-            buildDir = fs::path(request.appRoot) /
+            buildDir = buildRootPath /
                 (useCrinkler ? "build_selfcontained_ninja_crinkled" : "build_selfcontained_ninja_release");
         }
     } else {
         if (useMicroPlayer) {
-            buildDir = fs::path(request.appRoot) /
-                (useCrinkler ? "build_selfcontained_vs2022_crinkled_micro" : "build_selfcontained_vs2022_release_micro");
+            buildDir = buildRootPath /
+                (useCrinkler
+                    ? "build_selfcontained_vs2022_crinkled_micro_x86"
+                    : (microDeveloperBuild ? "build_selfcontained_vs2022_release_micro_dev_x86" : "build_selfcontained_vs2022_release_micro_x86"));
         } else {
-            buildDir = fs::path(request.appRoot) /
+            buildDir = buildRootPath /
                 (useCrinkler ? "build_selfcontained_vs2022_crinkled" : "build_selfcontained_vs2022_release");
         }
     }
-    std::string cmd = "cmake -S \"" + sourceDir.string() + "\" -B \"" + buildDir.string() + "\"";
-    if (hasNinja) {
+    std::error_code buildDirEc;
+    fs::create_directories(buildDir, buildDirEc);
+
+    fs::path cmakeCachePath = buildDir / "shaderlab_build_config.cmake";
+    auto writeInitialCache = [&](bool enableCrinkler) -> bool {
+        std::ofstream cmakeCacheFile(cmakeCachePath, std::ios::binary);
+        if (!cmakeCacheFile.is_open()) {
+            return false;
+        }
+
+        auto writeCacheBool = [&](const char* key, bool value) {
+            cmakeCacheFile << "set(" << key << " " << (value ? "ON" : "OFF") << " CACHE BOOL \"\" FORCE)\n";
+        };
+        auto writeCacheString = [&](const char* key, const std::string& value) {
+            std::string escaped = value;
+            std::replace(escaped.begin(), escaped.end(), '\\', '/');
+            cmakeCacheFile << "set(" << key << " \"" << escaped << "\" CACHE STRING \"\" FORCE)\n";
+        };
+
+        writeCacheBool("SHADERLAB_BUILD_RUNTIME", !useMicroPlayer);
+        writeCacheBool("SHADERLAB_BUILD_EDITOR", false);
+        writeCacheBool("SHADERLAB_BUILD_MICRO_PLAYER", useMicroPlayer);
+        writeCacheBool("SHADERLAB_ENABLE_DXC", false);
+        const bool tinyDevOverlay = tinyProfile && microDeveloperBuild;
+        const bool enableRuntimeDebugUi = microDeveloperBuild || request.runtimeDebugLog;
+        const bool enableRuntimeDebugLog = microDeveloperBuild || request.runtimeDebugLog;
+        writeCacheBool("SHADERLAB_RUNTIME_IMGUI", enableRuntimeDebugUi);
+        writeCacheBool("SHADERLAB_RUNTIME_DEBUG_LOG", enableRuntimeDebugLog);
+        writeCacheBool("SHADERLAB_TINY_DEV_OVERLAY", tinyDevOverlay);
+        writeCacheBool("SHADERLAB_COMPACT_TRACK_DEBUG", request.compactTrackDebugLog);
+        const bool tinyRuntimeCompile = false;
+        writeCacheBool("SHADERLAB_TINY_PLAYER", tinyProfile);
+        writeCacheBool("SHADERLAB_TINY_RUNTIME_COMPILE", tinyRuntimeCompile);
+        writeCacheBool("SHADERLAB_TINY_TRACE", tinyProfile && (microDeveloperBuild || request.runtimeDebugLog));
+        writeCacheBool("SHADERLAB_STATIC_RUNTIME", staticRuntime);
+        writeCacheBool("SHADERLAB_USE_CRINKLER", enableCrinkler);
+        writeCacheBool("SHADERLAB_CRINKLER_TINYIMPORT", enableCrinkler && !useMicroPlayer);
+
+        if (enableCrinkler) {
+            writeCacheString("CRINKLER_PATH", crinklerPath);
+            writeCacheString("CMAKE_LINKER", crinklerPath);
+            writeCacheString("CMAKE_TRY_COMPILE_TARGET_TYPE", "STATIC_LIBRARY");
+            writeCacheString("CMAKE_EXE_LINKER_FLAGS", "/MANIFEST:NO");
+        } else {
+            writeCacheString("CRINKLER_PATH", "");
+            writeCacheString("CMAKE_LINKER", "link.exe");
+            writeCacheString("CMAKE_EXE_LINKER_FLAGS", "");
+        }
+
+        if (useNinjaGenerator && !ninjaExePath.empty()) {
+            writeCacheString("CMAKE_MAKE_PROGRAM", ninjaExePath);
+        }
+
+        cmakeCacheFile.close();
+        return cmakeCacheFile.good();
+    };
+
+    if (!writeInitialCache(useCrinkler)) {
+        log("Error: Failed to create CMake initial cache file: " + cmakeCachePath.string());
+        return result;
+    }
+
+    std::string cmakeCmd = "\"" + cmakeExePath + "\"";
+    std::string cmd = cmakeCmd + " -S \"" + sourceDir.string() + "\" -B \"" + buildDir.string() + "\" -C \"" + cmakeCachePath.string() + "\"";
+    if (useNinjaGenerator) {
         cmd += " -G Ninja -DCMAKE_BUILD_TYPE=Release";
     } else {
         cmd += useX86Target ? " -G \"Visual Studio 17 2022\" -A Win32" : " -G \"Visual Studio 17 2022\" -A x64";
-    }
-    if (useMicroPlayer) {
-        cmd += " -DSHADERLAB_BUILD_RUNTIME=OFF -DSHADERLAB_BUILD_EDITOR=OFF -DSHADERLAB_BUILD_MICRO_PLAYER=ON";
-    } else {
-        cmd += " -DSHADERLAB_BUILD_RUNTIME=ON -DSHADERLAB_BUILD_EDITOR=OFF -DSHADERLAB_BUILD_MICRO_PLAYER=OFF";
-    }
-    cmd += " -DSHADERLAB_ENABLE_DXC=OFF";
-    cmd += staticRuntime ? " -DSHADERLAB_STATIC_RUNTIME=ON" : " -DSHADERLAB_STATIC_RUNTIME=OFF";
-    cmd += " -DSHADERLAB_RUNTIME_IMGUI=OFF";
-    cmd += request.runtimeDebugLog ? " -DSHADERLAB_RUNTIME_DEBUG_LOG=ON" : " -DSHADERLAB_RUNTIME_DEBUG_LOG=OFF";
-    cmd += request.compactTrackDebugLog ? " -DSHADERLAB_COMPACT_TRACK_DEBUG=ON" : " -DSHADERLAB_COMPACT_TRACK_DEBUG=OFF";
-    cmd += tinyProfile ? " -DSHADERLAB_TINY_PLAYER=ON" : " -DSHADERLAB_TINY_PLAYER=OFF";
-
-    if (useCrinkler) {
-        std::string crinklerArg = crinklerPath;
-        std::replace(crinklerArg.begin(), crinklerArg.end(), '\\', '/');
-        cmd += " -DSHADERLAB_USE_CRINKLER=ON";
-        cmd += " -DSHADERLAB_CRINKLER_TINYIMPORT=ON";
-        cmd += " -DCRINKLER_PATH=\"" + crinklerArg + "\"";
-        cmd += " -DCMAKE_LINKER=\"" + crinklerArg + "\"";
-        cmd += " -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY";
-        cmd += " -DCMAKE_EXE_LINKER_FLAGS=\"/MANIFEST:NO\"";
-    } else {
-        cmd += " -DSHADERLAB_USE_CRINKLER=OFF";
-        cmd += " -DSHADERLAB_CRINKLER_TINYIMPORT=OFF";
-        cmd += " -DCRINKLER_PATH=\"\"";
-        cmd += " -DCMAKE_LINKER=link.exe";
     }
 
     std::string vcvars;
@@ -811,25 +2126,29 @@ BuildResult BuildPipeline::BuildSelfContained(
     std::string vcvarsLabel;
     const bool preferX86Vcvars = useX86Target;
     bool foundVcvars = false;
-    if (preferX86Vcvars) {
-        foundVcvars = FindVcVars32(vcvars);
-        canUseVcvarsFallback = FindVcVarsAll(vcvarsFallback);
-        if (foundVcvars) {
-            log("Using x86 MSVC environment (vcvars32) for MicroPlayer Crinkler build.");
-            vcvarsLabel = "vcvars32";
-        } else if (canUseVcvarsFallback) {
-            vcvars = vcvarsFallback;
-            usingVcvarsFallback = true;
-            vcvarsBaseArgs = " x86";
-            foundVcvars = true;
-            log("vcvars32.bat not found, falling back to vcvarsall.bat x86.");
-            vcvarsLabel = "vcvarsall x86";
+    const bool requireVcvars = useNinjaGenerator;
+    if (requireVcvars) {
+        if (preferX86Vcvars) {
+            foundVcvars = FindVcVars32(vcvars);
+            canUseVcvarsFallback = FindVcVarsAll(vcvarsFallback);
+            if (foundVcvars) {
+                vcvarsLabel = "vcvars32";
+                log("Using x86 MSVC environment (vcvars32).");
+            } else if (canUseVcvarsFallback) {
+                vcvars = vcvarsFallback;
+                vcvarsBaseArgs = " x86";
+                foundVcvars = true;
+                vcvarsLabel = "vcvarsall x86";
+                log("vcvars32.bat not found, falling back to vcvarsall x86.");
+            }
+        } else {
+            foundVcvars = FindVcVars(vcvars);
+            if (foundVcvars) {
+                vcvarsLabel = "vcvars64";
+            }
         }
     } else {
-        foundVcvars = FindVcVars(vcvars);
-        if (foundVcvars) {
-            vcvarsLabel = "vcvars64";
-        }
+        foundVcvars = true;
     }
 
     if (!foundVcvars) {
@@ -846,7 +2165,11 @@ BuildResult BuildPipeline::BuildSelfContained(
         vcvarsArgs = " -vcvars_ver=14.29";
         log("Crinkler: using MSVC v142 toolset (14.29)");
     } else if (useCrinkler) {
-        log("Crinkler: MSVC v142 toolset not found; using default toolset");
+        if (preferX86Vcvars) {
+            log("Crinkler: using default x86 toolset with vcvars32.");
+        } else {
+            log("Crinkler: MSVC v142 toolset not found; using default toolset");
+        }
     }
 
     if (!vcvarsArgs.empty()) {
@@ -867,10 +2190,20 @@ BuildResult BuildPipeline::BuildSelfContained(
 
     if (!vcvarsLabel.empty()) {
         log("MSVC environment: " + vcvarsLabel);
+    } else if (!requireVcvars) {
+        log("MSVC environment: Visual Studio generator (no vcvars bootstrap)");
     }
 
     auto WrapWithVcVars = [&](const std::string& innerCmd, const std::string& args) {
-        return "call \"" + vcvars + "\"" + args + " >nul && " + innerCmd;
+        if (!requireVcvars || vcvars.empty()) {
+            return innerCmd;
+        }
+        std::string script;
+        script += "set \"PATH=C:\\Windows\\System32;C:\\Windows\\System32\\downlevel;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\"\n";
+        script += "call \"" + vcvars + "\"" + args + " >nul\n";
+        script += "if errorlevel 1 exit /b %errorlevel%\n";
+        script += innerCmd + "\n";
+        return script;
     };
 
     std::string activeVcvarsArgs = vcvarsBaseArgs + vcvarsArgs;
@@ -878,7 +2211,7 @@ BuildResult BuildPipeline::BuildSelfContained(
     std::string cmdWithEnv = WrapWithVcVars(cmd, activeVcvarsArgs);
 
     log("----------------------------------------");
-    log("Step 1: Configuring CMake");
+    log("[1/6] Configure CMake");
     log("Command: " + cmdWithEnv);
 
     if (!RunCommand(cmdWithEnv, log)) {
@@ -942,9 +2275,10 @@ BuildResult BuildPipeline::BuildSelfContained(
     }
 
     log("----------------------------------------");
-    log("Step 2: Building Player Target");
-    const std::string targetName = useMicroPlayer ? "ShaderLabMicroPlayer" : "ShaderLabPlayer";
-    std::string buildCmd = "cmake --build \"" + buildDir.string() + "\" --target " + targetName + " --config Release";
+    log("[2/6] Build runtime target");
+    const std::string targetName = useScreenSaver ? "ShaderLabScreenSaver" : (useMicroPlayer ? "ShaderLabMicroPlayer" : "ShaderLabPlayer");
+    const std::string targetExtension = useScreenSaver ? ".scr" : ".exe";
+    std::string buildCmd = cmakeCmd + " --build \"" + buildDir.string() + "\" --target " + targetName + " --config Release";
     std::string buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
     log("Command: " + buildCmdWithEnv);
 
@@ -975,6 +2309,40 @@ BuildResult BuildPipeline::BuildSelfContained(
         }
     }
 
+    if (!releaseBuildOk && useCrinkler) {
+        log("Crinkler link failed. Retrying with standard MSVC linker.");
+        useCrinkler = false;
+        if (!writeInitialCache(false)) {
+            log("Error: Failed to update CMake initial cache for fallback build.");
+            return result;
+        }
+
+        std::error_code fallbackResetEc;
+        fs::remove(buildDir / "CMakeCache.txt", fallbackResetEc);
+        fallbackResetEc.clear();
+        fs::remove(buildDir / "build.ninja", fallbackResetEc);
+        fallbackResetEc.clear();
+        fs::remove_all(buildDir / "CMakeFiles", fallbackResetEc);
+
+        std::string fallbackConfigure = cmd + " -DSHADERLAB_USE_CRINKLER=OFF -DSHADERLAB_CRINKLER_TINYIMPORT=OFF -DCRINKLER_PATH=\"\" -DCMAKE_LINKER=link.exe";
+        std::string fallbackConfigureWithEnv = WrapWithVcVars(fallbackConfigure, activeVcvarsArgs);
+        log("Fallback Configure Command: " + fallbackConfigureWithEnv);
+        if (RunCommand(fallbackConfigureWithEnv, log)) {
+            buildCmd = cmakeCmd + " --build \"" + buildDir.string() + "\" --target " + targetName + " --config Release";
+            buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
+            log("Fallback Build Command: " + buildCmdWithEnv);
+            releaseBuildOk = RunCommand(buildCmdWithEnv, log);
+            if (releaseBuildOk) {
+                log("Fallback succeeded with standard MSVC linker.");
+            }
+        }
+    }
+
+    if (!releaseBuildOk && wantCrinkler) {
+        log("Build Failed in Crinkled mode and fallback did not recover.");
+        return result;
+    }
+
     if (!releaseBuildOk) {
         log("Build Failed. Trying Debug Configuration...");
         buildCmd = "cmake --build \"" + buildDir.string() + "\" --target " + targetName + " --config Debug";
@@ -986,90 +2354,38 @@ BuildResult BuildPipeline::BuildSelfContained(
     }
 
     log("----------------------------------------");
-    log("Step 3: Verifying Executable");
+    log("[3/6] Verify runtime artifact");
 
-    fs::path buildBinPath = buildDir / "bin";
-    fs::path playerExe = buildBinPath / (targetName + ".exe");
+    const std::vector<fs::path> candidateArtifacts = {
+        buildDir / "bin" / (targetName + targetExtension),
+        buildDir / "bin" / "Debug" / (targetName + targetExtension),
+        buildDir / "bin" / "Release" / (targetName + targetExtension),
+        buildDir / (targetName + targetExtension),
+        buildDir / "Debug" / (targetName + targetExtension),
+        buildDir / "Release" / (targetName + targetExtension)
+    };
 
-    if (!fs::exists(playerExe)) {
-        if (fs::exists(buildBinPath / "Debug" / (targetName + ".exe"))) playerExe = buildBinPath / "Debug" / (targetName + ".exe");
-        else if (fs::exists(buildBinPath / "Release" / (targetName + ".exe"))) playerExe = buildBinPath / "Release" / (targetName + ".exe");
+    fs::path playerExe;
+    for (const auto& candidate : candidateArtifacts) {
+        if (fs::exists(candidate)) {
+            playerExe = candidate;
+            break;
+        }
     }
 
-    if (!fs::exists(playerExe)) {
-        log("Error: Could not find " + targetName + ".exe in build artifacts.");
+    if (playerExe.empty()) {
+        log("Error: Could not find " + targetName + targetExtension + " in build artifacts.");
         log("Expected locations checked:");
-        log(" - " + (buildBinPath / (targetName + ".exe")).string());
-        log(" - " + (buildBinPath / "Debug" / (targetName + ".exe")).string());
-        log(" - " + (buildBinPath / "Release" / (targetName + ".exe")).string());
+        for (const auto& candidate : candidateArtifacts) {
+            log(" - " + candidate.string());
+        }
         return result;
     }
 
-    log("Found Player EXE: " + playerExe.string());
-
-    if (useMicroPlayer) {
-        log("----------------------------------------");
-        log("Step 4: Exporting MicroPlayer Binary");
-
-        std::error_code copyEc;
-        fs::create_directories(fs::path(request.targetExePath).parent_path(), copyEc);
-        copyEc.clear();
-        fs::copy_file(playerExe, request.targetExePath, fs::copy_options::overwrite_existing, copyEc);
-        if (copyEc) {
-            log("Error: Failed to copy MicroPlayer output to target path.");
-            log("Details: " + copyEc.message());
-            return result;
-        }
-
-        std::error_code sizeEc;
-        const uint64_t finalSize = fs::file_size(request.targetExePath, sizeEc);
-        if (!sizeEc) {
-            result.finalExeBytes = finalSize;
-            log("Final EXE size: " + std::to_string(finalSize) + " bytes");
-        }
-
-        const uint64_t budgetBytes = SizePresetToBytes(request.sizeTarget);
-        result.budgetBytes = budgetBytes;
-        if (budgetBytes > 0 && !sizeEc) {
-            if (finalSize <= budgetBytes) {
-                result.budgetHit = true;
-                const uint64_t bytesLeft = budgetBytes - finalSize;
-                result.report = "Size target " + std::string(SizePresetName(request.sizeTarget)) + " hit. " + std::to_string(bytesLeft) + " bytes left in budget.";
-                log(result.report);
-            } else {
-                result.budgetHit = false;
-                const uint64_t overshoot = finalSize - budgetBytes;
-                result.report = "Size target " + std::string(SizePresetName(request.sizeTarget)) + " missed. Overshot by " + std::to_string(overshoot) + " bytes.";
-                log(result.report);
-            }
-        }
-
-        if (request.restrictedCompactTrack) {
-            log("Restricted optimization: embedding compact track timeline into MicroPlayer executable");
-            ProjectData project;
-            if (!Serializer::LoadProject(request.projectPath, project)) {
-                log("Error: Failed to load project for compact track export.");
-                return result;
-            }
-
-            std::string embedError;
-            if (!EmbedCompactTrackIntoExecutable(project.track, fs::path(request.targetExePath), embedError)) {
-                log("Error: " + embedError);
-                return result;
-            }
-            log("Embedded compact track payload into output executable.");
-        }
-
-        log("----------------------------------------");
-        log("Runtime Target Path: MicroPlayer (x86 tiny preset path)");
-        log("Output Executable: " + request.targetExePath);
-        log("BUILD SUCCESSFUL");
-        result.success = true;
-        return result;
-    }
+    log("Found runtime binary: " + playerExe.string());
 
     log("----------------------------------------");
-    log("Step 4: Preparing Packed Project");
+    log("[4/6] Prepare packed project data");
 
     ProjectData project;
     if (!Serializer::LoadProject(request.projectPath, project)) {
@@ -1077,7 +2393,7 @@ BuildResult BuildPipeline::BuildSelfContained(
         return result;
     }
 
-    fs::path packRoot = fs::path(request.appRoot) / "build_selfcontained_pack";
+    fs::path packRoot = buildRootPath / "build_selfcontained_pack";
     std::error_code ec;
     fs::remove_all(packRoot, ec);
     fs::create_directories(packRoot, ec);
@@ -1087,20 +2403,24 @@ BuildResult BuildPipeline::BuildSelfContained(
         return result;
     }
 
-    ShaderCompiler compiler;
-    if (!compiler.Initialize()) {
-        log("Error: DXC not available. Cannot precompile shaders for self-contained build.");
-        return result;
-    }
+    std::vector<Serializer::PackedExtraFile> extraFiles;
+    std::string writeError;
 
-    auto logDiagnostics = [&](const std::vector<ShaderDiagnostic>& diags) {
-        for (const auto& diag : diags) {
-            log(diag.message);
+    if (useMicroPlayer) {
+        log("Micro ubershader strategy: ON (single shared shader source for micro build)");
+        ShaderCompiler compiler;
+        if (!compiler.Initialize()) {
+            log("Error: DXC not available. Cannot precompile micro ubershader modules.");
+            return result;
         }
-    };
 
-    log("Precompiling vertex shader");
-    const char* vertexShaderSource = R"(
+        auto logDiagnostics = [&](const std::vector<ShaderDiagnostic>& diags) {
+            for (const auto& diag : diags) {
+                log(diag.message);
+            }
+        };
+
+        const char* vertexShaderSource = R"(
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
@@ -1124,106 +2444,318 @@ PSInput main(VSInput input) {
 }
 )";
 
-    auto vsResult = compiler.CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl", ShaderCompileMode::Build);
-    if (!vsResult.success) {
-        log("Error: Vertex shader precompile failed.");
-        logDiagnostics(vsResult.diagnostics);
-        return result;
-    }
-
-    std::vector<Serializer::PackedExtraFile> extraFiles;
-    fs::path vertexPath = packRoot / GetPackedVertexShaderPath();
-    std::string writeError;
-    if (!WriteBinaryFile(vertexPath, vsResult.bytecode, writeError)) {
-        log("Error: " + writeError);
-        return result;
-    }
-    extraFiles.push_back({vertexPath.string(), GetPackedVertexShaderPath()});
-
-    log("Precompiling transitions");
-    const TransitionType transitions[] = {
-        TransitionType::Crossfade,
-        TransitionType::DipToBlack,
-        TransitionType::FadeOut,
-        TransitionType::FadeIn,
-        TransitionType::Glitch,
-        TransitionType::Pixelate
-    };
-
-    for (TransitionType type : transitions) {
-        const char* packedPath = GetTransitionPackedPath(type);
-        if (!packedPath || !*packedPath) continue;
-        std::string shaderSource = GetTransitionShaderSourceForBuild(type);
-        std::vector<PreviewRenderer::TextureDecl> decls = { {0, "Texture2D"}, {1, "Texture2D"} };
-        std::string wrapped = BuildPixelShaderSource(shaderSource, decls);
-        auto psResult = compiler.CompileFromSource(wrapped, "PSMain", "ps_6_0", L"transition.hlsl", ShaderCompileMode::Build);
-        if (!psResult.success) {
-            log("Error: Transition shader precompile failed.");
-            logDiagnostics(psResult.diagnostics);
+        auto vsResult = compiler.CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl", ShaderCompileMode::Build);
+        if (!vsResult.success) {
+            log("Error: Vertex shader precompile failed for micro build.");
+            logDiagnostics(vsResult.diagnostics);
             return result;
         }
-        fs::path transitionPath = packRoot / packedPath;
-        if (!WriteBinaryFile(transitionPath, psResult.bytecode, writeError)) {
+
+        fs::path vertexPath = packRoot / GetPackedVertexShaderPath();
+        if (!WriteBinaryFile(vertexPath, vsResult.bytecode, writeError)) {
             log("Error: " + writeError);
             return result;
         }
-        extraFiles.push_back({transitionPath.string(), packedPath});
-    }
+        extraFiles.push_back({vertexPath.string(), GetPackedVertexShaderPath()});
 
-    log("Precompiling scene and post FX shaders");
-    for (size_t i = 0; i < project.scenes.size(); ++i) {
-        auto& scene = project.scenes[i];
-        log("Scene " + std::to_string(i) + ": " + scene.name);
-        std::vector<PreviewRenderer::TextureDecl> decls;
-        for (const auto& b : scene.bindings) {
-            if (!b.enabled) continue;
-            PreviewRenderer::TextureDecl decl;
-            decl.slot = b.channelIndex;
-            if (b.type == TextureType::TextureCube) decl.type = "TextureCube";
-            else if (b.type == TextureType::Texture3D) decl.type = "Texture3D";
-            else decl.type = "Texture2D";
-            decls.push_back(decl);
-        }
+        TinyModuleMap tinyModuleMap = BuildTinyModuleMap(project, false);
+        std::unordered_set<std::string> preserveGlobalFunctionNames;
 
-        std::string wrapped = BuildPixelShaderSource(scene.shaderCode, decls);
-        log("  Compiling scene shader -> assets/shaders/scene_" + std::to_string(i) + ".cso");
-        auto psResult = compiler.CompileFromSource(wrapped, "PSMain", "ps_6_0", L"scene.hlsl", ShaderCompileMode::Build);
-        if (!psResult.success) {
-            log("Error: Scene shader precompile failed: " + scene.name);
-            logDiagnostics(psResult.diagnostics);
-            return result;
-        }
+        if (!request.microUbershaderKeepEntrypointsBySignature.empty()) {
+            const auto grouped = BuildMicroConflictBindings(tinyModuleMap);
+            std::unordered_map<int, std::vector<std::pair<size_t, size_t>>> removalsByModule;
 
-        std::string scenePackedPath = "assets/shaders/scene_" + std::to_string(i) + ".cso";
-        fs::path scenePath = packRoot / scenePackedPath;
-        if (!WriteBinaryFile(scenePath, psResult.bytecode, writeError)) {
-            log("Error: " + writeError);
-            return result;
-        }
-        scene.precompiledPath = scenePackedPath;
-        extraFiles.push_back({scenePath.string(), scenePackedPath});
-        log("  Packed scene shader: " + scenePackedPath);
+            for (const auto& [signatureKey, keepEntrypoints] : request.microUbershaderKeepEntrypointsBySignature) {
+                const auto it = grouped.find(signatureKey);
+                if (it == grouped.end()) {
+                    continue;
+                }
 
-        for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
-            auto& fx = scene.postFxChain[fxIndex];
-            log("  Compiling post FX [" + std::to_string(fxIndex) + "] " + fx.name + " -> assets/shaders/scene_" + std::to_string(i) + "_fx_" + std::to_string(fxIndex) + ".cso");
-            std::string fxWrapped = BuildPixelShaderSource(fx.shaderCode, {}, true);
-            auto fxResult = compiler.CompileFromSource(fxWrapped, "PSMain", "ps_6_0", L"postfx.hlsl", ShaderCompileMode::Build);
-            if (!fxResult.success) {
-                log("Error: Post FX precompile failed: " + fx.name);
-                logDiagnostics(fxResult.diagnostics);
-                return result;
+                std::unordered_set<std::string> keepSet(keepEntrypoints.begin(), keepEntrypoints.end());
+                const auto& bindings = it->second;
+                if (keepSet.size() == 1 && !bindings.empty()) {
+                    preserveGlobalFunctionNames.insert(bindings.front().functionName);
+                }
+
+                for (const auto& binding : bindings) {
+                    if (keepSet.find(binding.moduleEntrypoint) != keepSet.end()) {
+                        continue;
+                    }
+                    removalsByModule[binding.moduleIndex].push_back({binding.signatureStart, binding.bodyEnd + 1});
+                }
             }
 
-            std::string fxPackedPath = "assets/shaders/scene_" + std::to_string(i) + "_fx_" + std::to_string(fxIndex) + ".cso";
-            fs::path fxPath = packRoot / fxPackedPath;
-            if (!WriteBinaryFile(fxPath, fxResult.bytecode, writeError)) {
+            for (auto& [moduleIndex, ranges] : removalsByModule) {
+                if (moduleIndex < 0 || static_cast<size_t>(moduleIndex) >= tinyModuleMap.modules.size()) {
+                    continue;
+                }
+                auto& source = tinyModuleMap.modules[static_cast<size_t>(moduleIndex)];
+                std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                for (const auto& range : ranges) {
+                    if (range.first >= source.size() || range.second > source.size() || range.second <= range.first) {
+                        continue;
+                    }
+                    source.erase(range.first, range.second - range.first);
+                }
+            }
+        }
+
+        for (size_t moduleIndex = 0; moduleIndex < tinyModuleMap.modules.size(); ++moduleIndex) {
+            const std::string entrypoint =
+                (moduleIndex < tinyModuleMap.moduleEntrypoints.size()) ? tinyModuleMap.moduleEntrypoints[moduleIndex] : std::string();
+            const std::string scoped = ScopeLocalFunctionsForModule(
+                tinyModuleMap.modules[moduleIndex],
+                entrypoint,
+                preserveGlobalFunctionNames.empty() ? nullptr : &preserveGlobalFunctionNames);
+            tinyModuleMap.modules[moduleIndex] = MinifyShaderTextForPack(scoped);
+        }
+
+        log("Micro module table (moduleId -> runtime entrypoint):");
+        for (size_t moduleIndex = 0; moduleIndex < tinyModuleMap.modules.size(); ++moduleIndex) {
+            const std::string entrypoint =
+                (moduleIndex < tinyModuleMap.moduleEntrypoints.size() && !tinyModuleMap.moduleEntrypoints[moduleIndex].empty())
+                    ? tinyModuleMap.moduleEntrypoints[moduleIndex]
+                    : ("<unknown>");
+            log("  [" + std::to_string(moduleIndex) + "] -> " + entrypoint);
+        }
+
+        log("Micro tracker module bindings:");
+        for (size_t sceneIndex = 0; sceneIndex < tinyModuleMap.sceneModuleIndices.size(); ++sceneIndex) {
+            log("  scene[" + std::to_string(sceneIndex) + "] -> module " + std::to_string(tinyModuleMap.sceneModuleIndices[sceneIndex]));
+            if (sceneIndex < tinyModuleMap.postFxModuleIndices.size()) {
+                const auto& fxModules = tinyModuleMap.postFxModuleIndices[sceneIndex];
+                for (size_t fxIndex = 0; fxIndex < fxModules.size(); ++fxIndex) {
+                    log("    postfx[" + std::to_string(fxIndex) + "] -> module " + std::to_string(fxModules[fxIndex]));
+                }
+            }
+        }
+        for (size_t transitionIndex = 0; transitionIndex < 6; ++transitionIndex) {
+            log("  transition[" + std::to_string(transitionIndex) + "] -> module " + std::to_string(tinyModuleMap.transitionModuleIndices[transitionIndex]));
+        }
+
+        std::string ubershaderSource;
+        for (const auto& moduleCode : tinyModuleMap.modules) {
+            ubershaderSource += moduleCode;
+            ubershaderSource.push_back('\n');
+        }
+
+        std::vector<std::vector<uint8_t>> microModuleBytecode;
+        microModuleBytecode.resize(tinyModuleMap.modules.size());
+        for (size_t moduleIndex = 0; moduleIndex < tinyModuleMap.modules.size(); ++moduleIndex) {
+            const std::string entrypoint =
+                (moduleIndex < tinyModuleMap.moduleEntrypoints.size() && !tinyModuleMap.moduleEntrypoints[moduleIndex].empty())
+                    ? tinyModuleMap.moduleEntrypoints[moduleIndex]
+                    : ("s" + std::to_string(moduleIndex));
+            auto tryCompile = [&](const std::string& source, const wchar_t* sourceName, std::vector<uint8_t>& outBytecode) -> bool {
+                auto psResult = compiler.CompileFromSource(source, "PSMain", "ps_6_0", sourceName, ShaderCompileMode::Build);
+                if (!psResult.success) {
+                    logDiagnostics(psResult.diagnostics);
+                    return false;
+                }
+                outBytecode = std::move(psResult.bytecode);
+                return true;
+            };
+
+            const std::string wrappedCombined = BuildPixelShaderSource(ubershaderSource, {}, false, entrypoint);
+            if (tryCompile(wrappedCombined, L"micro_ubershader.hlsl", microModuleBytecode[moduleIndex])) {
+                continue;
+            }
+
+            log("Warning: Combined ubershader compile failed at " + entrypoint + ". Retrying module-local compile.");
+            const std::string wrappedModuleLocal = BuildPixelShaderSource(tinyModuleMap.modules[moduleIndex], {}, false, entrypoint);
+            if (tryCompile(wrappedModuleLocal, L"micro_ubershader_module.hlsl", microModuleBytecode[moduleIndex])) {
+                log("Info: Module-local fallback compile succeeded at " + entrypoint + ".");
+                continue;
+            }
+
+            log("Warning: Module-local compile failed at " + entrypoint + ". Using placeholder shader module.");
+            const std::string placeholderModule = "float4 main(float2 fragCoord, float2 iResolution, float iTime){ return float4(1.0, 0.0, 1.0, 1.0); }";
+            const std::string wrappedPlaceholder = BuildPixelShaderSource(placeholderModule, {}, false, "main");
+            if (tryCompile(wrappedPlaceholder, L"micro_ubershader_placeholder.hlsl", microModuleBytecode[moduleIndex])) {
+                log("Info: Placeholder shader module emitted for " + entrypoint + ".");
+                continue;
+            }
+
+            log("Error: Placeholder module compile also failed at " + entrypoint + ".");
+            return result;
+        }
+
+        fs::path ubershaderBytecodePath = packRoot / "assets" / "shaders" / "ubershader.bin";
+        if (!WriteMicroUbershaderBytecodeBlob(microModuleBytecode, ubershaderBytecodePath, writeError)) {
+            log("Error: " + writeError);
+            return result;
+        }
+        extraFiles.push_back({ubershaderBytecodePath.string(), "assets/shaders/ubershader.bin"});
+
+        fs::path ubershaderPath = packRoot / "assets" / "shaders" / "ubershader.hlsl";
+        if (!WriteTextFile(ubershaderPath, BuildMicroUbershaderSource(tinyModuleMap), writeError)) {
+            log("Error: " + writeError);
+            return result;
+        }
+        extraFiles.push_back({ubershaderPath.string(), "assets/shaders/ubershader.hlsl"});
+
+        for (auto& scene : project.scenes) {
+            scene.precompiledPath.clear();
+            for (auto& fx : scene.postFxChain) {
+                fx.precompiledPath.clear();
+            }
+        }
+    } else {
+        ShaderCompiler compiler;
+        if (!compiler.Initialize()) {
+            log("Error: DXC not available. Cannot precompile shaders for self-contained build.");
+            return result;
+        }
+
+        auto logDiagnostics = [&](const std::vector<ShaderDiagnostic>& diags) {
+            for (const auto& diag : diags) {
+                log(diag.message);
+            }
+        };
+
+        log("Precompiling vertex shader");
+        const char* vertexShaderSource = R"(
+cbuffer Constants : register(b0) {
+    float iTime;
+    float2 iResolution;
+};
+
+struct VSInput {
+    float3 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+struct PSInput {
+    float4 pos : SV_POSITION;
+    float2 fragCoord : TEXCOORD0;
+};
+
+PSInput main(VSInput input) {
+    PSInput output;
+    output.pos = float4(input.pos, 1.0);
+    output.fragCoord = float2(input.uv.x, 1.0 - input.uv.y) * iResolution;
+    return output;
+}
+)";
+
+        auto vsResult = compiler.CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl", ShaderCompileMode::Build);
+        if (!vsResult.success) {
+            log("Error: Vertex shader precompile failed.");
+            logDiagnostics(vsResult.diagnostics);
+            return result;
+        }
+
+        fs::path vertexPath = packRoot / GetPackedVertexShaderPath();
+        if (!WriteBinaryFile(vertexPath, vsResult.bytecode, writeError)) {
+            log("Error: " + writeError);
+            return result;
+        }
+        extraFiles.push_back({vertexPath.string(), GetPackedVertexShaderPath()});
+
+        bool usedTransitions[7] = {};
+        for (const auto& row : project.track.rows) {
+            if (row.transition == TransitionType::None) {
+                continue;
+            }
+            const int idx = TransitionIndex(row.transition);
+            if (idx >= 0 && idx < 7) {
+                usedTransitions[idx] = true;
+            }
+        }
+
+        log("Precompiling used transitions");
+        const TransitionType transitions[] = {
+            TransitionType::Crossfade,
+            TransitionType::DipToBlack,
+            TransitionType::FadeOut,
+            TransitionType::FadeIn,
+            TransitionType::Glitch,
+            TransitionType::Pixelate
+        };
+
+        for (TransitionType type : transitions) {
+            const int transitionIdx = TransitionIndex(type);
+            if (transitionIdx < 0 || transitionIdx >= 7 || !usedTransitions[transitionIdx]) {
+                continue;
+            }
+            const char* packedPath = GetTransitionPackedPath(type);
+            if (!packedPath || !*packedPath) continue;
+            std::string shaderSource = GetTransitionShaderSourceForBuild(type);
+            std::vector<PreviewRenderer::TextureDecl> decls = { {0, "Texture2D"}, {1, "Texture2D"} };
+            std::string wrapped = BuildPixelShaderSource(shaderSource, decls);
+            auto psResult = compiler.CompileFromSource(wrapped, "PSMain", "ps_6_0", L"transition.hlsl", ShaderCompileMode::Build);
+            if (!psResult.success) {
+                log("Error: Transition shader precompile failed.");
+                logDiagnostics(psResult.diagnostics);
+                return result;
+            }
+            fs::path transitionPath = packRoot / packedPath;
+            if (!WriteBinaryFile(transitionPath, psResult.bytecode, writeError)) {
                 log("Error: " + writeError);
                 return result;
             }
-            fx.precompiledPath = fxPackedPath;
-            extraFiles.push_back({fxPath.string(), fxPackedPath});
-            log("  Packed post FX shader: " + fxPackedPath);
+            extraFiles.push_back({transitionPath.string(), packedPath});
+        }
+
+        log("Precompiling scene and post FX shaders");
+        for (size_t i = 0; i < project.scenes.size(); ++i) {
+            auto& scene = project.scenes[i];
+            log("Scene " + std::to_string(i) + ": " + scene.name);
+            std::vector<PreviewRenderer::TextureDecl> decls;
+            for (const auto& b : scene.bindings) {
+                if (!b.enabled) continue;
+                PreviewRenderer::TextureDecl decl;
+                decl.slot = b.channelIndex;
+                if (b.type == TextureType::TextureCube) decl.type = "TextureCube";
+                else if (b.type == TextureType::Texture3D) decl.type = "Texture3D";
+                else decl.type = "Texture2D";
+                decls.push_back(decl);
+            }
+
+            std::string wrapped = BuildPixelShaderSource(scene.shaderCode, decls);
+            log("  Compiling scene shader -> assets/shaders/scene_" + std::to_string(i) + ".cso");
+            auto psResult = compiler.CompileFromSource(wrapped, "PSMain", "ps_6_0", L"scene.hlsl", ShaderCompileMode::Build);
+            if (!psResult.success) {
+                log("Error: Scene shader precompile failed: " + scene.name);
+                logDiagnostics(psResult.diagnostics);
+                return result;
+            }
+
+            std::string scenePackedPath = "assets/shaders/scene_" + std::to_string(i) + ".cso";
+            fs::path scenePath = packRoot / scenePackedPath;
+            if (!WriteBinaryFile(scenePath, psResult.bytecode, writeError)) {
+                log("Error: " + writeError);
+                return result;
+            }
+            scene.precompiledPath = scenePackedPath;
+            extraFiles.push_back({scenePath.string(), scenePackedPath});
+            log("  Packed scene shader: " + scenePackedPath);
+
+            for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
+                auto& fx = scene.postFxChain[fxIndex];
+                if (!fx.enabled) {
+                    fx.precompiledPath.clear();
+                    continue;
+                }
+                log("  Compiling post FX [" + std::to_string(fxIndex) + "] " + fx.name + " -> assets/shaders/scene_" + std::to_string(i) + "_fx_" + std::to_string(fxIndex) + ".cso");
+                std::string fxWrapped = BuildPixelShaderSource(fx.shaderCode, {}, true);
+                auto fxResult = compiler.CompileFromSource(fxWrapped, "PSMain", "ps_6_0", L"postfx.hlsl", ShaderCompileMode::Build);
+                if (!fxResult.success) {
+                    log("Error: Post FX precompile failed: " + fx.name);
+                    logDiagnostics(fxResult.diagnostics);
+                    return result;
+                }
+
+                std::string fxPackedPath = "assets/shaders/scene_" + std::to_string(i) + "_fx_" + std::to_string(fxIndex) + ".cso";
+                fs::path fxPath = packRoot / fxPackedPath;
+                if (!WriteBinaryFile(fxPath, fxResult.bytecode, writeError)) {
+                    log("Error: " + writeError);
+                    return result;
+                }
+                fx.precompiledPath = fxPackedPath;
+                extraFiles.push_back({fxPath.string(), fxPackedPath});
+                log("  Packed post FX shader: " + fxPackedPath);
+            }
         }
     }
 
@@ -1232,7 +2764,7 @@ PSInput main(VSInput input) {
     if (request.restrictedCompactTrack) {
         log("Restricted optimization: compact track binary enabled");
         fs::path compactTrackPath = packRoot / "assets" / "track.bin";
-        if (!WriteCompactTrackBinary(project.track, compactTrackPath, writeError)) {
+        if (!WriteCompactTrackBinary(project, compactTrackPath, writeError)) {
             log("Error: " + writeError);
             return result;
         }
@@ -1262,13 +2794,85 @@ PSInput main(VSInput input) {
     }
 
     log("----------------------------------------");
-    log("Step 5: Packing Executable");
-    if (Serializer::PackExecutable(playerExe.string(), request.targetExePath, packProjectPath.string(), extraFiles)) {
+    log("[5/6] Export clean solution directory");
+    fs::path cleanSolutionRoot;
+    std::string cleanSolutionError;
+    if (ExportCleanSolutionDirectory(request, packRoot, useScreenSaver, useMicroPlayer, useCrinkler, staticRuntime, cleanSolutionRoot, cleanSolutionError)) {
+        log("Clean solution directory: " + cleanSolutionRoot.string());
+    } else {
+        log("Warning: Failed to export clean solution directory: " + cleanSolutionError);
+    }
+
+    log("----------------------------------------");
+    log("[6/6] Create final artifact");
+    bool artifactOk = false;
+    fs::path finalArtifactPath = fs::path(request.targetExePath);
+
+    std::string outputWritableError;
+    if (!EnsureOutputArtifactWritable(finalArtifactPath, outputWritableError)) {
+        log("Error: " + outputWritableError);
+        return result;
+    }
+
+    if (isPackagedDemo) {
+        fs::path packageDir = buildRootPath / "packaged_demo";
+        std::error_code packageEc;
+        fs::remove_all(packageDir, packageEc);
+        packageEc.clear();
+        fs::create_directories(packageDir, packageEc);
+        if (packageEc) {
+            log("Error: Failed to create packaged output directory: " + packageDir.string());
+            return result;
+        }
+
+        const fs::path runtimeCopy = packageDir / playerExe.filename();
+        std::string copyError;
+        if (!CopyPathRecursive(playerExe, runtimeCopy, copyError)) {
+            log("Error: " + copyError);
+            return result;
+        }
+        if (!CopyPathRecursive(packProjectPath, packageDir / "project.json", copyError)) {
+            log("Error: " + copyError);
+            return result;
+        }
+        if (!CopyPathRecursive(packRoot / "assets", packageDir / "assets", copyError)) {
+            log("Error: " + copyError);
+            return result;
+        }
+
+        std::string ext = finalArtifactPath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".zip") {
+            finalArtifactPath.replace_extension(".zip");
+        }
+
+        std::string zipError;
+        artifactOk = CreatePackagedZip(packageDir, finalArtifactPath, log, zipError);
+        if (!artifactOk) {
+            log("Error: " + zipError);
+            return result;
+        }
+    } else {
+        artifactOk = Serializer::PackExecutable(playerExe.string(),
+                                                finalArtifactPath.string(),
+                                                packProjectPath.string(),
+                                                extraFiles,
+                                                !useMicroPlayer);
+        if (!artifactOk) {
+            log("Error: PackExecutable failed.");
+            log("  sourceExe: " + playerExe.string());
+            log("  output: " + finalArtifactPath.string());
+            log("  manifest: " + packProjectPath.string());
+            log("  extraFiles: " + std::to_string(extraFiles.size()));
+        }
+    }
+
+    if (artifactOk) {
         std::error_code sizeEc;
-        const uint64_t finalSize = fs::file_size(request.targetExePath, sizeEc);
+        const uint64_t finalSize = fs::file_size(finalArtifactPath, sizeEc);
         if (!sizeEc) {
             result.finalExeBytes = finalSize;
-            log("Final EXE size: " + std::to_string(finalSize) + " bytes");
+            log("Final artifact size: " + std::to_string(finalSize) + " bytes");
         }
 
         const uint64_t budgetBytes = SizePresetToBytes(request.sizeTarget);
@@ -1288,12 +2892,21 @@ PSInput main(VSInput input) {
         }
 
         log("----------------------------------------");
-        log("Runtime Target Path: Full Runtime Player (x64 open/free demo path)");
-        log("Output Executable: " + request.targetExePath);
+        if (isPackagedDemo) {
+            log("Runtime Target Path: Packaged Demo (.zip with runtime + assets)");
+        } else if (useMicroPlayer) {
+            log("Runtime Target Path: MicroPlayer (x86 tiny preset path)");
+        } else {
+            log("Runtime Target Path: Full Runtime Player (x64 open/free demo path)");
+        }
+        log("Output Artifact: " + finalArtifactPath.string());
+        if (!cleanSolutionRoot.empty()) {
+            log("Clean Solution Directory: " + cleanSolutionRoot.string());
+        }
         log("BUILD SUCCESSFUL");
         result.success = true;
     } else {
-        log("Error: Failed to pack executable.");
+        log("Error: Failed to create final artifact.");
     }
 
     return result;

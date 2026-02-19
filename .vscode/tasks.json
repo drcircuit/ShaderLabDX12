@@ -1,111 +1,135 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "Build ShaderLab (Debug)",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-debug.bat"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": "$msCompile"
-        },
-        {
-            "label": "Build ShaderLab (Release)",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-release.bat"
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": "$msCompile"
-        },
-        {
-            "label": "Clean Build",
-            "type": "shell",
-            "command": "Remove-Item",
-            "args": [
-                "-Recurse",
-                "-Force",
-                "build"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Reconfigure CMake",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\reconfigure.bat"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Dev Shell (MSVC)",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-NoExit",
-                "-Command",
-                ". .\\tools\\dev_env.ps1"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Run ShaderLabEditor (Dev Env)",
-            "type": "shell",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ". .\\tools\\dev_env.ps1; .\\build\\bin\\ShaderLabEditor.exe"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": []
-        }
-    ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build ShaderLab (Debug)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-debug.bat"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": "$msCompile"
+		},
+		{
+			"label": "Build ShaderLab (Release)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-release.bat"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": "$msCompile"
+		},
+		{
+			"label": "Clean Build",
+			"type": "shell",
+			"command": "Remove-Item",
+			"args": [
+				"-Recurse",
+				"-Force",
+				"build"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Reconfigure CMake",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\reconfigure.bat"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Dev Shell (MSVC)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-NoExit",
+				"-Command",
+				". .\\tools\\dev_env.ps1"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Run ShaderLabEditor (Dev Env)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; .\\build\\bin\\ShaderLabEditor.exe"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Crinkled Matrix Validation",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"$repo = Get-Location; $cli = Join-Path $repo 'build\\bin\\ShaderLabBuildCli.exe'; $project = 'C:\\Users\\espen\\code\\DEMO.json'; $outBase = Join-Path $repo 'build_smoke_crinkled'; New-Item -ItemType Directory -Force -Path $outBase | Out-Null; function Invoke-Crinkled([string]$name,[string]$target,[string]$ext,[string]$size='none'){ $root = Join-Path $outBase ('root_' + $name); $out = Join-Path $outBase ('artifact_' + $name + $ext); Write-Host \"--- $name (crinkled) ---\" -ForegroundColor Cyan; & $cli --app-root $repo --project $project --output $out --solution-root $root --target $target --mode crinkled --size $size; $code = $LASTEXITCODE; $exists = Test-Path $out; $sizeBytes = if ($exists) { (Get-Item $out).Length } else { -1 }; [PSCustomObject]@{ Name=$name; Target=$target; ExitCode=$code; Exists=$exists; SizeBytes=$sizeBytes; Output=$out } }; $results = @(); $results += Invoke-Crinkled 'packaged' 'packaged' '.zip'; $results += Invoke-Crinkled 'selfcontained' 'selfcontained' '.exe'; $results += Invoke-Crinkled 'screensaver' 'screensaver' '.scr'; $results += Invoke-Crinkled 'micro' 'micro' '.exe' '64k'; Write-Host '--- SUMMARY ---' -ForegroundColor Yellow; $results | Format-Table -AutoSize; $allOk = ($results | Where-Object { -not ($_.ExitCode -eq 0 -and $_.Exists) }).Count -eq 0; if ($allOk) { Write-Host 'ALL_CRINKLED_OK' -ForegroundColor Green } else { Write-Host 'CRINKLED_MATRIX_HAS_FAILURES' -ForegroundColor Red; exit 1 }"
+			]
+		},
+		{
+			"label": "Crinkled Matrix Summary",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				".\\tools\\validate_crinkled_matrix_summary.ps1"
+			]
+		}
+	]
 }

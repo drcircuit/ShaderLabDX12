@@ -361,6 +361,7 @@ std::vector<std::wstring> ShaderCompiler::GetCompileArguments(ShaderCompileMode 
         args.push_back(L"-O3");   // Maximum optimization
         args.push_back(L"-Qstrip_debug");  // Strip debug info
         args.push_back(L"-Qstrip_reflect");  // Strip reflection data
+        args.push_back(L"-Qstrip_priv");  // Strip private data
     }
 
     return args;

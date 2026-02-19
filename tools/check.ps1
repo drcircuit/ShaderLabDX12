@@ -94,6 +94,7 @@ if ($allReady -and $docsReady) {
     Write-Host "Ready to build!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Run: .\tools\build.ps1" -ForegroundColor Cyan
+    Write-Host "Integration test: .\tools\integration_test.ps1" -ForegroundColor Cyan
 } else {
     Write-Host "Some checks failed" -ForegroundColor Yellow
     Write-Host ""
