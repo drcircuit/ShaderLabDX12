@@ -92,20 +92,6 @@ jobs:
             Remove-Item "$env:TEMP\imgui-docking", $zip -Recurse -Force
           }
 
-          # ---- ImGuiColorTextEdit -----------------------------------------
-          $cteDir = "$tp\ImGuiColorTextEdit"
-          if (-not (Test-Path "$cteDir\TextEditor.h")) {
-            Write-Host "Downloading ImGuiColorTextEdit..."
-            $zip = "$env:TEMP\ImGuiColorTextEdit.zip"
-            Invoke-WebRequest `
-              -Uri "https://github.com/santaclose/ImGuiColorTextEdit/archive/refs/heads/master.zip" `
-              -OutFile $zip -UseBasicParsing
-            Expand-Archive $zip -DestinationPath $env:TEMP -Force
-            New-Item -ItemType Directory -Force -Path $cteDir | Out-Null
-            Copy-Item "$env:TEMP\ImGuiColorTextEdit-master\*" $cteDir -Recurse -Force
-            Remove-Item "$env:TEMP\ImGuiColorTextEdit-master", $zip -Recurse -Force
-          }
-
           # ---- miniaudio --------------------------------------------------
           $miniAudio = "$tp\miniaudio\miniaudio.h"
           if (-not (Test-Path $miniAudio)) {
