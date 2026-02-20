@@ -130,9 +130,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     SetUnhandledExceptionFilter(WriteCrashMinidump);
 
     const auto args = GetCommandLineArgs();
+#if SHADERLAB_RUNTIME_DEBUG_LOG
     bool debugConsole = HasAnyFlag(args, {L"-d", L"--debug"});
+#else
+    bool debugConsole = false;
+#endif
     bool loopPlayback = !HasAnyFlag(args, {L"--no-loop", L"-noloop"});
     bool vsyncEnabled = true;
+    bool startFullscreen = true;
     if (HasAnyFlag(args, {L"--loop", L"-loop"})) {
         loopPlayback = true;
     }
@@ -142,18 +147,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             vsyncEnabled = false;
         } else if (IsArg(args[i], L"--vsync") || IsArg(args[i], L"--vsync-on")) {
             vsyncEnabled = true;
+        } else if (IsArg(args[i], L"--windowed") || IsArg(args[i], L"-windowed")) {
+            startFullscreen = false;
+        } else if (IsArg(args[i], L"--fullscreen") || IsArg(args[i], L"-fullscreen")) {
+            startFullscreen = true;
         }
     }
-
-#if SHADERLAB_RUNTIME_DEBUG_LOG
-    debugConsole = true;
-#endif
 
     ShaderLab::PlayerLaunchOptions options{};
     options.debugConsole = debugConsole;
     options.loopPlayback = loopPlayback;
     options.screenSaverMode = false;
     options.vsyncEnabled = vsyncEnabled;
+    options.startFullscreen = startFullscreen;
 
     return ShaderLab::RunPlayerApp(hInstance, options);
 }

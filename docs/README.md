@@ -8,6 +8,7 @@ This folder is the canonical source of project documentation.
 - [BUILD.md](BUILD.md) - Detailed build and packaging workflows
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Runtime/editor architecture overview
 - [STRUCTURE.md](STRUCTURE.md) - Repository layout and ownership
+- [REFACTOR_PLAN.md](REFACTOR_PLAN.md) - Component separation milestones and checkpoints
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution and maintenance workflow
 
 ## Feature Notes

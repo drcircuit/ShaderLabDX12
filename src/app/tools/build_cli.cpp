@@ -1,11 +1,24 @@
 #include "ShaderLab/Core/BuildPipeline.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
 
+namespace fs = std::filesystem;
+
 namespace {
+
+std::string ResolveExecutableDirectory() {
+    char exePath[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return {};
+    }
+    return fs::path(std::string(exePath, length)).parent_path().string();
+}
 
 ShaderLab::BuildMode ParseMode(const std::string& value) {
     std::string lower = value;
@@ -99,7 +112,10 @@ int main(int argc, char** argv) {
     }
 
     if (request.appRoot.empty()) {
-        request.appRoot = std::filesystem::current_path().string();
+        request.appRoot = ResolveExecutableDirectory();
+        if (request.appRoot.empty()) {
+            request.appRoot = fs::current_path().string();
+        }
     }
 
     if (request.projectPath.empty() || request.targetExePath.empty()) {

@@ -34,7 +34,11 @@ struct Vertex {
 struct Constants {
     float iTime;
     float iResolution[2];
-    float padding;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
+    float padding0;
+    float padding1;
 };
 
 PreviewRenderer::PreviewRenderer() = default;
@@ -134,6 +138,9 @@ bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 
 struct VSInput {
@@ -215,6 +222,9 @@ ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& sh
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 )";
 
@@ -295,7 +305,10 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
                               D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                               D3D12_GPU_DESCRIPTOR_HANDLE srvHandle,
                               uint32_t width, uint32_t height,
-                              float timeSeconds) {
+                              float timeSeconds,
+                              float beat,
+                              float bar,
+                              float barBeat16) {
     if (!pipelineState || !renderTarget) {
         return;
     }
@@ -315,20 +328,6 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
                 m_lastGPUTimeMs = (float)(end - start) / (float)m_gpuFrequency * 1000.0f;
             }
             m_queryResultBuffer->Unmap(0, nullptr);
-        }
-    } else if (m_gpuFrequency == 0) {
-        // Try to get frequency from the queue associated with command list?
-        // Cannot get queue from list. 
-        // We will never get correct time without frequency.
-        // Assume 1GHz? No. 
-        // We will fix frequency plumbing later.
-        
-        // TEMPORARY HACK: Create a temp queue just to get frequency
-        D3D12_COMMAND_QUEUE_DESC qDesc = {};
-        qDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        ComPtr<ID3D12CommandQueue> tempQ;
-        if(SUCCEEDED(m_device->GetDevice()->CreateCommandQueue(&qDesc, IID_PPV_ARGS(&tempQ)))) {
-             tempQ->GetTimestampFrequency(&m_gpuFrequency);
         }
     }
 
@@ -365,6 +364,9 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     constants.iTime = timeSeconds;
     constants.iResolution[0] = static_cast<float>(width);
     constants.iResolution[1] = static_cast<float>(height);
+    constants.iBeat = beat;
+    constants.iBar = bar;
+    constants.fBarBeat = barBeat16;
     commandList->SetGraphicsRoot32BitConstants(0, sizeof(Constants) / 4, &constants, 0);
 
     // Set textures (SRV table)

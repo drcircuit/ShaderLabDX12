@@ -5,11 +5,41 @@
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
 
 namespace ShaderLab {
+
+namespace {
+void ComputeShaderMusicalTiming(const PreviewTransport& transport, float& outBeat, float& outBar, float& outBarBeat16) {
+    constexpr float kBeatsPerBar = 4.0f;
+    constexpr float kSixteenthPerBeat = 4.0f;
+    const float beatsPerSecond = transport.bpm / 60.0f;
+    float exactBeat = 0.0f;
+    if (beatsPerSecond > 0.0f) {
+        exactBeat = static_cast<float>(transport.timeSeconds * static_cast<double>(beatsPerSecond));
+        if (exactBeat < 0.0f) {
+            exactBeat = 0.0f;
+        }
+    }
+    const float beat = std::floor(exactBeat);
+    const float bar = std::floor(beat / kBeatsPerBar);
+    const float beatInBar = exactBeat - std::floor(exactBeat / kBeatsPerBar) * kBeatsPerBar;
+    float barBeat16 = std::floor(beatInBar * kSixteenthPerBeat);
+    if (barBeat16 < 0.0f) {
+        barBeat16 = 0.0f;
+    }
+    if (barBeat16 > 15.0f) {
+        barBeat16 = 15.0f;
+    }
+
+    outBeat = beat;
+    outBar = bar;
+    outBarBeat16 = barBeat16;
+}
+}
 
 void UISystem::EnsureSceneTexture(int sceneIndex, uint32_t width, uint32_t height) {
     if (sceneIndex < 0 || sceneIndex >= m_scenes.size()) return;
@@ -390,6 +420,10 @@ ID3D12Resource* UISystem::ApplyPostFxChain(ID3D12GraphicsCommandList* commandLis
         // Render pass
         D3D12_GPU_DESCRIPTOR_HANDLE srvGpu = srvHeap->GetGPUDescriptorHandleForHeapStart();
         srvGpu.ptr += baseSlot * handleStep;
+        float iBeat = 0.0f;
+        float iBar = 0.0f;
+        float fBarBeat = 0.0f;
+        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
         m_previewRenderer->Render(
             commandList,
             fx.pipelineState.Get(),
@@ -397,7 +431,10 @@ ID3D12Resource* UISystem::ApplyPostFxChain(ID3D12GraphicsCommandList* commandLis
             rtvHandle,
             srvGpu,
             width, height,
-            (float)timeSeconds
+            (float)timeSeconds,
+            iBeat,
+            iBar,
+            fBarBeat
         );
 
         // Transition output back to SRV
@@ -643,6 +680,10 @@ void UISystem::RenderScene(ID3D12GraphicsCommandList* commandList, int sceneInde
              commandList->SetDescriptorHeaps(1, heaps);
          }
 
+         float iBeat = 0.0f;
+         float iBar = 0.0f;
+         float fBarBeat = 0.0f;
+         ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
          m_previewRenderer->Render(
             commandList,
             scene.pipelineState.Get(),
@@ -650,7 +691,10 @@ void UISystem::RenderScene(ID3D12GraphicsCommandList* commandList, int sceneInde
             rtvHandle,
             scene.srvHeap ? scene.srvHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{},
             width, height,
-            static_cast<float>(time)
+            static_cast<float>(time),
+            iBeat,
+            iBar,
+            fBarBeat
          );
     }
 
@@ -886,6 +930,10 @@ bool UISystem::RenderPreviewTexture(ID3D12GraphicsCommandList* commandList) {
                  commandList->SetDescriptorHeaps(1, heaps);
 
                  // Render Transition
+                      float iBeat = 0.0f;
+                      float iBar = 0.0f;
+                      float fBarBeat = 0.0f;
+                      ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
                  m_previewRenderer->Render(
                     commandList,
                     m_transitionPSO.Get(),
@@ -893,7 +941,10 @@ bool UISystem::RenderPreviewTexture(ID3D12GraphicsCommandList* commandList) {
                     m_previewRtvHandle,
                     m_transitionSrvHeap->GetGPUDescriptorHandleForHeapStart(),
                     m_previewTextureWidth, m_previewTextureHeight,
-                    (float)progress
+                          (float)progress,
+                          iBeat,
+                          iBar,
+                          fBarBeat
                  );
 
                  // Restore Barrier

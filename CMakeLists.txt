@@ -103,6 +103,7 @@ if(SHADERLAB_BUILD_MICRO_PLAYER)
                 /RELEASE
             )
         endif()
+
     endif()
 endif()
 
@@ -179,6 +180,14 @@ endif()
 
 add_library(ShaderLabCore STATIC ${SHADERLAB_CORE_SOURCES})
 
+if(MSVC)
+    set_source_files_properties(
+        third_party/ImGuiColorTextEdit/TextEditor.cpp
+        PROPERTIES
+        COMPILE_OPTIONS "/wd4101;/wd4244"
+    )
+endif()
+
 target_include_directories(ShaderLabCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
@@ -200,10 +209,6 @@ target_link_libraries(ShaderLabCore PUBLIC
     dxguid.lib
     d3dcompiler.lib
 )
-
-if(SHADERLAB_ENABLE_DXC)
-    target_link_libraries(ShaderLabCore PUBLIC dxcompiler.lib)
-endif()
 
 # ImGui integration
 if(SHADERLAB_BUILD_EDITOR OR (SHADERLAB_BUILD_RUNTIME AND SHADERLAB_RUNTIME_IMGUI))
@@ -283,10 +288,10 @@ if(MSVC)
         target_compile_options(ShaderLabCore PRIVATE
             /Os
             /Oy
-                msvcprt
+            /Oi
             /GS-
-                vcruntime
-                ucrt
+            /GR-
+            /Gy
             /Gw
             /GF
             /Zc:threadSafeInit-
@@ -316,14 +321,20 @@ if(SHADERLAB_BUILD_EDITOR)
 
     # Deploy Development Kit (Code + CMake) for standalone builds
     add_custom_command(TARGET ShaderLabEditor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/editor_assets $<TARGET_FILE_DIR:ShaderLabEditor>/editor_assets
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/templates/Standalone_CMakeLists.txt $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/CMakeLists.txt
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/editor_assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenFontIcons/OpenFontIcons.ttf
+            $<TARGET_FILE_DIR:ShaderLabEditor>/editor_assets/fonts/OpenFontIcons.ttf
     )
 
-    # Copy DXC DLLs to output directory
+    # Copy DXC DLLs to editor output (required for shader compilation/build flow)
     if(SHADERLAB_ENABLE_DXC)
         set(SHADERLAB_DXC_BIN_DIR "" CACHE PATH "Directory containing dxcompiler.dll and dxil.dll")
         set(_shaderlab_dxc_bin_dir "${SHADERLAB_DXC_BIN_DIR}")
@@ -351,6 +362,7 @@ if(SHADERLAB_BUILD_EDITOR)
             message(WARNING "DXC runtime DLLs not found. Set SHADERLAB_DXC_BIN_DIR to a folder containing dxcompiler.dll and dxil.dll.")
         endif()
     endif()
+
 endif()
 
 if(SHADERLAB_BUILD_EDITOR)

@@ -4,6 +4,42 @@
 
 namespace ShaderLab {
 
+namespace {
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    const int required = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        value.c_str(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (required <= 0) {
+        return {};
+    }
+
+    std::string utf8(static_cast<size_t>(required), '\0');
+    const int written = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        value.c_str(),
+        static_cast<int>(value.size()),
+        utf8.data(),
+        required,
+        nullptr,
+        nullptr);
+    if (written <= 0) {
+        return {};
+    }
+    return utf8;
+}
+}
+
 ShaderCompiler::ShaderCompiler() = default;
 ShaderCompiler::~ShaderCompiler() = default;
 
@@ -12,14 +48,28 @@ bool ShaderCompiler::Initialize() {
 #define SHADERLAB_ENABLE_DXC 1
 #endif
 #if SHADERLAB_ENABLE_DXC
+    Shutdown();
+
+    m_dxcModule = LoadLibraryA("dxcompiler.dll");
+    if (!m_dxcModule) {
+        return false;
+    }
+
+    m_dxcCreateInstance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(m_dxcModule, "DxcCreateInstance"));
+    if (!m_dxcCreateInstance) {
+        FreeLibrary(m_dxcModule);
+        m_dxcModule = nullptr;
+        return false;
+    }
+
     // Create DXC utils
-    HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&m_utils));
+    HRESULT hr = m_dxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&m_utils));
     if (FAILED(hr)) {
         return false;
     }
 
     // Create DXC compiler
-    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&m_compiler));
+    hr = m_dxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&m_compiler));
     if (FAILED(hr)) {
         return false;
     }
@@ -40,6 +90,11 @@ void ShaderCompiler::Shutdown() {
     m_includeHandler.Reset();
     m_compiler.Reset();
     m_utils.Reset();
+    m_dxcCreateInstance = nullptr;
+    if (m_dxcModule) {
+        FreeLibrary(m_dxcModule);
+        m_dxcModule = nullptr;
+    }
 }
 
 ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath,
@@ -53,7 +108,7 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
 #if !SHADERLAB_ENABLE_DXC
     ShaderDiagnostic diag;
     diag.message = "DXC is disabled in this build";
-    diag.filename = std::string(filepath.begin(), filepath.end());
+    diag.filename = WideToUtf8(filepath);
     diag.isError = true;
     result.diagnostics.push_back(diag);
     return result;
@@ -61,7 +116,7 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
     if (!m_utils || !m_compiler || !m_includeHandler) {
         ShaderDiagnostic diag;
         diag.message = "Shader compiler is not initialized";
-        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.filename = WideToUtf8(filepath);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
@@ -74,7 +129,7 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
     if (FAILED(hr)) {
         ShaderDiagnostic diag;
         diag.message = "Failed to load shader file";
-        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.filename = WideToUtf8(filepath);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
@@ -152,14 +207,14 @@ ShaderCompileResult ShaderCompiler::CompileFromFile(const std::wstring& filepath
     } catch (const std::exception& ex) {
         ShaderDiagnostic diag;
         diag.message = std::string("Shader compilation exception: ") + ex.what();
-        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.filename = WideToUtf8(filepath);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
     } catch (...) {
         ShaderDiagnostic diag;
         diag.message = "Shader compilation exception: unknown";
-        diag.filename = std::string(filepath.begin(), filepath.end());
+        diag.filename = WideToUtf8(filepath);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
@@ -179,7 +234,7 @@ ShaderCompileResult ShaderCompiler::CompileFromSource(const std::string& source,
 #if !SHADERLAB_ENABLE_DXC
     ShaderDiagnostic diag;
     diag.message = "DXC is disabled in this build";
-    diag.filename = std::string(sourceName.begin(), sourceName.end());
+    diag.filename = WideToUtf8(sourceName);
     diag.isError = true;
     result.diagnostics.push_back(diag);
     return result;
@@ -187,7 +242,7 @@ ShaderCompileResult ShaderCompiler::CompileFromSource(const std::string& source,
     if (!m_utils || !m_compiler || !m_includeHandler) {
         ShaderDiagnostic diag;
         diag.message = "Shader compiler is not initialized";
-        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.filename = WideToUtf8(sourceName);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
@@ -278,14 +333,14 @@ ShaderCompileResult ShaderCompiler::CompileFromSource(const std::string& source,
     } catch (const std::exception& ex) {
         ShaderDiagnostic diag;
         diag.message = std::string("Shader compilation exception: ") + ex.what();
-        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.filename = WideToUtf8(sourceName);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;
     } catch (...) {
         ShaderDiagnostic diag;
         diag.message = "Shader compilation exception: unknown";
-        diag.filename = std::string(sourceName.begin(), sourceName.end());
+        diag.filename = WideToUtf8(sourceName);
         diag.isError = true;
         result.diagnostics.push_back(diag);
         return result;

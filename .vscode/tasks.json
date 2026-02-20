@@ -46,11 +46,13 @@
 		{
 			"label": "Clean Build",
 			"type": "shell",
-			"command": "Remove-Item",
+			"command": "powershell",
 			"args": [
-				"-Recurse",
-				"-Force",
-				"build"
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"Remove-Item -Recurse -Force build_debug,build_release -ErrorAction SilentlyContinue"
 			],
 			"presentation": {
 				"reveal": "always",
@@ -102,7 +104,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				". .\\tools\\dev_env.ps1; .\\build\\bin\\ShaderLabEditor.exe"
+				". .\\tools\\dev_env.ps1; .\\build_debug\\bin\\ShaderLabEditor.exe"
 			],
 			"presentation": {
 				"reveal": "always",

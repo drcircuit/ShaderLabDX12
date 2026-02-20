@@ -23,10 +23,14 @@ RuntimeExportResult RuntimeExporter::Export(const RuntimeExportRequest& request)
     }
 
     if (!fs::exists(playerExe)) {
+        fs::path buildReleaseBin = appRoot / "build_release" / "bin";
+        fs::path buildDebugBin = appRoot / "build_debug" / "bin";
         fs::path buildBin = appRoot / "build" / "bin";
-        if (fs::exists(buildBin / "ShaderLabPlayer.exe")) playerExe = buildBin / "ShaderLabPlayer.exe";
-        else if (fs::exists(buildBin / "Debug" / "ShaderLabPlayer.exe")) playerExe = buildBin / "Debug" / "ShaderLabPlayer.exe";
+        if (fs::exists(buildReleaseBin / "ShaderLabPlayer.exe")) playerExe = buildReleaseBin / "ShaderLabPlayer.exe";
         else if (fs::exists(buildBin / "Release" / "ShaderLabPlayer.exe")) playerExe = buildBin / "Release" / "ShaderLabPlayer.exe";
+        else if (fs::exists(buildBin / "ShaderLabPlayer.exe")) playerExe = buildBin / "ShaderLabPlayer.exe";
+        else if (fs::exists(buildDebugBin / "ShaderLabPlayer.exe")) playerExe = buildDebugBin / "ShaderLabPlayer.exe";
+        else if (fs::exists(buildBin / "Debug" / "ShaderLabPlayer.exe")) playerExe = buildBin / "Debug" / "ShaderLabPlayer.exe";
         else if (fs::exists(appRoot / "bin" / "ShaderLabPlayer.exe")) playerExe = appRoot / "bin" / "ShaderLabPlayer.exe";
     }
 
@@ -38,10 +42,11 @@ RuntimeExportResult RuntimeExporter::Export(const RuntimeExportRequest& request)
     try {
         fs::copy_file(playerExe, destExePath, fs::copy_options::overwrite_existing);
 
-        std::vector<std::string> dlls = {"dxcompiler.dll", "dxil.dll", "imgui.ini"};
+        std::vector<std::string> dlls = {"dxcompiler.dll", "dxil.dll"};
         for (const auto& dll : dlls) {
             fs::path src = playerExe.parent_path() / dll;
             if (!fs::exists(src)) src = appRoot / dll;
+            if (!fs::exists(src)) src = appRoot / "build_release" / "bin" / dll;
             if (!fs::exists(src)) src = appRoot / "build" / "bin" / dll;
 
             if (fs::exists(src)) {

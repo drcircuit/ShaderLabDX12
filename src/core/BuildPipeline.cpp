@@ -87,6 +87,13 @@ int TransitionIndex(TransitionType type) {
     }
 }
 
+TransitionType CanonicalTransitionShaderType(TransitionType type) {
+    if (type == TransitionType::FadeIn || type == TransitionType::FadeOut) {
+        return TransitionType::Crossfade;
+    }
+    return type;
+}
+
 std::string TrimString(const std::string& value) {
     const char* whitespace = " \t\r\n";
     size_t start = value.find_first_not_of(whitespace);
@@ -98,6 +105,109 @@ std::string TrimString(const std::string& value) {
 bool FileExists(const fs::path& path) {
     std::error_code ec;
     return fs::exists(path, ec);
+}
+
+fs::path GetExecutableDirectory() {
+    char exePath[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return {};
+    }
+    return fs::path(std::string(exePath, length)).parent_path();
+}
+
+bool IsUsableAppRoot(const fs::path& root) {
+    if (root.empty()) {
+        return false;
+    }
+
+    const bool hasDevKit =
+        FileExists(root / "dev_kit" / "CMakeLists.txt") &&
+        FileExists(root / "dev_kit" / "include") &&
+        FileExists(root / "dev_kit" / "src") &&
+        FileExists(root / "dev_kit" / "third_party");
+
+    const bool hasSourceTree =
+        FileExists(root / "templates" / "Standalone_CMakeLists.txt") &&
+        FileExists(root / "include") &&
+        FileExists(root / "src") &&
+        FileExists(root / "third_party");
+
+    return hasDevKit || hasSourceTree;
+}
+
+fs::path ResolveBuildAppRoot(const fs::path& requestedRoot) {
+    std::vector<fs::path> candidates;
+    if (!requestedRoot.empty()) {
+        candidates.push_back(requestedRoot);
+    }
+
+    const fs::path exeDir = GetExecutableDirectory();
+    if (!exeDir.empty()) {
+        candidates.push_back(exeDir);
+        candidates.push_back(exeDir.parent_path());
+    }
+
+    std::error_code ec;
+    const fs::path cwd = fs::current_path(ec);
+    if (!ec && !cwd.empty()) {
+        candidates.push_back(cwd);
+    }
+
+    for (const fs::path& candidate : candidates) {
+        if (IsUsableAppRoot(candidate)) {
+            return candidate;
+        }
+    }
+
+    if (!requestedRoot.empty()) {
+        return requestedRoot;
+    }
+    if (!exeDir.empty()) {
+        return exeDir;
+    }
+    return cwd;
+}
+
+bool HasCleanSolutionSourceTree(const fs::path& root) {
+    if (root.empty()) {
+        return false;
+    }
+
+    return
+        FileExists(root / "include") &&
+        FileExists(root / "src" / "app" / "runtime") &&
+        FileExists(root / "src" / "audio") &&
+        FileExists(root / "src" / "core") &&
+        FileExists(root / "src" / "graphics") &&
+        FileExists(root / "src" / "shader") &&
+        FileExists(root / "third_party");
+}
+
+fs::path ResolveCleanSolutionSourceRoot(const fs::path& appRoot) {
+    std::vector<fs::path> candidates;
+    if (!appRoot.empty()) {
+        candidates.push_back(appRoot);
+        candidates.push_back(appRoot / "dev_kit");
+
+        fs::path current = appRoot;
+        for (int i = 0; i < 4; ++i) {
+            current = current.parent_path();
+            if (current.empty()) {
+                break;
+            }
+            candidates.push_back(current);
+            candidates.push_back(current / "dev_kit");
+        }
+    }
+
+    for (const fs::path& candidate : candidates) {
+        if (HasCleanSolutionSourceTree(candidate)) {
+            return candidate;
+        }
+    }
+
+    return {};
 }
 
 bool FindOnPath(const std::string& exeName) {
@@ -416,6 +526,9 @@ std::string BuildPixelShaderSource(const std::string& shaderSource,
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 )";
 
@@ -1198,6 +1311,7 @@ bool EmbedCompactTrackIntoExecutable(const ProjectData& project, const fs::path&
 }
 
 std::string GetTransitionShaderSourceForBuild(TransitionType type) {
+    type = CanonicalTransitionShaderType(type);
     std::string common = R"(
 float4 main(float2 fragCoord, float2 iResolution, float iTime) {
     float2 uv = fragCoord / iResolution;
@@ -1212,14 +1326,6 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
 )";
         case TransitionType::DipToBlack: return common + R"(
     return (t < 0.5) ? lerp(colA, float4(0,0,0,1), t*2.0) : lerp(float4(0,0,0,1), colB, (t-0.5)*2.0);
-}
-)";
-        case TransitionType::FadeOut: return common + R"(
-    return lerp(colA, colB, t);
-}
-)";
-        case TransitionType::FadeIn: return common + R"(
-    return lerp(colA, colB, t);
 }
 )";
         case TransitionType::Glitch: return common + R"(
@@ -1250,11 +1356,10 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
 }
 
 const char* GetTransitionPackedPath(TransitionType type) {
+    type = CanonicalTransitionShaderType(type);
     switch (type) {
         case TransitionType::Crossfade: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::DipToBlack: return "assets/shaders/transition_dip_to_black.cso";
-        case TransitionType::FadeOut: return "assets/shaders/transition_fade_a_b.cso";
-        case TransitionType::FadeIn: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::Glitch: return "assets/shaders/transition_glitch.cso";
         case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
         default: return "";
@@ -1521,8 +1626,14 @@ bool ExportCleanSolutionDirectory(
     }
 
     const fs::path appRoot(request.appRoot);
-    const fs::path templateCmake = appRoot / "templates" / "Standalone_CMakeLists.txt";
-    const fs::path fallbackCmake = appRoot / "CMakeLists.txt";
+    const fs::path sourceRoot = ResolveCleanSolutionSourceRoot(appRoot);
+    if (sourceRoot.empty()) {
+        outError = "Missing source tree for clean solution export.";
+        return false;
+    }
+
+    const fs::path templateCmake = sourceRoot / "templates" / "Standalone_CMakeLists.txt";
+    const fs::path fallbackCmake = sourceRoot / "CMakeLists.txt";
 
     if (FileExists(templateCmake)) {
         if (!CopyPathRecursive(templateCmake, outSolutionRoot / "CMakeLists.txt", outError)) {
@@ -1543,13 +1654,13 @@ bool ExportCleanSolutionDirectory(
     };
 
     const std::vector<CopyEntry> entries = {
-        {appRoot / "include", outSolutionRoot / "include"},
-        {appRoot / "src" / "app" / "runtime", outSolutionRoot / "src" / "app" / "runtime"},
-        {appRoot / "src" / "audio", outSolutionRoot / "src" / "audio"},
-        {appRoot / "src" / "core", outSolutionRoot / "src" / "core"},
-        {appRoot / "src" / "graphics", outSolutionRoot / "src" / "graphics"},
-        {appRoot / "src" / "shader", outSolutionRoot / "src" / "shader"},
-        {appRoot / "third_party", outSolutionRoot / "third_party"},
+        {sourceRoot / "include", outSolutionRoot / "include"},
+        {sourceRoot / "src" / "app" / "runtime", outSolutionRoot / "src" / "app" / "runtime"},
+        {sourceRoot / "src" / "audio", outSolutionRoot / "src" / "audio"},
+        {sourceRoot / "src" / "core", outSolutionRoot / "src" / "core"},
+        {sourceRoot / "src" / "graphics", outSolutionRoot / "src" / "graphics"},
+        {sourceRoot / "src" / "shader", outSolutionRoot / "src" / "shader"},
+        {sourceRoot / "third_party", outSolutionRoot / "third_party"},
         {packRoot / "project.json", outSolutionRoot / "project.json"},
         {packRoot / "assets", outSolutionRoot / "assets"}
     };
@@ -1628,14 +1739,15 @@ bool ExportCleanSolutionDirectory(
     if (staticRuntime) {
         readme << " -DSHADERLAB_STATIC_RUNTIME=ON";
     }
+    readme << " -DSHADERLAB_RUNTIME_IMGUI=OFF";
     readme << "\n\n";
     readme << "Then build:\n";
     if (useScreenSaver) {
-        readme << "  cmake --build build --target ShaderLabScreenSaver --config Release\n";
+        readme << "  cmake --build build --clean-first --target ShaderLabScreenSaver --config Release\n";
     } else if (useMicroPlayer) {
-        readme << "  cmake --build build --target ShaderLabMicroPlayer --config Release\n";
+        readme << "  cmake --build build --clean-first --target ShaderLabMicroPlayer --config Release\n";
     } else {
-        readme << "  cmake --build build --target ShaderLabPlayer --config Release\n";
+        readme << "  cmake --build build --clean-first --target ShaderLabPlayer --config Release\n";
     }
 
     return true;
@@ -1842,6 +1954,7 @@ bool RunCommand(const std::string& command, const std::function<void(const std::
 
 BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildMode mode) {
     BuildPrereqReport report{};
+    const fs::path effectiveAppRoot = ResolveBuildAppRoot(fs::path(appRoot));
     std::vector<std::string> missing;
     std::vector<std::string> guidance;
     std::vector<std::string> optionalMissing;
@@ -1854,7 +1967,7 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildM
     }
 
     std::string sdkPath;
-    report.hasWindowsSdk = HasWindowsSdk(sdkPath) || HasBundledWindowsSdk(fs::path(appRoot), sdkPath);
+    report.hasWindowsSdk = HasWindowsSdk(sdkPath) || HasBundledWindowsSdk(effectiveAppRoot, sdkPath);
     if (!report.hasWindowsSdk) {
         missing.push_back("Windows SDK 10 (d3d12.h)");
         guidance.push_back("Install Windows 10/11 SDK via Visual Studio Installer.");
@@ -1867,14 +1980,14 @@ BuildPrereqReport BuildPipeline::CheckPrereqs(const std::string& appRoot, BuildM
         guidance.push_back("Install CMake from https://cmake.org/download/ and add it to PATH.");
     }
 
-    report.hasDxcRuntime = HasDxcRuntime(fs::path(appRoot));
+    report.hasDxcRuntime = HasDxcRuntime(effectiveAppRoot);
     if (!report.hasDxcRuntime) {
         missing.push_back("DXC (dxcompiler.dll)");
         guidance.push_back("Install DirectX Shader Compiler or place dxcompiler.dll next to the editor executable.");
     }
 
     std::string crinklerPath;
-    report.hasCrinkler = ResolveCrinklerPath(fs::path(appRoot), crinklerPath);
+    report.hasCrinkler = ResolveCrinklerPath(effectiveAppRoot, crinklerPath);
     report.hasNinja = FindOnPath("ninja.exe");
     if (mode == BuildMode::ReleaseCrinkled) {
         if (!report.hasCrinkler) {
@@ -1975,6 +2088,10 @@ BuildResult BuildPipeline::BuildSelfContained(
     const BuildRequest& request,
     const std::function<void(const std::string&)>& log) {
     BuildResult result{};
+    BuildRequest resolvedRequest = request;
+    const fs::path requestedAppRoot(request.appRoot);
+    const fs::path effectiveAppRoot = ResolveBuildAppRoot(requestedAppRoot);
+    resolvedRequest.appRoot = effectiveAppRoot.string();
 
     const BuildTargetKind targetKind = request.targetKind;
     const bool budgetedBuild = IsTinySizeTarget(request.sizeTarget);
@@ -2005,19 +2122,24 @@ BuildResult BuildPipeline::BuildSelfContained(
     if (budgetedBuild && targetKind != BuildTargetKind::MicroDemo) {
         log("Budgeted build detected; forcing MicroPlayer runtime path.");
     }
-    log("Application Root: " + request.appRoot);
+    if (!request.appRoot.empty() && requestedAppRoot != effectiveAppRoot) {
+        log("Application Root (requested): " + request.appRoot);
+        log("Application Root (resolved): " + resolvedRequest.appRoot);
+    } else {
+        log("Application Root: " + resolvedRequest.appRoot);
+    }
     log("Project Path: " + request.projectPath);
     log("Target Output: " + request.targetExePath);
 
-    fs::path sourceDir = fs::path(request.appRoot) / "dev_kit";
+    fs::path sourceDir = effectiveAppRoot / "dev_kit";
     bool isDevKit = fs::exists(sourceDir) && fs::exists(sourceDir / "CMakeLists.txt");
 
     if (isDevKit) {
         log("Using Dev Kit source: " + sourceDir.string());
     } else {
-        log("Dev Kit not found at " + (fs::path(request.appRoot) / "dev_kit").string());
+        log("Dev Kit not found at " + (effectiveAppRoot / "dev_kit").string());
         std::string sdkError;
-        if (!CreateIsolatedSdkSourceDirectory(request, buildRootPath, sourceDir, sdkError)) {
+        if (!CreateIsolatedSdkSourceDirectory(resolvedRequest, buildRootPath, sourceDir, sdkError)) {
             log("Error: Failed to create isolated SDK source directory.");
             log("Details: " + sdkError);
             return result;
@@ -2027,7 +2149,7 @@ BuildResult BuildPipeline::BuildSelfContained(
 
     BundledWindowsSdkInfo bundledSdk;
     if (!ResolveBundledWindowsSdk(sourceDir, bundledSdk)) {
-        ResolveBundledWindowsSdk(fs::path(request.appRoot), bundledSdk);
+        ResolveBundledWindowsSdk(effectiveAppRoot, bundledSdk);
     }
     if (bundledSdk.found) {
         log("Windows SDK bundle: " + bundledSdk.root.string() + " (version " + bundledSdk.versionTag + ")");
@@ -2048,7 +2170,7 @@ BuildResult BuildPipeline::BuildSelfContained(
         }
     }
     std::string crinklerPath;
-    const bool hasCrinkler = ResolveCrinklerPath(fs::path(request.appRoot), crinklerPath);
+    const bool hasCrinkler = ResolveCrinklerPath(effectiveAppRoot, crinklerPath);
     const bool wantCrinkler = request.mode == BuildMode::ReleaseCrinkled;
     bool useCrinkler = wantCrinkler && hasNinja && hasCrinkler;
     bool useX86Target = useMicroPlayer;
@@ -2157,7 +2279,7 @@ BuildResult BuildPipeline::BuildSelfContained(
         writeCacheBool("SHADERLAB_BUILD_MICRO_PLAYER", useMicroPlayer);
         writeCacheBool("SHADERLAB_ENABLE_DXC", false);
         const bool tinyDevOverlay = tinyProfile && microDeveloperBuild;
-        const bool enableRuntimeDebugUi = microDeveloperBuild || request.runtimeDebugLog;
+        const bool enableRuntimeDebugUi = false;
         const bool enableRuntimeDebugLog = microDeveloperBuild || request.runtimeDebugLog;
         writeCacheBool("SHADERLAB_RUNTIME_IMGUI", enableRuntimeDebugUi);
         writeCacheBool("SHADERLAB_RUNTIME_DEBUG_LOG", enableRuntimeDebugLog);
@@ -2429,7 +2551,7 @@ BuildResult BuildPipeline::BuildSelfContained(
     log("[2/6] Build runtime target");
     const std::string targetName = useScreenSaver ? "ShaderLabScreenSaver" : (useMicroPlayer ? "ShaderLabMicroPlayer" : "ShaderLabPlayer");
     const std::string targetExtension = useScreenSaver ? ".scr" : ".exe";
-    std::string buildCmd = cmakeCmd + " --build \"" + buildDir.string() + "\" --target " + targetName + " --config Release";
+    std::string buildCmd = cmakeCmd + " --build \"" + buildDir.string() + "\" --clean-first --target " + targetName + " --config Release";
     std::string buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
     log("Command: " + buildCmdWithEnv);
 
@@ -2496,7 +2618,7 @@ BuildResult BuildPipeline::BuildSelfContained(
 
     if (!releaseBuildOk) {
         log("Build Failed. Trying Debug Configuration...");
-        buildCmd = "cmake --build \"" + buildDir.string() + "\" --target " + targetName + " --config Debug";
+        buildCmd = "cmake --build \"" + buildDir.string() + "\" --clean-first --target " + targetName + " --config Debug";
         buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
         if (!RunCommand(buildCmdWithEnv, log)) {
             log("Build Failed.");
@@ -2575,6 +2697,9 @@ BuildResult BuildPipeline::BuildSelfContained(
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 
 struct VSInput {
@@ -2769,6 +2894,9 @@ PSInput main(VSInput input) {
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 
 struct VSInput {
@@ -2948,7 +3076,7 @@ PSInput main(VSInput input) {
     log("[5/6] Export clean solution directory");
     fs::path cleanSolutionRoot;
     std::string cleanSolutionError;
-    if (ExportCleanSolutionDirectory(request, packRoot, useScreenSaver, useMicroPlayer, useCrinkler, staticRuntime, cleanSolutionRoot, cleanSolutionError)) {
+    if (ExportCleanSolutionDirectory(resolvedRequest, packRoot, useScreenSaver, useMicroPlayer, useCrinkler, staticRuntime, cleanSolutionRoot, cleanSolutionError)) {
         log("Clean solution directory: " + cleanSolutionRoot.string());
     } else {
         log("Warning: Failed to export clean solution directory: " + cleanSolutionError);
@@ -2982,6 +3110,7 @@ PSInput main(VSInput input) {
             log("Error: " + copyError);
             return result;
         }
+
         if (!CopyPathRecursive(packProjectPath, packageDir / "project.json", copyError)) {
             log("Error: " + copyError);
             return result;

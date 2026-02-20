@@ -47,7 +47,10 @@ public:
                 D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                 D3D12_GPU_DESCRIPTOR_HANDLE srvHandle, /* Handle to table with 4 textures */
                 uint32_t width, uint32_t height,
-                float timeSeconds);
+                float timeSeconds,
+                float beat = 0.0f,
+                float bar = 0.0f,
+                float barBeat16 = 0.0f);
 
     bool IsValid(ID3D12PipelineState* pso) const { return pso != nullptr; }
 

@@ -22,7 +22,6 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
     m_height = height;
     m_hwnd = hwnd;
     m_allowTearing = false;
-    m_isExclusiveFullscreen = false;
 
     ComPtr<IDXGIFactory5> factory5;
     if (SUCCEEDED(device->GetFactory()->QueryInterface(IID_PPV_ARGS(&factory5)))) {
@@ -91,10 +90,6 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
 }
 
 void Swapchain::Shutdown() {
-    if (m_swapchain && m_isExclusiveFullscreen) {
-        m_swapchain->SetFullscreenState(FALSE, nullptr);
-        m_isExclusiveFullscreen = false;
-    }
     ReleaseBackBuffers();
     m_rtvHeap.Reset();
     m_swapchain.Reset();
@@ -103,7 +98,7 @@ void Swapchain::Shutdown() {
 
 void Swapchain::Present(bool vsync) {
     UINT syncInterval = vsync ? 1 : 0;
-    UINT presentFlags = (!vsync && m_allowTearing && !m_isExclusiveFullscreen) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    UINT presentFlags = (!vsync && m_allowTearing) ? DXGI_PRESENT_ALLOW_TEARING : 0;
     m_swapchain->Present(syncInterval, presentFlags);
     m_currentBackBuffer = m_swapchain->GetCurrentBackBufferIndex();
 }
@@ -131,20 +126,6 @@ void Swapchain::Resize(uint32_t width, uint32_t height) {
         m_currentBackBuffer = m_swapchain->GetCurrentBackBufferIndex();
         CreateRenderTargetViews();
     }
-}
-
-bool Swapchain::SetExclusiveFullscreen(bool enabled) {
-    if (!m_swapchain) {
-        return false;
-    }
-
-    HRESULT hr = m_swapchain->SetFullscreenState(enabled ? TRUE : FALSE, nullptr);
-    if (FAILED(hr)) {
-        return false;
-    }
-
-    m_isExclusiveFullscreen = enabled;
-    return true;
 }
 
 ID3D12Resource* Swapchain::GetCurrentBackBuffer() const {

@@ -68,6 +68,13 @@ tools/          - Build and utility scripts
 - Command list abstraction
 - Minimal overhead, RAII-based
 
+### Runtime Fullscreen Policy (DX12)
+
+- Player runtimes use borderless windowed fullscreen (`WS_POPUP`) with flip-model swapchain.
+- Classic exclusive fullscreen (`SetFullscreenState(TRUE)`) is intentionally disabled.
+- `DXGI_MWA_NO_ALT_ENTER` is enabled to prevent legacy mode-switch fullscreen toggles.
+- Startup path targets black-first present behavior before showing fullscreen window where applicable.
+
 **Shader Module** (`src/shader/`)
 - DXC compiler integration
 - Live compilation (debug, unoptimized)

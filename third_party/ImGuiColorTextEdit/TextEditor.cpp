@@ -1455,7 +1455,6 @@ void TextEditor::SetSelection(const Coordinates & aStart, const Coordinates & aE
 	case TextEditor::SelectionMode::Line:
 	{
 		const auto lineNo = mState.mSelectionEnd.mLine;
-		const auto lineSize = (size_t)lineNo < mLines.size() ? mLines[lineNo].size() : 0;
 		mState.mSelectionStart = Coordinates(mState.mSelectionStart.mLine, 0);
 		mState.mSelectionEnd = Coordinates(lineNo, GetLineMaxColumn(lineNo));
 		break;
@@ -2247,7 +2246,9 @@ void TextEditor::ColorizeRange(int aFromLine, int aToLine)
 
 					// todo : allmost all language definitions use lower case to specify keywords, so shouldn't this use ::tolower ?
 					if (!mLanguageDefinition.mCaseSensitive)
-						std::transform(id.begin(), id.end(), id.begin(), ::toupper);
+						std::transform(id.begin(), id.end(), id.begin(), [](unsigned char c) {
+							return static_cast<char>(std::toupper(c));
+						});
 
 					if (!line[first - bufferBegin].mPreprocessor)
 					{

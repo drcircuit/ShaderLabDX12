@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <conio.h>
 #include <cstdio>
+#include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
 #ifndef SHADERLAB_TINY_PLAYER
@@ -33,6 +35,53 @@ namespace ShaderLab {
 
 namespace {
 
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+    const int required = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (required <= 0) {
+        return {};
+    }
+    std::string utf8(static_cast<size_t>(required), '\0');
+    const int written = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), utf8.data(), required, nullptr, nullptr);
+    if (written <= 0) {
+        return {};
+    }
+    return utf8;
+}
+
+std::string BuildSingleInstanceMutexName() {
+    char exePath[MAX_PATH] = {};
+    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) == 0) {
+        return "Local\\ShaderLabPlayerSingleInstance";
+    }
+
+    std::string path(exePath);
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const size_t hashValue = std::hash<std::string>{}(path);
+    return "Local\\ShaderLabPlayerSingleInstance_" + std::to_string(hashValue);
+}
+
+void AppendPlayerErrorLogLine(const std::string& message) {
+    char exePath[MAX_PATH] = {};
+    std::string logPath = "runtime_error.log";
+    const DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        std::string exe(exePath, length);
+        const size_t slash = exe.find_last_of("\\/");
+        if (slash != std::string::npos) {
+            logPath = exe.substr(0, slash + 1) + "runtime_error.log";
+        }
+    }
+
+    std::ofstream logFile(logPath, std::ios::out | std::ios::app);
+    if (!logFile.is_open()) {
+        return;
+    }
+    logFile << message << "\n";
+}
+
 Device* g_Device = nullptr;
 Swapchain* g_Swapchain = nullptr;
 CommandQueue* g_CommandQueue = nullptr;
@@ -41,12 +90,32 @@ bool g_DebugConsole = false;
 bool g_Windowed = false;
 bool g_ScreenSaverMode = false;
 bool g_VsyncEnabled = true;
+bool g_StartFullscreen = true;
 float g_LastMeasuredFps = 0.0f;
 double g_FpsAccumSeconds = 0.0;
 int g_FpsAccumFrames = 0;
 std::string g_BaseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo";
 RECT g_WindowedRect = { 0, 0, 1280, 720 };
 POINT g_LastMousePos = { 0, 0 };
+bool g_RuntimeCursorHidden = false;
+
+void HideRuntimeCursor() {
+    if (g_RuntimeCursorHidden) {
+        return;
+    }
+    while (ShowCursor(FALSE) >= 0) {
+    }
+    g_RuntimeCursorHidden = true;
+}
+
+void RestoreRuntimeCursor() {
+    if (!g_RuntimeCursorHidden) {
+        return;
+    }
+    while (ShowCursor(TRUE) < 0) {
+    }
+    g_RuntimeCursorHidden = false;
+}
 
 void EnableConsoleLogging() {
 #if !SHADERLAB_TINY_PLAYER
@@ -82,8 +151,44 @@ void UpdateWindowTitleWithStats(HWND hwnd) {
         g_BaseWindowTitle.c_str(),
         g_LastMeasuredFps,
         g_VsyncEnabled ? "On" : "Off",
-        g_Windowed ? "Windowed" : "Exclusive");
+        g_Windowed ? "Windowed" : "Borderless");
     SetWindowTextA(hwnd, title);
+}
+
+bool PresentInitialBlackFrame() {
+    if (!g_CommandQueue || !g_Swapchain) {
+        return false;
+    }
+
+    g_CommandQueue->ResetCommandList();
+    auto* cmdList = g_CommandQueue->GetCommandList();
+    if (!cmdList) {
+        return false;
+    }
+
+    auto* backBuffer = g_Swapchain->GetCurrentBackBuffer();
+    if (!backBuffer) {
+        return false;
+    }
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    cmdList->ResourceBarrier(1, &barrier);
+
+    auto rtv = g_Swapchain->GetCurrentRTV();
+    float clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    cmdList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    cmdList->ResourceBarrier(1, &barrier);
+
+    g_CommandQueue->ExecuteCommandList();
+    g_Swapchain->Present(true);
+    return true;
 }
 
 void SetFullscreen(HWND hwnd) {
@@ -95,20 +200,12 @@ void SetFullscreen(HWND hwnd) {
         GetWindowRect(hwnd, &g_WindowedRect);
     }
 
-    if (g_Swapchain) {
-        g_Swapchain->SetExclusiveFullscreen(false);
-    }
-
     g_Windowed = false;
     DWORD style = WS_POPUP | WS_VISIBLE;
     SetWindowLongPtr(hwnd, GWL_STYLE, style);
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, screenW, screenH, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-
-    if (g_Swapchain) {
-        g_Swapchain->SetExclusiveFullscreen(true);
-    }
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, screenW, screenH, SWP_FRAMECHANGED);
 
     UpdateWindowTitleWithStats(hwnd);
 }
@@ -116,10 +213,6 @@ void SetFullscreen(HWND hwnd) {
 void SetWindowed(HWND hwnd) {
     if (!hwnd) {
         return;
-    }
-
-    if (g_Swapchain) {
-        g_Swapchain->SetExclusiveFullscreen(false);
     }
 
     g_Windowed = true;
@@ -136,7 +229,7 @@ void SetWindowed(HWND hwnd) {
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     int x = (screenW - width) / 2;
     int y = (screenH - height) / 2;
-    SetWindowPos(hwnd, HWND_TOP, x, y, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 
     UpdateWindowTitleWithStats(hwnd);
 }
@@ -147,6 +240,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         return true;
     }
 #endif
+
+    if (uMsg == WM_ERASEBKGND) {
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        if (hdc) {
+            FillRect(hdc, &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+        return 1;
+    }
+
+    if (uMsg == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd, &ps);
+        if (hdc) {
+            FillRect(hdc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
 
     if (uMsg == WM_SETCURSOR) {
         SetCursor(nullptr);
@@ -194,11 +307,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             }
             break;
         case WM_SIZE:
-            if (g_Player && g_Swapchain) {
+            if (g_Swapchain) {
                 int w = LOWORD(lParam);
                 int h = HIWORD(lParam);
-                g_Swapchain->Resize(w, h);
-                g_Player->OnResize(w, h);
+                if (w > 0 && h > 0) {
+                    g_Swapchain->Resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+                    if (g_Player) {
+                        g_Player->OnResize(w, h);
+                    }
+                }
             }
             return 0;
     }
@@ -211,6 +328,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     g_DebugConsole = options.debugConsole;
     g_ScreenSaverMode = options.screenSaverMode;
     g_VsyncEnabled = options.vsyncEnabled;
+    g_StartFullscreen = options.startFullscreen;
 
     struct HandleCloser {
         void operator()(void* handle) const {
@@ -220,12 +338,15 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
         }
     };
 
+    const std::string mutexName = BuildSingleInstanceMutexName();
     std::unique_ptr<void, HandleCloser> singleInstanceMutex(
-        CreateMutexA(nullptr, FALSE, "Local\\ShaderLabMicroPlayerSingleInstance"));
+        CreateMutexA(nullptr, FALSE, mutexName.c_str()));
     if (!singleInstanceMutex) {
+        AppendPlayerErrorLogLine("Startup failed: CreateMutexA returned null.");
         return -1;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        AppendPlayerErrorLogLine("Startup skipped: single-instance mutex already exists.");
         return 0;
     }
 
@@ -240,19 +361,23 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
     wc.hCursor = nullptr;
+    wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     RegisterClass(&wc);
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
+    const bool launchFullscreen = (!g_ScreenSaverMode && g_StartFullscreen);
 
-    DWORD windowStyle = g_ScreenSaverMode ? (WS_POPUP | WS_VISIBLE) : (WS_OVERLAPPEDWINDOW | WS_VISIBLE);
-    int windowW = g_ScreenSaverMode ? screenW : 1280;
-    int windowH = g_ScreenSaverMode ? screenH : 720;
-    int windowX = g_ScreenSaverMode ? 0 : (screenW - windowW) / 2;
-    int windowY = g_ScreenSaverMode ? 0 : (screenH - windowH) / 2;
+    DWORD windowStyle = (g_ScreenSaverMode || launchFullscreen) ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    int windowW = (g_ScreenSaverMode || launchFullscreen) ? screenW : 1280;
+    int windowH = (g_ScreenSaverMode || launchFullscreen) ? screenH : 720;
+    int windowX = (g_ScreenSaverMode || launchFullscreen) ? 0 : (screenW - windowW) / 2;
+    int windowY = (g_ScreenSaverMode || launchFullscreen) ? 0 : (screenH - windowH) / 2;
+
+    const DWORD exStyle = (g_ScreenSaverMode || launchFullscreen) ? WS_EX_TOPMOST : 0;
 
     HWND hwnd = CreateWindowEx(
-        0,
+        exStyle,
         CLASS_NAME,
         "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo",
         windowStyle,
@@ -265,8 +390,19 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
         hInstance,
         nullptr);
 
-    if (hwnd == nullptr) return 0;
-    ShowWindow(hwnd, SW_SHOW);
+    if (hwnd == nullptr) {
+        AppendPlayerErrorLogLine("Startup failed: CreateWindowEx returned null.");
+        return 0;
+    }
+
+    const bool deferShowUntilFirstPresent = launchFullscreen;
+    if (!deferShowUntilFirstPresent) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
+    }
+
+    HideRuntimeCursor();
 
     if (g_ScreenSaverMode) {
         GetCursorPos(&g_LastMousePos);
@@ -274,23 +410,60 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     }
 
     g_Device = new Device();
-    if (!g_Device->Initialize()) return -1;
+    if (!g_Device->Initialize()) {
+        AppendPlayerErrorLogLine("Startup failed: Device initialization failed.");
+        RestoreRuntimeCursor();
+        return -1;
+    }
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
+    {
+        const auto mem = g_Device->GetVideoMemoryInfo();
+        std::cout << "Video device: index=" << g_Device->GetAdapterIndex()
+                  << " name=\"" << WideToUtf8(g_Device->GetAdapterName()) << "\""
+                  << " localMemUsage=" << mem.usage
+                  << " budget=" << mem.budget
+                  << std::endl;
+    }
+#endif
 
     g_CommandQueue = new CommandQueue();
-    if (!g_CommandQueue->Initialize(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT)) return -1;
+    if (!g_CommandQueue->Initialize(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT)) {
+        AppendPlayerErrorLogLine("Startup failed: CommandQueue initialization failed.");
+        RestoreRuntimeCursor();
+        return -1;
+    }
 
     g_Swapchain = new Swapchain();
-    if (!g_Swapchain->Initialize(g_Device, g_CommandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) return -1;
+    if (!g_Swapchain->Initialize(g_Device, g_CommandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) {
+        AppendPlayerErrorLogLine("Startup failed: Swapchain initialization failed.");
+        RestoreRuntimeCursor();
+        return -1;
+    }
 
     if (!g_ScreenSaverMode) {
-        SetWindowed(hwnd);
-        SetFullscreen(hwnd);
+        if (g_StartFullscreen) {
+            SetFullscreen(hwnd);
+        } else {
+            SetWindowed(hwnd);
+        }
+    }
+
+    if (deferShowUntilFirstPresent) {
+        if (!PresentInitialBlackFrame()) {
+            AppendPlayerErrorLogLine("Startup warning: Initial black frame present failed; continuing.");
+        }
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
     }
 
     const int runtimeWidth = static_cast<int>(g_Swapchain->GetWidth());
     const int runtimeHeight = static_cast<int>(g_Swapchain->GetHeight());
     g_Player = new DemoPlayer();
     if (!g_Player->Initialize(hwnd, g_Device, g_Swapchain, runtimeWidth, runtimeHeight)) {
+        AppendPlayerErrorLogLine("Startup failed: DemoPlayer initialization failed.");
+        RestoreRuntimeCursor();
         return -1;
     }
     g_Player->SetLooping(options.loopPlayback);
@@ -337,11 +510,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
             DispatchMessage(&msg);
 
             if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
-                if (g_DebugConsole && !g_ScreenSaverMode) {
-                    ShowWindow(hwnd, SW_HIDE);
-                } else {
-                    PostQuitMessage(0);
-                }
+                PostQuitMessage(0);
             }
 
             if (msg.message == WM_KEYDOWN && g_DebugConsole && !g_ScreenSaverMode) {
@@ -411,6 +580,8 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     g_Swapchain = nullptr;
     g_CommandQueue = nullptr;
     g_Device = nullptr;
+
+    RestoreRuntimeCursor();
 
     if (g_DebugConsole) {
 #if !SHADERLAB_TINY_PLAYER

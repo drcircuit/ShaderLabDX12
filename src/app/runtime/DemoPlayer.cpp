@@ -22,6 +22,7 @@
 #include <cstring>
 #include <array>
 #include <cstdlib>
+#include <sstream>
 #if !SHADERLAB_TINY_PLAYER
 #include <iostream>
 #endif
@@ -73,7 +74,176 @@ static const char* kPackedMicroUbershaderPath = "assets/shaders/ubershader.hlsl"
 static const char* kPackedMicroUbershaderBytecodePath = "assets/shaders/ubershader.bin";
 
 static int TransitionIndex(TransitionType type);
+static const char* GetTransitionPackedPath(TransitionType type);
 static std::string GetTransitionShaderSource(TransitionType type);
+
+static TransitionType CanonicalTransitionShaderType(TransitionType type) {
+    if (type == TransitionType::FadeIn || type == TransitionType::FadeOut) {
+        return TransitionType::Crossfade;
+    }
+    return type;
+}
+
+static std::string GetDirectoryName(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    if (slash == std::string::npos) {
+        return {};
+    }
+    return path.substr(0, slash);
+}
+
+static std::string JoinPath(const std::string& base, const std::string& relativePath) {
+    if (base.empty()) {
+        return relativePath;
+    }
+    if (relativePath.empty()) {
+        return base;
+    }
+    const bool baseHasSep = base.back() == '\\' || base.back() == '/';
+    const bool relHasSep = relativePath.front() == '\\' || relativePath.front() == '/';
+    if (baseHasSep && relHasSep) {
+        return base + relativePath.substr(1);
+    }
+    if (baseHasSep || relHasSep) {
+        return base + relativePath;
+    }
+    return base + "\\" + relativePath;
+}
+
+static std::string GetExecutableDirectory() {
+    char exePath[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return {};
+    }
+    return GetDirectoryName(std::string(exePath, length));
+}
+
+static void AppendRuntimeErrorLogLine(const std::string& message) {
+    char exePath[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string logPath;
+    if (length > 0 && length < MAX_PATH) {
+        std::string exe(exePath, length);
+        logPath = JoinPath(GetDirectoryName(exe), "runtime_error.log");
+    } else {
+        logPath = "runtime_error.log";
+    }
+
+    std::ofstream logFile(logPath, std::ios::out | std::ios::app);
+    if (!logFile.is_open()) {
+        return;
+    }
+    logFile << message << "\n";
+}
+
+static bool LoadBytecodeFromFile(const std::string& path, std::vector<uint8_t>& outData) {
+    if (path.empty()) {
+        return false;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    outData.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return !outData.empty();
+}
+
+static bool LoadBytecodeFromPathCandidates(const std::string& relativeOrAbsolutePath,
+                                           const std::string& manifestPath,
+                                           std::vector<uint8_t>& outData,
+                                           std::string* outResolvedPath = nullptr) {
+    outData.clear();
+    if (relativeOrAbsolutePath.empty()) {
+        return false;
+    }
+
+    if (LoadBytecodeFromFile(relativeOrAbsolutePath, outData)) {
+        if (outResolvedPath) *outResolvedPath = relativeOrAbsolutePath;
+        return true;
+    }
+
+    const std::string manifestDir = GetDirectoryName(manifestPath);
+    if (!manifestDir.empty()) {
+        const std::string manifestCandidate = JoinPath(manifestDir, relativeOrAbsolutePath);
+        if (LoadBytecodeFromFile(manifestCandidate, outData)) {
+            if (outResolvedPath) *outResolvedPath = manifestCandidate;
+            return true;
+        }
+    }
+
+    const std::string exeDir = GetExecutableDirectory();
+    if (!exeDir.empty()) {
+        const std::string exeCandidate = JoinPath(exeDir, relativeOrAbsolutePath);
+        if (LoadBytecodeFromFile(exeCandidate, outData)) {
+            if (outResolvedPath) *outResolvedPath = exeCandidate;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
+static bool ValidatePackedShaderAssets(const ProjectData& project,
+                                       std::vector<std::string>& outMissingPaths) {
+    outMissingPaths.clear();
+
+    auto checkPackedPath = [&](const std::string& packedPath) {
+        if (packedPath.empty()) {
+            return;
+        }
+        if (!PackageManager::Get().HasFile(packedPath)) {
+            outMissingPaths.push_back(packedPath);
+        }
+    };
+
+    checkPackedPath(kPackedVertexShaderPath);
+
+    for (const auto& scene : project.scenes) {
+        checkPackedPath(scene.precompiledPath);
+        for (const auto& fx : scene.postFxChain) {
+            if (!fx.enabled) {
+                continue;
+            }
+            checkPackedPath(fx.precompiledPath);
+        }
+    }
+
+    bool usedTransitions[7] = {};
+    for (const auto& row : project.track.rows) {
+        if (row.transition == TransitionType::None) {
+            continue;
+        }
+        const int transitionIndex = TransitionIndex(row.transition);
+        if (transitionIndex >= 0 && transitionIndex < 7) {
+            usedTransitions[transitionIndex] = true;
+        }
+    }
+
+    const TransitionType transitions[] = {
+        TransitionType::Crossfade,
+        TransitionType::DipToBlack,
+        TransitionType::FadeOut,
+        TransitionType::FadeIn,
+        TransitionType::Glitch,
+        TransitionType::Pixelate
+    };
+
+    for (TransitionType transition : transitions) {
+        const int idx = TransitionIndex(transition);
+        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) {
+            continue;
+        }
+        const char* packedPath = GetTransitionPackedPath(transition);
+        if (packedPath && *packedPath) {
+            checkPackedPath(packedPath);
+        }
+    }
+
+    return outMissingPaths.empty();
+}
+#endif
 
 std::string DemoPlayer::GetTransitionShader(TransitionType type) {
 #if SHADERLAB_TINY_PLAYER
@@ -103,6 +273,21 @@ static void DebugLog(const std::string& message) {
 static void DebugLogError(const std::string& message) {
     if (!DebugConsoleEnabled()) return;
     std::cerr << message << std::endl;
+}
+
+static std::string HResultHex(HRESULT hr) {
+    std::ostringstream stream;
+    stream << "0x" << std::hex << std::uppercase << static_cast<unsigned int>(hr);
+    return stream.str();
+}
+
+static const char* TransportStateLabel(TransportState state) {
+    switch (state) {
+        case TransportState::Stopped: return "Stopped";
+        case TransportState::Playing: return "Playing";
+        case TransportState::Paused: return "Paused";
+    }
+    return "Unknown";
 }
 #else
 static void DebugLog(const std::string& message) {
@@ -237,11 +422,10 @@ static int TransitionIndex(TransitionType type) {
 }
 
 static const char* GetTransitionPackedPath(TransitionType type) {
+    type = CanonicalTransitionShaderType(type);
     switch (type) {
         case TransitionType::Crossfade: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::DipToBlack: return "assets/shaders/transition_dip_to_black.cso";
-        case TransitionType::FadeOut: return "assets/shaders/transition_fade_a_b.cso";
-        case TransitionType::FadeIn: return "assets/shaders/transition_fade_a_b.cso";
         case TransitionType::Glitch: return "assets/shaders/transition_glitch.cso";
         case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
         default: return "";
@@ -390,6 +574,58 @@ static bool LoadCompactTrackBinaryFromFile(const std::string& path, DemoTrack& t
     }
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     return LoadCompactTrackBinaryFromBytes(bytes, track, outMeta, outError);
+}
+
+static bool LoadCompactTrackBinaryFromPathCandidates(const std::string& relativeOrAbsolutePath,
+                                                     const std::string& manifestPath,
+                                                     DemoTrack& track,
+                                                     TinyTrackMetadata* outMeta,
+                                                     std::string& outResolvedPath,
+                                                     std::string& outError) {
+    outResolvedPath.clear();
+    outError.clear();
+
+    if (relativeOrAbsolutePath.empty()) {
+        SetCompactTrackDecodeError(outError, "Compact track path is empty.");
+        return false;
+    }
+
+    std::string localError;
+    if (LoadCompactTrackBinaryFromFile(relativeOrAbsolutePath, track, outMeta, localError)) {
+        outResolvedPath = relativeOrAbsolutePath;
+        return true;
+    }
+    if (!localError.empty()) {
+        outError = localError;
+    }
+
+    const std::string manifestDir = GetDirectoryName(manifestPath);
+    if (!manifestDir.empty()) {
+        const std::string manifestCandidate = JoinPath(manifestDir, relativeOrAbsolutePath);
+        localError.clear();
+        if (LoadCompactTrackBinaryFromFile(manifestCandidate, track, outMeta, localError)) {
+            outResolvedPath = manifestCandidate;
+            return true;
+        }
+        if (!localError.empty()) {
+            outError = localError;
+        }
+    }
+
+    const std::string exeDir = GetExecutableDirectory();
+    if (!exeDir.empty()) {
+        const std::string exeCandidate = JoinPath(exeDir, relativeOrAbsolutePath);
+        localError.clear();
+        if (LoadCompactTrackBinaryFromFile(exeCandidate, track, outMeta, localError)) {
+            outResolvedPath = exeCandidate;
+            return true;
+        }
+        if (!localError.empty()) {
+            outError = localError;
+        }
+    }
+
+    return false;
 }
 
 struct MicroUbershaderLibrary {
@@ -617,6 +853,33 @@ static int FindNextSceneIndex(const DemoTrack& track, int afterBeat) {
     return row ? row->sceneIndex : -1;
 }
 
+static void ComputeShaderMusicalTiming(const Transport& transport, float& outBeat, float& outBar, float& outBarBeat16) {
+    constexpr float kBeatsPerBar = 4.0f;
+    constexpr float kSixteenthPerBeat = 4.0f;
+    const float beatsPerSecond = transport.bpm / 60.0f;
+    float exactBeat = 0.0f;
+    if (beatsPerSecond > 0.0f) {
+        exactBeat = static_cast<float>(transport.timeSeconds * static_cast<double>(beatsPerSecond));
+        if (exactBeat < 0.0f) {
+            exactBeat = 0.0f;
+        }
+    }
+    const float beat = std::floor(exactBeat);
+    const float bar = std::floor(beat / kBeatsPerBar);
+    const float beatInBar = exactBeat - std::floor(exactBeat / kBeatsPerBar) * kBeatsPerBar;
+    float barBeat16 = std::floor(beatInBar * kSixteenthPerBeat);
+    if (barBeat16 < 0.0f) {
+        barBeat16 = 0.0f;
+    }
+    if (barBeat16 > 15.0f) {
+        barBeat16 = 15.0f;
+    }
+
+    outBeat = beat;
+    outBar = bar;
+    outBarBeat16 = barBeat16;
+}
+
 static double BeatSeconds(float bpm) {
     if (bpm <= 0.0f) return 0.0;
     return 60.0 / static_cast<double>(bpm);
@@ -630,6 +893,7 @@ static double SceneTimeSeconds(double exactBeat, double startBeat, float offsetB
 }
 
 static std::string GetTransitionShaderSource(TransitionType type) {
+    type = CanonicalTransitionShaderType(type);
     std::string common = R"(
 float4 main(float2 fragCoord, float2 iResolution, float iTime) {
 float2 uv = fragCoord / iResolution;
@@ -647,14 +911,6 @@ return lerp(colA, colB, t);
 return (t < 0.5) ? lerp(colA, float4(0,0,0,1), t*2.0) : lerp(float4(0,0,0,1), colB, (t-0.5)*2.0);
 }
 )";
-        case TransitionType::FadeOut: return common + R"(
-    return lerp(colA, colB, t);
-    }
-    )";
-        case TransitionType::FadeIn: return common + R"(
-    return lerp(colA, colB, t);
-    }
-    )";
         case TransitionType::Glitch: return common + R"(
 float offset = iTime * 10.0;
 float noise = frac(sin(dot(float2(floor(uv.y * 20.0) + offset, offset), float2(12.9898, 78.233))) * 43758.5453);
@@ -714,15 +970,16 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
     PackageManager::Get().Initialize();
     if (PackageManager::Get().HasFile(kPackedVertexShaderPath)) {
         m_precompiledVertexShader = PackageManager::Get().GetFile(kPackedVertexShaderPath);
+    } else {
+        if (!PackageManager::Get().IsPacked()) {
+            std::string resolvedPath;
+            LoadBytecodeFromPathCandidates(kPackedVertexShaderPath, m_manifestPath, m_precompiledVertexShader, &resolvedPath);
+        }
     }
     
 #if !SHADERLAB_TINY_PLAYER
-    // Init Compiler (Graceful failure)
-    m_compiler = new ShaderCompiler();
-    m_compilerReady = m_compiler->Initialize();
-    if (!m_compilerReady) {
-        std::cerr << "Warning: Shader Compiler init failed (missing dxcompiler.dll?). Runtime compilation may fail.\n";
-    }
+    m_compiler = nullptr;
+    m_compilerReady = false;
 #else
     #if SHADERLAB_TINY_RUNTIME_COMPILE
     m_compiler = new ShaderCompiler();
@@ -737,9 +994,10 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
 
     // Init Renderer
     m_renderer = new PreviewRenderer();
-    ShaderCompiler* compiler = m_compilerReady ? m_compiler : nullptr;
+    ShaderCompiler* compiler = nullptr;
     const std::vector<uint8_t>* precompiledVs = m_precompiledVertexShader.empty() ? nullptr : &m_precompiledVertexShader;
-    if (!m_renderer->Initialize(m_device, compiler, DXGI_FORMAT_R8G8B8A8_UNORM, precompiledVs)) {
+    m_rendererReady = m_renderer->Initialize(m_device, compiler, DXGI_FORMAT_R8G8B8A8_UNORM, precompiledVs);
+    if (!m_rendererReady) {
         // Only fatal if initialization logic in Renderer is strict.
         // We modified Renderer to handle null m_compiler if needed, or if generic init fails it returns false.
         // PreviewRenderer::Initialize fails if compiler is invalid. 
@@ -771,19 +1029,38 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
         desc.Width = 1; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
         desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_CLEAR_VALUE clearValue = {};
+        clearValue.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        clearValue.Color[0] = 0.0f;
+        clearValue.Color[1] = 0.0f;
+        clearValue.Color[2] = 0.0f;
+        clearValue.Color[3] = 1.0f;
         
         m_device->GetDevice()->CreateCommittedResource(
             &heapProps, D3D12_HEAP_FLAG_NONE, &desc, 
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, 
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, 
             IID_PPV_ARGS(&m_dummyTexture));
-            
-        // Upload black pixel... (omitted for brevity, assume black/garbage is fine for dummy or fix later)
+
+        m_dummyTextureInitialized = false;
+
         // Creating SRV Heap
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
         heapDesc.NumDescriptors = 1; 
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         m_device->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_dummySrvHeap));
+
+        D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+        rtvHeapDesc.NumDescriptors = 1;
+        rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->GetDevice()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_dummyRtvHeap));
+
+        if (m_dummyRtvHeap) {
+            m_device->GetDevice()->CreateRenderTargetView(m_dummyTexture.Get(), nullptr, m_dummyRtvHeap->GetCPUDescriptorHandleForHeapStart());
+        }
         
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -829,9 +1106,142 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
 
 void DemoPlayer::LoadProject(const std::string& manifestPath) {
     m_manifestPath = manifestPath;
+    m_loadingFailed = false;
+
+    if (!m_rendererReady && m_renderer) {
+        if (m_precompiledVertexShader.empty() && !PackageManager::Get().IsPacked()) {
+            std::string resolvedPath;
+            LoadBytecodeFromPathCandidates(kPackedVertexShaderPath, m_manifestPath, m_precompiledVertexShader, &resolvedPath);
+        }
+        ShaderCompiler* compiler = nullptr;
+        const std::vector<uint8_t>* precompiledVs = m_precompiledVertexShader.empty() ? nullptr : &m_precompiledVertexShader;
+        m_rendererReady = m_renderer->Initialize(m_device, compiler, DXGI_FORMAT_R8G8B8A8_UNORM, precompiledVs);
+#if !SHADERLAB_TINY_PLAYER
+        if (!m_rendererReady) {
+            std::cerr << "Renderer initialization retry failed after loading manifest: " << manifestPath << "\n";
+        }
+#endif
+    }
+
     m_loadingStage = LoadingStage::LoadingManifest;
     m_loadingStatus = "Loading manifest";
     TinyTrace("LoadProject: " + manifestPath);
+}
+
+bool DemoPlayer::EnsureTransitionPipeline(TransitionType type) {
+    if (!m_renderer || !m_rendererReady) {
+        return false;
+    }
+
+    type = CanonicalTransitionShaderType(type);
+    const int idx = TransitionIndex(type);
+    if (idx < 0 || idx >= static_cast<int>(m_transitionPsoCache.size())) {
+        return false;
+    }
+
+    if (m_transitionPsoCache[static_cast<size_t>(idx)]) {
+        m_transitionPSO = m_transitionPsoCache[static_cast<size_t>(idx)];
+        m_compiledTransitionType = type;
+        return true;
+    }
+
+    auto loadTransitionBytecode = [&](TransitionType transitionType) -> const std::vector<uint8_t>* {
+        const int transitionIndex = TransitionIndex(transitionType);
+        if (transitionIndex < 0 || transitionIndex >= static_cast<int>(m_transitionBytecode.size())) {
+            return nullptr;
+        }
+        if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
+            return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+        }
+
+        const char* packedPath = GetTransitionPackedPath(transitionType);
+        if (packedPath && *packedPath) {
+            if (PackageManager::Get().IsPacked()) {
+                if (PackageManager::Get().HasFile(packedPath)) {
+                    m_transitionBytecode[static_cast<size_t>(transitionIndex)] = PackageManager::Get().GetFile(packedPath);
+                    if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
+                        return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+                    }
+                }
+            } else {
+#if !SHADERLAB_TINY_PLAYER
+                fs::path diskPath = fs::path(m_manifestPath).parent_path() / packedPath;
+                std::ifstream file(diskPath, std::ios::binary);
+                if (file.is_open()) {
+                    m_transitionBytecode[static_cast<size_t>(transitionIndex)].assign(
+                        (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                    if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
+                        return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+                    }
+                }
+#endif
+            }
+        }
+        return nullptr;
+    };
+
+    const std::vector<uint8_t>* bytecode = loadTransitionBytecode(type);
+#if SHADERLAB_TINY_PLAYER
+    if ((!bytecode || bytecode->empty()) && idx >= 0 && idx < static_cast<int>(m_microTransitionModuleIds.size())) {
+        const int16_t moduleId = m_microTransitionModuleIds[static_cast<size_t>(idx)];
+        if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
+            const auto& moduleBytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
+            if (!moduleBytecode.empty()) {
+                bytecode = &moduleBytecode;
+            }
+        }
+    }
+#endif
+
+    ComPtr<ID3D12PipelineState> pipeline;
+    if (bytecode && !bytecode->empty()) {
+        pipeline = m_renderer->CreatePSOFromBytecode(*bytecode);
+    }
+
+    if (!pipeline) {
+        return false;
+    }
+
+    m_transitionPsoCache[static_cast<size_t>(idx)] = pipeline;
+    m_transitionPSO = pipeline;
+    m_compiledTransitionType = type;
+    return true;
+}
+
+void DemoPlayer::PrimeRuntimeResources() {
+    for (int sceneIndex = 0; sceneIndex < static_cast<int>(m_project.scenes.size()); ++sceneIndex) {
+        EnsureSceneTexture(sceneIndex);
+        auto& scene = m_project.scenes[static_cast<size_t>(sceneIndex)];
+        if (!scene.postFxChain.empty()) {
+            EnsurePostFxResources(scene);
+        }
+    }
+
+    bool usedTransitions[7] = {};
+    for (const auto& row : m_project.track.rows) {
+        if (row.transition == TransitionType::None) {
+            continue;
+        }
+        const int transitionIndex = TransitionIndex(CanonicalTransitionShaderType(row.transition));
+        if (transitionIndex >= 0 && transitionIndex < 7) {
+            usedTransitions[transitionIndex] = true;
+        }
+    }
+
+    const TransitionType transitions[] = {
+        TransitionType::Crossfade,
+        TransitionType::DipToBlack,
+        TransitionType::Glitch,
+        TransitionType::Pixelate
+    };
+
+    for (TransitionType transition : transitions) {
+        const int idx = TransitionIndex(transition);
+        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) {
+            continue;
+        }
+        EnsureTransitionPipeline(transition);
+    }
 }
 
 // Minimal helpers
@@ -842,6 +1252,19 @@ static ComPtr<ID3D12Resource> LoadTexture(Device* dev, const std::string& path) 
 
 
 void DemoPlayer::Update(double wallTime, float dt) {
+    if (m_loadingFailed) {
+        return;
+    }
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
+    if (m_loadingStage != m_debugLastLoadingStage) {
+        SHADERLAB_RT_DEBUG_LOG(
+            "Loading stage -> " + std::to_string(static_cast<int>(m_loadingStage))
+            + " | status=" + m_loadingStatus);
+        m_debugLastLoadingStage = m_loadingStage;
+    }
+#endif
+
     if (m_loadingStage != LoadingStage::Ready) {
         if (m_loadingStage == LoadingStage::LoadingManifest) {
             // 1. Initialize Package System
@@ -876,27 +1299,9 @@ void DemoPlayer::Update(double wallTime, float dt) {
                 auto trackData = PackageManager::Get().GetFile("assets/track.bin");
                 trackLoaded = LoadCompactTrackBinaryFromBytes(trackData, decodedTrack, &decodedMeta, trackError);
             } else {
-                auto tryLoadTrackFile = [&](const std::string& path) -> bool {
-                    if (path.empty()) return false;
-                    std::string localError;
-                    if (LoadCompactTrackBinaryFromFile(path, decodedTrack, &decodedMeta, localError)) {
-                        return true;
-                    }
-                    if (!localError.empty()) {
-                        trackError = localError;
-                    }
-                    return false;
-                };
-
-                trackLoaded = tryLoadTrackFile("assets/track.bin");
-
-                if (!trackLoaded && !m_manifestPath.empty()) {
-                    const size_t slash = m_manifestPath.find_last_of("\\/");
-                    if (slash != std::string::npos) {
-                        const std::string manifestDir = m_manifestPath.substr(0, slash);
-                        trackLoaded = tryLoadTrackFile(manifestDir + "\\assets\\track.bin");
-                    }
-                }
+                std::string resolvedTrackPath;
+                trackLoaded = LoadCompactTrackBinaryFromPathCandidates(
+                    "assets/track.bin", m_manifestPath, decodedTrack, &decodedMeta, resolvedTrackPath, trackError);
 
                 if (!trackLoaded && !m_manifestPath.empty()) {
                     const std::string lowerManifest = [&]() {
@@ -907,8 +1312,20 @@ void DemoPlayer::Update(double wallTime, float dt) {
                         return out;
                     }();
                     if (lowerManifest.size() >= 10 && lowerManifest.rfind("track.bin") == lowerManifest.size() - 9) {
-                        trackLoaded = tryLoadTrackFile(m_manifestPath);
+                        std::string localError;
+                        if (LoadCompactTrackBinaryFromFile(m_manifestPath, decodedTrack, &decodedMeta, localError)) {
+                            trackLoaded = true;
+                            resolvedTrackPath = m_manifestPath;
+                        } else if (!localError.empty()) {
+                            trackError = localError;
+                        }
                     }
+                }
+
+                if (trackLoaded) {
+                    TinyTrace("Compact track load OK: " + resolvedTrackPath);
+                } else if (!trackError.empty()) {
+                    TinyTrace("Compact track load FAILED: " + trackError);
                 }
             }
 
@@ -974,19 +1391,93 @@ void DemoPlayer::Update(double wallTime, float dt) {
             } else {
                 std::cout << "No pack detected. Loading project from disk: " << m_manifestPath << std::endl;
                 loaded = Serializer::LoadProject(m_manifestPath, m_project);
+
+                if (loaded) {
+                    DemoTrack decodedTrack;
+                    std::string trackError;
+
+                    bool trackLoaded = false;
+                    std::string resolvedTrackPath;
+                    trackLoaded = LoadCompactTrackBinaryFromPathCandidates(
+                        "assets/track.bin", m_manifestPath, decodedTrack, nullptr, resolvedTrackPath, trackError);
+
+                    if (!trackLoaded && !m_manifestPath.empty()) {
+                        const std::string lowerManifest = [&]() {
+                            std::string out = m_manifestPath;
+                            for (char& c : out) {
+                                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                            }
+                            return out;
+                        }();
+                        if (lowerManifest.size() >= 10 && lowerManifest.rfind("track.bin") == lowerManifest.size() - 9) {
+                            std::string localError;
+                            if (LoadCompactTrackBinaryFromFile(m_manifestPath, decodedTrack, nullptr, localError)) {
+                                trackLoaded = true;
+                                resolvedTrackPath = m_manifestPath;
+                            } else if (!localError.empty()) {
+                                trackError = localError;
+                            }
+                        }
+                    }
+
+                    if (trackLoaded) {
+                        m_project.track = std::move(decodedTrack);
+                        std::cout << "Loaded compact track binary from disk: " << resolvedTrackPath << std::endl;
+#if SHADERLAB_COMPACT_TRACK_DEBUG
+                        SHADERLAB_RT_DEBUG_LOG("Loaded compact track binary from disk.");
+#endif
+                    } else {
+                        std::cout << "Compact track binary not loaded from disk (manifest=" << m_manifestPath
+                                  << ", reason=" << (trackError.empty() ? "not found" : trackError) << ")"
+                                  << std::endl;
+                    }
+                }
             }
 #endif
 
             if (loaded) {
+                if (m_project.track.bpm > 0.0f) {
+                    m_project.transport.bpm = m_project.track.bpm;
+                } else if (m_project.transport.bpm <= 0.0f) {
+                    m_project.transport.bpm = 120.0f;
+                }
                 DebugLogProjectSummary(m_project);
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
+                if (packed) {
+                    std::vector<std::string> missingShaderPaths;
+                    if (!ValidatePackedShaderAssets(m_project, missingShaderPaths)) {
+                        m_loadingFailed = true;
+                        m_loadingStatus = "Packed shader validation failed (missing embedded assets):\n";
+                        const size_t maxShown = (std::min)(missingShaderPaths.size(), static_cast<size_t>(16));
+                        for (size_t i = 0; i < maxShown; ++i) {
+                            m_loadingStatus += " - " + missingShaderPaths[i] + "\n";
+                        }
+                        if (missingShaderPaths.size() > maxShown) {
+                            m_loadingStatus += " - ... and " + std::to_string(missingShaderPaths.size() - maxShown) + " more\n";
+                        }
+                        std::cerr << m_loadingStatus;
+                        return;
+                    }
+                }
+#endif
+
                 m_loadingStage = LoadingStage::LoadingAssets;
                 m_loadingStatus = "Loading runtime assets";
                 TinyTrace("Project load OK");
             } else {
+                m_loadingFailed = true;
                 if (m_loadingStatus.empty()) {
                     m_loadingStatus = "Project load failed";
                 }
                 TinyTrace("Project load FAILED");
+#if !SHADERLAB_TINY_PLAYER
+                {
+                    const std::string errorMessage = "Project load failed for manifest '" + m_manifestPath + "': " + m_loadingStatus;
+                    std::cerr << errorMessage << std::endl;
+                    AppendRuntimeErrorLogLine(errorMessage);
+                }
+#endif
                 // Nothing to load
             }
             return;
@@ -1006,13 +1497,6 @@ void DemoPlayer::Update(double wallTime, float dt) {
             }
     #endif
             m_compilationIndex = 0;
-            // Force Playing state for standalone demo
-            m_transport = m_project.transport; 
-            m_transport.state = TransportState::Playing; 
-            m_transport.timeSeconds = 0.0;
-            m_project.track.currentBeat = 0;
-            m_project.track.lastTriggeredBeat = -1;
-            m_lastFrameTime = wallTime;
 
             m_loadingStage = LoadingStage::CompilingShaders;
             m_loadingStatus = "Compiling shaders";
@@ -1029,6 +1513,13 @@ void DemoPlayer::Update(double wallTime, float dt) {
                 }
                 m_compilationIndex++;
             } else {
+                PrimeRuntimeResources();
+                m_transport = m_project.transport;
+                m_transport.state = TransportState::Playing;
+                m_transport.timeSeconds = 0.0;
+                m_project.track.currentBeat = 0;
+                m_project.track.lastTriggeredBeat = -1;
+                m_lastFrameTime = wallTime;
                 m_loadingStage = LoadingStage::Ready;
                 m_loadingStatus = "Ready";
                 TinyTrace("LoadingStage READY");
@@ -1189,6 +1680,16 @@ void DemoPlayer::Update(double wallTime, float dt) {
         }
         m_transitionJustCompletedBeat = -1;
     }
+
+#if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
+    if (m_transport.state != m_debugLastTransportState) {
+        SHADERLAB_RT_DEBUG_LOG(
+            std::string("Transport state -> ") + TransportStateLabel(m_transport.state)
+            + " | time=" + std::to_string(m_transport.timeSeconds)
+            + " | beat=" + std::to_string(m_project.track.currentBeat));
+        m_debugLastTransportState = m_transport.state;
+    }
+#endif
 }
 
 void DemoPlayer::SetActiveScene(int index) {
@@ -1206,26 +1707,29 @@ void DemoPlayer::SetActiveScene(int index) {
 bool DemoPlayer::CompileScene(int sceneIndex) {
     if (sceneIndex < 0 || sceneIndex >= (int)m_project.scenes.size()) return false;
     auto& scene = m_project.scenes[sceneIndex];
-    if (!m_renderer) return false;
+    if (!m_renderer || !m_rendererReady) {
+#if !SHADERLAB_TINY_PLAYER
+        std::cerr << "No renderer available to compile scene index " << sceneIndex << "\n";
+#endif
+        return false;
+    }
 
     bool sceneReady = false;
 
-    auto loadBytecodeFromFile = [](const std::string& path, std::vector<uint8_t>& out) -> bool {
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open()) return false;
-        out.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        return !out.empty();
-    };
-
     if (!scene.precompiledPath.empty()) {
         std::vector<uint8_t> data;
-        if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(scene.precompiledPath)) {
-            data = PackageManager::Get().GetFile(scene.precompiledPath);
-            SHADERLAB_RT_DEBUG_LOG("Loaded packed scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+        if (PackageManager::Get().IsPacked()) {
+            if (PackageManager::Get().HasFile(scene.precompiledPath)) {
+                data = PackageManager::Get().GetFile(scene.precompiledPath);
+                SHADERLAB_RT_DEBUG_LOG("Loaded packed scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+            } else {
+                SHADERLAB_RT_DEBUG_LOG_ERROR("Packed scene shader is missing: " + scene.precompiledPath);
+            }
         } else {
-            loadBytecodeFromFile(scene.precompiledPath, data);
+            std::string resolvedPath;
+            LoadBytecodeFromPathCandidates(scene.precompiledPath, m_manifestPath, data, &resolvedPath);
             if (!data.empty()) {
-                SHADERLAB_RT_DEBUG_LOG("Loaded disk scene shader: " + scene.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+                SHADERLAB_RT_DEBUG_LOG("Loaded disk scene shader: " + resolvedPath + " (" + std::to_string(data.size()) + " bytes)");
             }
         }
 
@@ -1236,6 +1740,10 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
                 sceneReady = true;
             } else {
                 SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to create PSO from precompiled shader for scene " + scene.name);
+#if !SHADERLAB_TINY_PLAYER
+                std::cerr << "Failed to create PSO from precompiled scene shader: " << scene.precompiledPath
+                          << " (scene=" << scene.name << ")\n";
+#endif
             }
         }
         if (data.empty()) {
@@ -1254,15 +1762,8 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
         decls.push_back(decl);
     }
     #if !SHADERLAB_TINY_PLAYER
-    if (!sceneReady && m_compilerReady) {
-        std::vector<std::string> errors;
-        scene.pipelineState = m_renderer->CompileShader(scene.shaderCode, decls, errors);
-        if (!scene.pipelineState) {
-            SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to compile scene " + scene.name);
-        }
-        sceneReady = scene.pipelineState != nullptr;
-    } else if (!sceneReady) {
-        SHADERLAB_RT_DEBUG_LOG_ERROR("No compiler available for scene " + scene.name);
+    if (!sceneReady) {
+        SHADERLAB_RT_DEBUG_LOG_ERROR("Missing precompiled scene shader for scene " + scene.name);
     }
     #else
     if (!sceneReady) {
@@ -1437,23 +1938,22 @@ void DemoPlayer::EnsurePostFxHistory(Scene::PostFXEffect& effect) {
 }
 
 bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex) {
-    if (!m_renderer) return false;
-    auto loadBytecodeFromFile = [](const std::string& path, std::vector<uint8_t>& out) -> bool {
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open()) return false;
-        out.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        return !out.empty();
-    };
+    if (!m_renderer || !m_rendererReady) return false;
 
     if (!effect.precompiledPath.empty()) {
         std::vector<uint8_t> data;
-        if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(effect.precompiledPath)) {
-            data = PackageManager::Get().GetFile(effect.precompiledPath);
-            SHADERLAB_RT_DEBUG_LOG("Loaded packed post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+        if (PackageManager::Get().IsPacked()) {
+            if (PackageManager::Get().HasFile(effect.precompiledPath)) {
+                data = PackageManager::Get().GetFile(effect.precompiledPath);
+                SHADERLAB_RT_DEBUG_LOG("Loaded packed post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+            } else {
+                SHADERLAB_RT_DEBUG_LOG_ERROR("Packed post FX shader is missing: " + effect.precompiledPath);
+            }
         } else {
-            loadBytecodeFromFile(effect.precompiledPath, data);
+            std::string resolvedPath;
+            LoadBytecodeFromPathCandidates(effect.precompiledPath, m_manifestPath, data, &resolvedPath);
             if (!data.empty()) {
-                SHADERLAB_RT_DEBUG_LOG("Loaded disk post FX shader: " + effect.precompiledPath + " (" + std::to_string(data.size()) + " bytes)");
+                SHADERLAB_RT_DEBUG_LOG("Loaded disk post FX shader: " + resolvedPath + " (" + std::to_string(data.size()) + " bytes)");
             }
         }
 
@@ -1472,16 +1972,7 @@ bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex
     }
 
     #if !SHADERLAB_TINY_PLAYER
-    if (m_compilerReady) {
-        std::vector<PreviewRenderer::TextureDecl> decls = { {0, "Texture2D"} };
-        std::vector<std::string> errors;
-        effect.pipelineState = m_renderer->CompileShader(effect.shaderCode, decls, errors, true);
-        if (effect.pipelineState) {
-            effect.isDirty = false;
-            effect.lastCompiledCode = effect.shaderCode;
-            return true;
-        }
-    }
+    SHADERLAB_RT_DEBUG_LOG_ERROR("Missing precompiled post FX shader for: " + effect.name);
     #endif
 
 #if SHADERLAB_TINY_PLAYER
@@ -1622,6 +2113,10 @@ ID3D12Resource* DemoPlayer::ApplyPostFxChain(ID3D12GraphicsCommandList* commandL
 
         D3D12_GPU_DESCRIPTOR_HANDLE srvGpu = scene.postFxSrvHeap->GetGPUDescriptorHandleForHeapStart();
         srvGpu.ptr += baseSlot * handleStep;
+        float iBeat = 0.0f;
+        float iBar = 0.0f;
+        float fBarBeat = 0.0f;
+        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
         m_renderer->Render(
             commandList,
             fx.pipelineState.Get(),
@@ -1629,7 +2124,10 @@ ID3D12Resource* DemoPlayer::ApplyPostFxChain(ID3D12GraphicsCommandList* commandL
             rtvHandle,
             srvGpu,
             m_width, m_height,
-            (float)timeSeconds
+            (float)timeSeconds,
+            iBeat,
+            iBar,
+            fBarBeat
         );
 
         std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
@@ -1698,7 +2196,6 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
         }
     }
 
-    if (!scene.pipelineState) CompileScene(sceneIndex);
     if (!scene.pipelineState) { m_renderStack.pop_back(); return; }
 
     // 2. Bindings
@@ -1741,6 +2238,15 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
                     }
                 }
             }
+
+            if (!bound) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+                nullSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                nullSrvDesc.Texture2D.MipLevels = 1;
+                nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                device->CreateShaderResourceView(nullptr, &nullSrvDesc, dest);
+            }
         }
     }
 
@@ -1763,9 +2269,13 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
     ID3D12DescriptorHeap* heaps[] = { scene.srvHeap.Get() };
     if (scene.srvHeap) cmd->SetDescriptorHeaps(1, heaps);
 
-    m_renderer->Render(cmd, scene.pipelineState.Get(), scene.texture.Get(), rtvHandle, 
-                       scene.srvHeap ? scene.srvHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{}, 
-                       m_width, m_height, (float)time);
+    float iBeat = 0.0f;
+    float iBar = 0.0f;
+    float fBarBeat = 0.0f;
+    ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+    m_renderer->Render(cmd, scene.pipelineState.Get(), scene.texture.Get(), rtvHandle,
+                       scene.srvHeap ? scene.srvHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{},
+                       m_width, m_height, (float)time, iBeat, iBar, fBarBeat);
 
     // Barrier: RT -> Resource
     std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
@@ -1776,6 +2286,93 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
 }
 
 void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle) {
+    if (renderTarget && (m_width <= 0 || m_height <= 0)) {
+        const D3D12_RESOURCE_DESC rtDesc = renderTarget->GetDesc();
+        if (rtDesc.Width > 0 && rtDesc.Height > 0) {
+            m_width = static_cast<int>(rtDesc.Width);
+            m_height = static_cast<int>(rtDesc.Height);
+        }
+    }
+
+    auto copyTextureToBackbuffer = [&](ID3D12Resource* srcTexture) -> bool {
+        if (!srcTexture || !renderTarget) {
+            return false;
+        }
+
+        const auto srcDesc = srcTexture->GetDesc();
+        const auto dstDesc = renderTarget->GetDesc();
+        if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height || srcDesc.Format != dstDesc.Format) {
+            return false;
+        }
+
+        D3D12_RESOURCE_BARRIER dstBarrier = {};
+        dstBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        dstBarrier.Transition.pResource = renderTarget;
+        dstBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        dstBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        cmd->ResourceBarrier(1, &dstBarrier);
+
+        D3D12_RESOURCE_BARRIER srcBarrier = {};
+        srcBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        srcBarrier.Transition.pResource = srcTexture;
+        srcBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        srcBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        cmd->ResourceBarrier(1, &srcBarrier);
+
+        cmd->CopyResource(renderTarget, srcTexture);
+
+        std::swap(dstBarrier.Transition.StateBefore, dstBarrier.Transition.StateAfter);
+        cmd->ResourceBarrier(1, &dstBarrier);
+        std::swap(srcBarrier.Transition.StateBefore, srcBarrier.Transition.StateAfter);
+        cmd->ResourceBarrier(1, &srcBarrier);
+        return true;
+    };
+
+    auto renderSceneDirectToBackbuffer = [&](int sceneIndex, double sceneTime) -> bool {
+        if (sceneIndex < 0 || sceneIndex >= static_cast<int>(m_project.scenes.size())) {
+            return false;
+        }
+
+        auto& scene = m_project.scenes[static_cast<size_t>(sceneIndex)];
+        if (!scene.pipelineState || !scene.postFxChain.empty()) {
+            return false;
+        }
+
+        float iBeat = 0.0f;
+        float iBar = 0.0f;
+        float fBarBeat = 0.0f;
+        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+
+        m_renderer->Render(
+            cmd,
+            scene.pipelineState.Get(),
+            renderTarget,
+            rtvHandle,
+            scene.srvHeap ? scene.srvHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{},
+            m_width,
+            m_height,
+            static_cast<float>(sceneTime),
+            iBeat,
+            iBar,
+            fBarBeat);
+        return true;
+    };
+
+    if (!m_dummyTextureInitialized && m_dummyTexture && m_dummyRtvHeap) {
+        const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        auto dummyRtv = m_dummyRtvHeap->GetCPUDescriptorHandleForHeapStart();
+        cmd->ClearRenderTargetView(dummyRtv, black, 0, nullptr);
+
+        D3D12_RESOURCE_BARRIER dummyBarrier = {};
+        dummyBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        dummyBarrier.Transition.pResource = m_dummyTexture.Get();
+        dummyBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        dummyBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        cmd->ResourceBarrier(1, &dummyBarrier);
+
+        m_dummyTextureInitialized = true;
+    }
+
 #if SHADERLAB_RUNTIME_IMGUI
     auto loadingStageLabel = [&](LoadingStage stage) -> const char* {
         switch (stage) {
@@ -1889,35 +2486,12 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
 #endif
 
     if (m_loadingStage != LoadingStage::Ready) {
-        float clearColor[] = {0.1f, 0.1f, 0.2f, 1.0f};
-#if SHADERLAB_TINY_PLAYER
-        if (m_loadingStatus.find("failed") != std::string::npos ||
-            m_loadingStatus.find("FAILED") != std::string::npos) {
+        float clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+        if (m_loadingFailed) {
             clearColor[0] = 0.45f;
             clearColor[1] = 0.05f;
             clearColor[2] = 0.05f;
-        } else {
-            switch (m_loadingStage) {
-                case LoadingStage::LoadingManifest:
-                    clearColor[0] = 0.10f;
-                    clearColor[1] = 0.10f;
-                    clearColor[2] = 0.20f;
-                    break;
-                case LoadingStage::LoadingAssets:
-                    clearColor[0] = 0.12f;
-                    clearColor[1] = 0.20f;
-                    clearColor[2] = 0.12f;
-                    break;
-                case LoadingStage::CompilingShaders:
-                    clearColor[0] = 0.20f;
-                    clearColor[1] = 0.14f;
-                    clearColor[2] = 0.06f;
-                    break;
-                default:
-                    break;
-            }
         }
-#endif
         cmd->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         goto render_ui;
     }
@@ -1950,64 +2524,8 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
                 toTex = GetSceneFinalTexture(cmd, m_transitionToIndex, toTime);
              }
              
-             if (!m_transitionPSO || m_compiledTransitionType != m_currentTransitionType) {
-                  auto loadTransitionBytecode = [&](TransitionType type) -> const std::vector<uint8_t>* {
-                      int idx = TransitionIndex(type);
-                      if (idx < 0 || idx >= (int)m_transitionBytecode.size()) return nullptr;
-                      if (!m_transitionBytecode[idx].empty()) return &m_transitionBytecode[idx];
-
-                      const char* packedPath = GetTransitionPackedPath(type);
-                      if (packedPath && *packedPath) {
-                          if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(packedPath)) {
-                              m_transitionBytecode[idx] = PackageManager::Get().GetFile(packedPath);
-                              if (!m_transitionBytecode[idx].empty()) return &m_transitionBytecode[idx];
-                          }
-
-#if !SHADERLAB_TINY_PLAYER
-                          fs::path diskPath = fs::path(m_manifestPath).parent_path() / packedPath;
-                          std::ifstream file(diskPath, std::ios::binary);
-                          if (file.is_open()) {
-                              m_transitionBytecode[idx].assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                              if (!m_transitionBytecode[idx].empty()) return &m_transitionBytecode[idx];
-                          }
-#endif
-                      }
-                      return nullptr;
-                  };
-
-                  const std::vector<uint8_t>* bytecode = loadTransitionBytecode(m_currentTransitionType);
-#if SHADERLAB_TINY_PLAYER
-                  const int transitionIndex = TransitionIndex(m_currentTransitionType);
-                  if ((!bytecode || bytecode->empty()) && transitionIndex >= 0 && transitionIndex < static_cast<int>(m_microTransitionModuleIds.size())) {
-                      const int16_t moduleId = m_microTransitionModuleIds[static_cast<size_t>(transitionIndex)];
-                      if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
-                          const auto& moduleBytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
-                          if (!moduleBytecode.empty()) {
-                              bytecode = &moduleBytecode;
-                          }
-                      }
-                  }
-#endif
-                  if (bytecode && !bytecode->empty()) {
-                      m_transitionPSO = m_renderer->CreatePSOFromBytecode(*bytecode);
-                      m_compiledTransitionType = m_currentTransitionType;
-#if SHADERLAB_TINY_PLAYER
-                      if (!m_transitionPSO) {
-                          TinyDevTrace("Transition PSO create failed for type " + std::to_string(static_cast<int>(m_currentTransitionType)));
-                      }
-#endif
-                  } else if (m_compilerReady) {
-                      std::vector<PreviewRenderer::TextureDecl> decls = {{0, "Texture2D"}, {1, "Texture2D"}};
-                      std::string code = GetTransitionShader(m_currentTransitionType);
-                      std::vector<std::string> errs;
-#if !SHADERLAB_TINY_PLAYER
-                      m_transitionPSO = m_renderer->CompileShader(code, decls, errs);
-#else
-                      m_transitionPSO = nullptr;
-                      TinyDevTrace("Missing transition bytecode for type " + std::to_string(static_cast<int>(m_currentTransitionType)));
-#endif
-                      m_compiledTransitionType = m_currentTransitionType;
-                  }
+             if (!m_transitionPSO || m_compiledTransitionType != CanonicalTransitionShaderType(m_currentTransitionType)) {
+                 EnsureTransitionPipeline(m_currentTransitionType);
              }
              if (m_transitionPSO) {
                  if (!m_transitionSrvHeap) {
@@ -2024,12 +2542,24 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
                  auto Bind = [&](ID3D12Resource* res, int slot) {
                      D3D12_CPU_DESCRIPTOR_HANDLE dest = start;
                      dest.ptr += slot * handleStep;
+                     if (!res) {
+                         if (m_dummySrvHeap) {
+                             device->CopyDescriptorsSimple(1, dest, m_dummySrvHeap->GetCPUDescriptorHandleForHeapStart(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                         } else {
+                             D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv = {};
+                             nullSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                             nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                             nullSrv.Texture2D.MipLevels = 1;
+                             nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                             device->CreateShaderResourceView(nullptr, &nullSrv, dest);
+                         }
+                         return;
+                     }
                      D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
                      srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
                      srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                      srv.Texture2D.MipLevels = 1;
                      srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                     if (!res) res = m_dummyTexture.Get();
                      device->CreateShaderResourceView(res, &srv, dest);
                  };
                  Bind(fromTex, 0);
@@ -2038,8 +2568,16 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
                  ID3D12DescriptorHeap* heaps[] = { m_transitionSrvHeap.Get() };
                  cmd->SetDescriptorHeaps(1, heaps);
                  
-                 m_renderer->Render(cmd, m_transitionPSO.Get(), renderTarget, rtvHandle, 
-                     m_transitionSrvHeap->GetGPUDescriptorHandleForHeapStart(), m_width, m_height, (float)progress);
+                 float iBeat = 0.0f;
+                 float iBar = 0.0f;
+                 float fBarBeat = 0.0f;
+                 ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+                 m_renderer->Render(cmd, m_transitionPSO.Get(), renderTarget, rtvHandle,
+                     m_transitionSrvHeap->GetGPUDescriptorHandleForHeapStart(), m_width, m_height, (float)progress,
+                     iBeat, iBar, fBarBeat);
+             } else {
+                 float clearColor[] = {0, 0, 0, 1};
+                 cmd->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
              }
              goto render_ui;
          }
@@ -2049,28 +2587,17 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
         const double beatsPerSec = m_transport.bpm / 60.0f;
         const double exactBeat = m_transport.timeSeconds * beatsPerSec;
         const double activeTime = SceneTimeSeconds(exactBeat, m_activeSceneStartBeat, m_activeSceneOffset, m_transport.bpm);
+
+        if (renderSceneDirectToBackbuffer(m_activeSceneIndex, activeTime)) {
+            goto render_ui;
+        }
+
         ID3D12Resource* finalTex = GetSceneFinalTexture(cmd, m_activeSceneIndex, activeTime);
         if (finalTex) {
-            D3D12_RESOURCE_BARRIER pre = {};
-            pre.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            pre.Transition.pResource = renderTarget;
-            pre.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            pre.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-            cmd->ResourceBarrier(1, &pre);
-            
-            D3D12_RESOURCE_BARRIER preSrc = {};
-            preSrc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            preSrc.Transition.pResource = finalTex;
-            preSrc.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            preSrc.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            cmd->ResourceBarrier(1, &preSrc);
-            
-            cmd->CopyResource(renderTarget, finalTex);
-            
-            std::swap(pre.Transition.StateBefore, pre.Transition.StateAfter);
-            cmd->ResourceBarrier(1, &pre);
-            std::swap(preSrc.Transition.StateBefore, preSrc.Transition.StateAfter);
-            cmd->ResourceBarrier(1, &preSrc);
+            if (!copyTextureToBackbuffer(finalTex)) {
+                float clearColor[] = {0, 0, 0, 1};
+                cmd->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+            }
         }
     } else {
         float clearColor[] = {0,0,0,1};

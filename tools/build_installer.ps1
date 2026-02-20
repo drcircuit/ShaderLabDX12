@@ -26,6 +26,16 @@ if (-not (Test-Path $editorExe)) {
     throw "Required runtime not found: $editorExe"
 }
 
+$playerExe = Join-Path $BuildBin "ShaderLabPlayer.exe"
+if (-not (Test-Path $playerExe)) {
+    throw "Required runtime not found: $playerExe"
+}
+
+$editorInfo = Get-Item $editorExe
+$playerInfo = Get-Item $playerExe
+Write-Host ("Using editor binary: {0} (size={1} bytes, mtime={2})" -f $editorInfo.FullName, $editorInfo.Length, $editorInfo.LastWriteTime.ToString("s")) -ForegroundColor DarkCyan
+Write-Host ("Using player binary: {0} (size={1} bytes, mtime={2})" -f $playerInfo.FullName, $playerInfo.Length, $playerInfo.LastWriteTime.ToString("s")) -ForegroundColor DarkCyan
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $cmakePath = Join-Path $repoRoot "CMakeLists.txt"
     if (Test-Path $cmakePath) {
@@ -68,6 +78,34 @@ foreach ($item in $extraToCopy) {
     if (Test-Path $src) {
         Copy-Item -Path $src -Destination $stageApp -Recurse -Force
     }
+}
+
+$stageDevKitCmake = Join-Path $stageApp "dev_kit\CMakeLists.txt"
+if (-not (Test-Path $stageDevKitCmake)) {
+    Write-Host "dev_kit not found in build output; staging fallback development kit sources." -ForegroundColor Yellow
+    $devKitRoot = Join-Path $stageApp "dev_kit"
+    New-Item -ItemType Directory -Force -Path $devKitRoot | Out-Null
+
+    $devKitEntries = @(
+        @{ Source = "include"; Destination = "dev_kit\include" },
+        @{ Source = "src"; Destination = "dev_kit\src" },
+        @{ Source = "third_party"; Destination = "dev_kit\third_party" }
+    )
+
+    foreach ($entry in $devKitEntries) {
+        $src = Join-Path $repoRoot $entry.Source
+        $dst = Join-Path $stageApp $entry.Destination
+        if (-not (Test-Path $src)) {
+            throw "Missing required source for installer dev_kit fallback: $src"
+        }
+        Copy-Item -Path $src -Destination $dst -Recurse -Force
+    }
+
+    $templateSrc = Join-Path $repoRoot "templates\Standalone_CMakeLists.txt"
+    if (-not (Test-Path $templateSrc)) {
+        throw "Missing required Standalone CMake template: $templateSrc"
+    }
+    Copy-Item -Path $templateSrc -Destination $stageDevKitCmake -Force
 }
 
 $openFontIconsSrc = Join-Path $repoRoot "third_party\OpenFontIcons"

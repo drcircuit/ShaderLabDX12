@@ -362,8 +362,15 @@ void OpenExternal(const std::string& target) {
 }
 
 UISystem::UISystem() {
-    // Store application root (assumed CWD at launch)
-    m_appRoot = fs::current_path().string();
+    // Resolve application root from executable location first (supports installed/portable layouts).
+    char exePath[MAX_PATH] = {};
+    DWORD exePathLen = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (exePathLen > 0 && exePathLen < MAX_PATH) {
+        m_appRoot = fs::path(std::string(exePath, exePathLen)).parent_path().string();
+    }
+    if (m_appRoot.empty()) {
+        m_appRoot = fs::current_path().string();
+    }
 
     LoadUiBuildSettings(
         m_appRoot,
@@ -542,10 +549,18 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     // Load custom fonts for editor
     // Path to fonts relative to executable (in editor_assets/fonts/)
     std::string fontPath = m_appRoot + "/editor_assets/fonts/";
-    std::string iconFontPath = m_appRoot + "/third_party/OpenFontIcons/";
-    std::string iconFontFile = iconFontPath + UIConfig::FontFileOpenFontIcons;
-    if (!fs::exists(iconFontFile)) {
-        iconFontFile = fontPath + UIConfig::FontFileOpenFontIcons;
+    std::string iconFontFile;
+    const std::vector<fs::path> iconFontCandidates = {
+        fs::path(m_appRoot) / "third_party" / "OpenFontIcons" / UIConfig::FontFileOpenFontIcons,
+        fs::path(m_appRoot) / "editor_assets" / "fonts" / UIConfig::FontFileOpenFontIcons,
+        fs::path(m_appRoot) / ".." / "third_party" / "OpenFontIcons" / UIConfig::FontFileOpenFontIcons
+    };
+    for (const auto& candidate : iconFontCandidates) {
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) {
+            iconFontFile = candidate.lexically_normal().string();
+            break;
+        }
     }
     
     // Hacked font for logo (large)
@@ -573,7 +588,10 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     iconConfigText.MergeMode = true;
     iconConfigText.PixelSnapH = true;
     iconConfigText.GlyphOffset.y = iconGlyphOffsetY;
-    io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontText * iconFontScale, &iconConfigText, iconRanges);
+    ImFont* iconTextMerge = nullptr;
+    if (!iconFontFile.empty()) {
+        iconTextMerge = io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontText * iconFontScale, &iconConfigText, iconRanges);
+    }
     
     // Erbos Draco for numerical fields
     m_fontErbosDracoNumbers = io.Fonts->AddFontFromFileTTF((fontPath + UIConfig::FontFileErbosOpen).c_str(), UIConfig::FontNumeric);
@@ -590,7 +608,13 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     iconConfigMenu.MergeMode = true;
     iconConfigMenu.PixelSnapH = true;
     iconConfigMenu.GlyphOffset.y = iconGlyphOffsetY;
-    io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontMenu * iconFontScale, &iconConfigMenu, iconRanges);
+    ImFont* iconMenuMerge = nullptr;
+    if (!iconFontFile.empty()) {
+        iconMenuMerge = io.Fonts->AddFontFromFileTTF(iconFontFile.c_str(), UIConfig::FontMenu * iconFontScale, &iconConfigMenu, iconRanges);
+    }
+
+    (void)iconTextMerge;
+    (void)iconMenuMerge;
 
     const float codeFontSizes[5] = { 11.0f, 12.0f, 13.0f, 15.0f, 17.0f };
     for (int i = 0; i < 5; ++i) {

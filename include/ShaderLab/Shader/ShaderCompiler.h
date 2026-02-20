@@ -41,6 +41,9 @@ public:
 cbuffer Constants : register(b0) {
     float iTime;
     float2 iResolution;
+    float iBeat;
+    float iBar;
+    float fBarBeat;
 };
 )";
         // Generate texture declarations (Always 8 slots to match root signature/standard)
@@ -83,6 +86,8 @@ cbuffer Constants : register(b0) {
                                           ShaderCompileMode mode = ShaderCompileMode::Live);
 
 private:
+    using DxcCreateInstanceProc = HRESULT (WINAPI*)(REFCLSID, REFIID, LPVOID*);
+
     void ParseDiagnostics(IDxcBlobEncoding* errorBlob, 
                          std::vector<ShaderDiagnostic>& outDiagnostics);
     
@@ -91,6 +96,8 @@ private:
     ComPtr<IDxcUtils> m_utils;
     ComPtr<IDxcCompiler3> m_compiler;
     ComPtr<IDxcIncludeHandler> m_includeHandler;
+    HMODULE m_dxcModule = nullptr;
+    DxcCreateInstanceProc m_dxcCreateInstance = nullptr;
 };
 
 } // namespace ShaderLab

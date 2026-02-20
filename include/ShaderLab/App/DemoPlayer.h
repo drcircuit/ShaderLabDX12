@@ -50,11 +50,14 @@ private:
     ID3D12Resource* GetSceneFinalTexture(ID3D12GraphicsCommandList* commandList,
                                         int sceneIndex,
                                         double timeSeconds);
+    bool EnsureTransitionPipeline(TransitionType type);
+    void PrimeRuntimeResources();
     
     // Core Refs
     Device* m_device = nullptr;
     Swapchain* m_swapchain = nullptr;
     PreviewRenderer* m_renderer = nullptr;
+    bool m_rendererReady = false;
     AudioSystem* m_audio = nullptr;
     ShaderCompiler* m_compiler = nullptr; 
     bool m_compilerReady = false;
@@ -72,6 +75,7 @@ private:
     };
     LoadingStage m_loadingStage = LoadingStage::Idle;
     std::string m_loadingStatus;
+    bool m_loadingFailed = false;
     int m_compilationIndex = 0;
     std::string m_manifestPath;
 
@@ -87,12 +91,18 @@ private:
     
     ComPtr<ID3D12Resource> m_dummyTexture;
     ComPtr<ID3D12DescriptorHeap> m_dummySrvHeap;
+    ComPtr<ID3D12DescriptorHeap> m_dummyRtvHeap;
+    bool m_dummyTextureInitialized = false;
     ComPtr<ID3D12DescriptorHeap> m_imguiSrvHeap; // Dedicated heap for ImGui
     
     // Debug State
     bool m_showDebug = false;
     bool m_altPressed = false;
     double m_lastFrameTime = 0.0;
+    int m_debugLastBeatLogged = -1;
+    double m_debugLastShaderParamLogTime = -1000.0;
+    TransportState m_debugLastTransportState = TransportState::Stopped;
+    LoadingStage m_debugLastLoadingStage = LoadingStage::Idle;
     
     // Transition State
     bool m_transitionActive = false;
@@ -111,6 +121,7 @@ private:
     ComPtr<ID3D12PipelineState> m_transitionPSO;
     ComPtr<ID3D12DescriptorHeap> m_transitionSrvHeap;
     TransitionType m_compiledTransitionType = TransitionType::None;
+    std::array<ComPtr<ID3D12PipelineState>, 7> m_transitionPsoCache;
 
     std::vector<int> m_renderStack;
     std::vector<uint8_t> m_precompiledVertexShader;
