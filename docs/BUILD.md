@@ -120,14 +120,14 @@ M6 validator details:
 
 CI workflows:
 
-- `.github/workflows/validate.yml`
-  - runs on pull requests and pushes to `main`
-  - configures Debug, builds `ShaderLabBuildCli`, then runs `tools/check.ps1`
-  - includes a dedicated full M6 spike job (`tools/validate_devkit_prebuilt_spike.ps1`) for:
-    - nightly schedule (UTC 03:00)
-    - manual dispatch when `run_full_m6=true`
 - `.github/workflows/release.yml`
   - runs `tools/check.ps1` as a release gate after Release build
+  - check gate is non-blocking (warning-only on failure)
+
+Manual/Local validation:
+
+- Run `tools/check.ps1` for routine guardrails.
+- Run `tools/validate_devkit_prebuilt_spike.ps1` for full M6 spike validation.
 
 ## Size-Sensitive Logging Flags
 

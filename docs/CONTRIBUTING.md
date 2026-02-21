@@ -95,7 +95,7 @@ When contributing to editor/UI code (`src/app/editor/*`, `src/ui/*`, `include/Sh
 
 Enforcement:
 - Local: `tools/check.ps1` includes an **Editor Include Boundary** gate.
-- CI: `.github/workflows/validate.yml` runs the same checks on PRs and pushes.
+- Release automation: `.github/workflows/release.yml` runs `tools/check.ps1` (non-blocking warning gate).
 
 ## Code Guidelines
 

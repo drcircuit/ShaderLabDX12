@@ -102,12 +102,12 @@ Notes:
   - continue enforcing editor boundary as entrypoint + editor-lib orchestration only.
   - add explicit CMake layering assertion for `ShaderLabEditor` executable target.
   - add `tools/check.ps1` include-surface gate to prevent editor/UI code from including runtime-internal headers.
-  - enforce the same guard in CI on pull requests/pushes via `.github/workflows/validate.yml`.
+  - enforce the same guard in CI/release automation via `.github/workflows/release.yml` (non-blocking check gate) and local `tools/check.ps1`.
 
 5. **Layering guardrails + smoke checks** (in progress)
   - Add lightweight checks preventing `src/ui/*` from leaking into runtime/core-only targets.
   - Add launch/relaunch smoke matrix script hooks for runtime outputs.
-  - keep local/CI validation gates aligned (`tools/check.ps1`, `.github/workflows/validate.yml`, release guard step).
+  - keep local/CI validation gates aligned (`tools/check.ps1`, release workflow guard step).
   - enforce no-exclusive-fullscreen policy via `tools/check.ps1` runtime API scan.
   - Keep “no exclusive fullscreen” policy validated.
 
@@ -271,7 +271,7 @@ Implementation notes:
   - runs startup/relaunch matrix by default (can be skipped with `-SkipLaunchMatrix`)
 - Added VS Code task: `M6 Prebuilt Packaging Spike`.
 - Wired a lightweight M6 gate into `tools/check.ps1` (runs validator with `-SkipLaunchMatrix` for routine checks).
-- Wired full M6 spike into `.github/workflows/validate.yml` as a dedicated job for nightly schedule and optional manual dispatch (`run_full_m6=true`).
+- Full M6 spike validation is currently run via local/manual invocation of `tools/validate_devkit_prebuilt_spike.ps1`.
 
 **Checkpoints**
 - Package builds and runs without editor present.
