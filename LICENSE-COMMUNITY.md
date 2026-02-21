@@ -9,6 +9,7 @@ Copyright (c) 2026 ShaderLab Contributors
 This Community License applies to the ShaderLab engine and editor source code (the "Software").
 
 ### Permitted Uses
+As long as you give ShaderLab and me (DrCiRCUiT) credit - can be in an NFO file, onstage shoutout, or if you are feeling generous, a credit in your demo! 
 
 You may:
 - Use the Software for personal, educational, and non-commercial creative purposes
@@ -16,6 +17,7 @@ You may:
 - Contribute improvements back to the project under the same license
 - Distribute your modifications as patches or pull requests
 - Create and distribute demoscene productions using the Software
+- Compete in demoscene compos - including ones with prizes! 
 - Share the Software with other community members
 
 ### Restrictions
