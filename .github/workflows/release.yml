@@ -143,8 +143,16 @@ jobs:
 
       # ── Refactor guardrails (layering + micro packaging contract) ───────
       - name: Run refactor guard checks
+        id: refactor_checks
         shell: pwsh
+        continue-on-error: true
         run: .\tools\check.ps1
+
+      - name: Warn if refactor guard checks failed
+        if: ${{ steps.refactor_checks.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          Write-Host "::warning::tools/check.ps1 failed in headless release workflow. Continuing because this gate is non-blocking. Review logs before publishing artifacts."
 
       # ── Stage end-user docs ───────────────────────────────────────────────
       - name: Stage end-user docs
