@@ -27,8 +27,8 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: c-cpp
-          # Use the default query suite for C/C++, which includes security-and-quality
-          queries: security-and-quality
+          # Query suite and path exclusions are managed in .github/codeql/codeql-config.yml
+          config-file: ./.github/codeql/codeql-config.yml
 
       # ── MSVC build environment ───────────────────────────────────────────────
       - name: Set up MSVC (x64)
