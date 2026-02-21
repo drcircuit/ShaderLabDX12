@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <unordered_map>
 #include "TextEditor.h"
-#include "ShaderLab/Core/BuildPipeline.h"
+#include "ShaderLab/DevKit/BuildPipeline.h"
 #include "ShaderLab/Core/ShaderLabData.h"
 
 using Microsoft::WRL::ComPtr;
@@ -74,6 +74,9 @@ struct ProjectState {
     std::vector<AudioClip> audioLibrary;
     DemoTrack track;
     PreviewTransport transport;
+    std::string demoTitle;
+    std::string demoAuthor;
+    std::string demoDescription;
     UIMode currentMode;
     ShaderEditState shaderState;
     int activeSceneIndex;
@@ -88,6 +91,48 @@ struct ShaderSnippetFolder {
     std::string name;
     std::string filePath;
     std::vector<ShaderSnippet> snippets;
+};
+
+struct UIThemeColors {
+    ImVec4 LinesAccentColorDim = ImVec4(0.00f, 0.40f, 0.45f, 0.60f);
+    ImVec4 ControlBackground = ImVec4(0.05f, 0.08f, 0.10f, 1.00f);
+    ImVec4 ControlFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 IconColor = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);
+    ImVec4 ButtonIconColor = ImVec4(0.00f, 1.00f, 1.00f, 1.00f);
+    ImVec4 ButtonLabelColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 ButtonBackgroundColor = ImVec4(0.08f, 0.12f, 0.15f, 1.00f);
+    ImVec4 PanelBackground = ImVec4(0.04f, 0.06f, 0.08f, 0.95f);
+    ImVec4 WindowBackground = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
+    ImVec4 TrackerHeadingBackground = ImVec4(0.08f, 0.12f, 0.15f, 1.00f);
+    ImVec4 TrackerHeadingFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 TrackerAccentBeatBackground = ImVec4(0.00f, 0.59f, 1.00f, 0.47f);
+    ImVec4 TrackerAccentBeatFontColor = ImVec4(1.00f, 0.80f, 0.20f, 1.00f);
+    ImVec4 TrackerBeatBackground = ImVec4(0.00f, 0.00f, 0.00f, 0.31f);
+    ImVec4 TrackerBeatFontColor = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
+    ImVec4 LabelFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 PanelTitleFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 PanelTitleBackground = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
+    ImVec4 ActiveTabFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 ActiveTabBackground = ImVec4(0.00f, 0.60f, 0.65f, 1.00f);
+    ImVec4 PassiveTabFontColor = ImVec4(0.55f, 0.65f, 0.65f, 1.00f);
+    ImVec4 PassiveTabBackground = ImVec4(0.06f, 0.08f, 0.10f, 1.00f);
+    ImVec4 ActivePanelTitleColor = ImVec4(0.00f, 0.50f, 0.55f, 1.00f);
+    ImVec4 ActivePanelBackground = ImVec4(0.04f, 0.06f, 0.08f, 0.95f);
+    ImVec4 PassivePanelTitleColor = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
+    ImVec4 PassivePanelBackground = ImVec4(0.04f, 0.06f, 0.08f, 0.95f);
+    ImVec4 LogoFontColor = ImVec4(0.00f, 0.90f, 0.90f, 1.00f);
+    ImVec4 ConsoleFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
+    ImVec4 ConsoleBackground = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
+    ImVec4 StatusFontColor = ImVec4(0.40f, 0.45f, 0.45f, 1.00f);
+    float ControlOpacity = 1.0f;
+    float PanelOpacity = 0.92f;
+    float PanelHeadingOpacity = 0.96f;
+    std::string BackgroundImage;
+};
+
+struct NamedUITheme {
+    std::string name;
+    UIThemeColors colors;
 };
 
 class UISystem {
@@ -124,8 +169,6 @@ public:
 
     std::string GetProjectName() const;
     float GetTitlebarHeight() const { return m_titlebarHeight; }
-    bool IsPointInTitlebarButtons(POINT screenPt) const;
-    bool IsPointInTitlebarDrag(POINT screenPt) const;
     bool IsPreviewVsyncEnabled() const { return m_previewVsyncEnabled; }
 
 private:
@@ -164,6 +207,7 @@ private:
     void ShowSnippetBin();
     void ShowDiagnostics();
     void ShowSceneList();
+    void ShowDemoMetadata();
     void ShowDemoPlaylist(); // Tracker View
     void ShowAudioLibrary();
     void CreateDefaultScene();
@@ -177,6 +221,14 @@ private:
     void PopNumericFont();
     float GetNumericFieldMinWidth() const;
     void SetNextNumericFieldWidth(float requestedWidth);
+    void ShowThemeEditorPopup();
+    void ApplyUiTheme();
+    void ApplyCodeEditorControlOpacity();
+    void LoadUiThemeSettings();
+    void SaveUiThemeSettings() const;
+    bool AddOrReplaceCustomTheme(const std::string& name, const UIThemeColors& colors);
+    void EnsureThemeBackgroundTexture();
+    void DrawThemeBackgroundTiled();
 
     ComPtr<ID3D12DescriptorHeap> m_srvHeap;
     ImGuiContext* m_context = nullptr;
@@ -256,10 +308,6 @@ private:
     int m_transitionJustCompletedBeat = -1;
 
     float m_titlebarHeight = 0.0f;
-    ImVec2 m_titlebarButtonsMin = ImVec2(0.0f, 0.0f);
-    ImVec2 m_titlebarButtonsMax = ImVec2(0.0f, 0.0f);
-    ImVec2 m_titlebarDragMin = ImVec2(0.0f, 0.0f);
-    ImVec2 m_titlebarDragMax = ImVec2(0.0f, 0.0f);
     
     // Transition Resources
     ComPtr<ID3D12PipelineState> m_transitionPSO;
@@ -273,6 +321,9 @@ private:
     std::function<void(int)> m_restartCallback;
 
     std::string m_currentProjectPath;
+    std::string m_demoTitle = "Untitled Demo";
+    std::string m_demoAuthor;
+    std::string m_demoDescription;
     std::string m_appRoot; // Root directory where ShaderLab started (where CMakeLists.txt resides)
     HWND m_hwnd = nullptr;
 
@@ -283,6 +334,17 @@ private:
 
     bool m_previewFullscreen = false;
     bool m_previewVsyncEnabled = true;
+
+    UIThemeColors m_uiThemeColors;
+    std::vector<NamedUITheme> m_customThemes;
+    std::string m_activeThemeName = "ShaderPunk";
+    bool m_showThemeEditor = false;
+    char m_themeNameBuffer[128] = {};
+    ComPtr<ID3D12Resource> m_themeBackgroundTexture;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_themeBackgroundSrvGpuHandle{};
+    int m_themeBackgroundWidth = 0;
+    int m_themeBackgroundHeight = 0;
+    std::string m_loadedThemeBackgroundPath;
 
     // Post FX preview resources (draft)
     ComPtr<ID3D12Resource> m_postFxPreviewTextureA;
@@ -327,7 +389,7 @@ private:
     bool m_showBuildSettings = false;
     BuildTargetKind m_buildSettingsTargetKind = BuildTargetKind::SelfContainedDemo;
     BuildMode m_buildSettingsMode = BuildMode::Release;
-    SizeTargetPreset m_buildSettingsSizeTarget = SizeTargetPreset::K16;
+    SizeTargetPreset m_buildSettingsSizeTarget = SizeTargetPreset::K64;
     bool m_buildSettingsRestrictedCompactTrack = false;
     bool m_buildSettingsRuntimeDebugLog = false;
     bool m_buildSettingsCompactTrackDebugLog = false;

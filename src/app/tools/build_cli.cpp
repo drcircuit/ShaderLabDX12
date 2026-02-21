@@ -1,4 +1,4 @@
-#include "ShaderLab/Core/BuildPipeline.h"
+#include "ShaderLab/DevKit/BuildPipeline.h"
 
 #include <windows.h>
 
@@ -32,12 +32,12 @@ ShaderLab::BuildMode ParseMode(const std::string& value) {
 ShaderLab::SizeTargetPreset ParseSizePreset(const std::string& value) {
     std::string lower = value;
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (lower == "1k") return ShaderLab::SizeTargetPreset::K1;
-    if (lower == "2k") return ShaderLab::SizeTargetPreset::K2;
-    if (lower == "4k") return ShaderLab::SizeTargetPreset::K4;
-    if (lower == "16k") return ShaderLab::SizeTargetPreset::K16;
-    if (lower == "32k") return ShaderLab::SizeTargetPreset::K32;
+    if (lower == "1k" || lower == "2k" || lower == "4k" || lower == "16k" || lower == "32k") return ShaderLab::SizeTargetPreset::K64;
     if (lower == "64k") return ShaderLab::SizeTargetPreset::K64;
+    if (lower == "128k") return ShaderLab::SizeTargetPreset::K128;
+    if (lower == "256k") return ShaderLab::SizeTargetPreset::K256;
+    if (lower == "512k") return ShaderLab::SizeTargetPreset::K512;
+    if (lower == "1024k" || lower == "1m") return ShaderLab::SizeTargetPreset::K1024;
     return ShaderLab::SizeTargetPreset::None;
 }
 
@@ -65,7 +65,7 @@ void PrintUsage() {
         << "  [--solution-root <path>]\n"
         << "  [--target selfcontained|packaged|screensaver|micro]\n"
         << "  [--mode release|crinkled]\n"
-        << "  [--size none|1k|2k|4k|16k|32k|64k]\n"
+        << "  [--size none|64k|128k|256k|512k|1024k]\n"
         << "  [--restricted-compact-track]\n"
         << "  [--runtime-debug]\n"
         << "  [--compact-debug]\n"

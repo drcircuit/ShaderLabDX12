@@ -4,7 +4,7 @@
 #include <fstream>
 
 #include "ShaderLab/Audio/AudioSystem.h"
-#include "ShaderLab/Core/RuntimeExporter.h"
+#include "ShaderLab/DevKit/RuntimeExporter.h"
 #include "ShaderLab/Core/Serializer.h"
 
 #include <nlohmann/json.hpp>
@@ -30,23 +30,22 @@ fs::path GetProjectUiSettingsPath(const std::string& projectPath) {
 }
 
 SizeTargetPreset ParseSizePresetFromString(const std::string& value) {
-    if (value == "1k") return SizeTargetPreset::K1;
-    if (value == "2k") return SizeTargetPreset::K2;
-    if (value == "4k") return SizeTargetPreset::K4;
-    if (value == "16k") return SizeTargetPreset::K16;
-    if (value == "32k") return SizeTargetPreset::K32;
+    if (value == "1k" || value == "2k" || value == "4k" || value == "16k" || value == "32k") return SizeTargetPreset::K64;
     if (value == "64k") return SizeTargetPreset::K64;
+    if (value == "128k") return SizeTargetPreset::K128;
+    if (value == "256k") return SizeTargetPreset::K256;
+    if (value == "512k") return SizeTargetPreset::K512;
+    if (value == "1024k" || value == "1m") return SizeTargetPreset::K1024;
     return SizeTargetPreset::None;
 }
 
 std::string SizePresetToString(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return "1k";
-        case SizeTargetPreset::K2: return "2k";
-        case SizeTargetPreset::K4: return "4k";
-        case SizeTargetPreset::K16: return "16k";
-        case SizeTargetPreset::K32: return "32k";
         case SizeTargetPreset::K64: return "64k";
+        case SizeTargetPreset::K128: return "128k";
+        case SizeTargetPreset::K256: return "256k";
+        case SizeTargetPreset::K512: return "512k";
+        case SizeTargetPreset::K1024: return "1024k";
         default: return "none";
     }
 }
@@ -166,6 +165,9 @@ void UISystem::SaveProject() {
     data.track = m_track;
     data.transport = m_transport;
     data.audioLibrary = m_audioLibrary;
+    data.demoTitle = m_demoTitle;
+    data.demoAuthor = m_demoAuthor;
+    data.demoDescription = m_demoDescription;
 
     fs::path projectRoot = fs::path(m_currentProjectPath).parent_path();
     if (Serializer::ConsolidateProject(data, projectRoot.string())) {
@@ -217,6 +219,12 @@ void UISystem::OpenProject() {
             m_audioLibrary = data.audioLibrary;
             m_track = data.track;
             m_transport.bpm = data.transport.bpm;
+            m_demoTitle = data.demoTitle;
+            m_demoAuthor = data.demoAuthor;
+            m_demoDescription = data.demoDescription;
+            if (m_demoTitle.empty()) {
+                m_demoTitle = GetProjectName();
+            }
 
             fs::current_path(fs::path(m_currentProjectPath).parent_path());
 

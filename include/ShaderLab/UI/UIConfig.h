@@ -22,10 +22,10 @@ inline constexpr float FontCode = 13.0f;
 
 // Window padding for the merged titlebar area
 inline constexpr float TitlebarPadX = 8.0f;
-inline constexpr float TitlebarPadY = 6.0f;
+inline constexpr float TitlebarPadY = 28.0f;
 
 // Menu bar layout
-inline constexpr float MenuBarHeight = 0.0f; // 0 = auto
+inline constexpr float MenuBarHeight = 0.0f;
 inline constexpr float MenuLeftPad = 8.0f;
 inline constexpr float MenuFramePadX = 6.0f;
 inline constexpr float MenuFramePadY = 4.0f;

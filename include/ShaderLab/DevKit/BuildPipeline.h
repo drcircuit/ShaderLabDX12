@@ -22,12 +22,11 @@ enum class BuildTargetKind {
 
 enum class SizeTargetPreset {
     None,
-    K1,
-    K2,
-    K4,
-    K16,
-    K32,
-    K64
+    K64,
+    K128,
+    K256,
+    K512,
+    K1024
 };
 
 struct BuildPrereqReport {

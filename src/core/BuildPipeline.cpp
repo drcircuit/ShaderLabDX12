@@ -1,4 +1,4 @@
-#include "ShaderLab/Core/BuildPipeline.h"
+#include "ShaderLab/DevKit/BuildPipeline.h"
 
 #include <windows.h>
 
@@ -29,12 +29,11 @@ const char* BuildModeName(BuildMode mode) {
 
 const char* SizePresetName(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return "1K";
-        case SizeTargetPreset::K2: return "2K";
-        case SizeTargetPreset::K4: return "4K";
-        case SizeTargetPreset::K16: return "16K";
-        case SizeTargetPreset::K32: return "32K";
         case SizeTargetPreset::K64: return "64K";
+        case SizeTargetPreset::K128: return "128K";
+        case SizeTargetPreset::K256: return "256K";
+        case SizeTargetPreset::K512: return "512K";
+        case SizeTargetPreset::K1024: return "1024K";
         default: return "None";
     }
 }
@@ -51,24 +50,22 @@ const char* BuildTargetName(BuildTargetKind target) {
 
 uint64_t SizePresetToBytes(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return 1024ull;
-        case SizeTargetPreset::K2: return 2048ull;
-        case SizeTargetPreset::K4: return 4096ull;
-        case SizeTargetPreset::K16: return 16ull * 1024ull;
-        case SizeTargetPreset::K32: return 32ull * 1024ull;
         case SizeTargetPreset::K64: return 64ull * 1024ull;
+        case SizeTargetPreset::K128: return 128ull * 1024ull;
+        case SizeTargetPreset::K256: return 256ull * 1024ull;
+        case SizeTargetPreset::K512: return 512ull * 1024ull;
+        case SizeTargetPreset::K1024: return 1024ull * 1024ull;
         default: return 0ull;
     }
 }
 
 bool IsTinySizeTarget(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1:
-        case SizeTargetPreset::K2:
-        case SizeTargetPreset::K4:
-        case SizeTargetPreset::K16:
-        case SizeTargetPreset::K32:
         case SizeTargetPreset::K64:
+        case SizeTargetPreset::K128:
+        case SizeTargetPreset::K256:
+        case SizeTargetPreset::K512:
+        case SizeTargetPreset::K1024:
             return true;
         default:
             return false;
@@ -102,9 +99,53 @@ std::string TrimString(const std::string& value) {
     return value.substr(start, end - start + 1);
 }
 
+bool PathContainsTokenCaseInsensitive(const fs::path& path, const std::string& token) {
+    std::string value = path.string();
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    std::string tokenLower = token;
+    std::transform(tokenLower.begin(), tokenLower.end(), tokenLower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    return value.find(tokenLower) != std::string::npos;
+}
+
 bool FileExists(const fs::path& path) {
     std::error_code ec;
     return fs::exists(path, ec);
+}
+
+bool HasStandaloneSourceTree(const fs::path& root) {
+    if (root.empty()) {
+        return false;
+    }
+
+    return
+        FileExists(root / "templates" / "Standalone_CMakeLists.txt") &&
+        FileExists(root / "include") &&
+        FileExists(root / "src") &&
+        FileExists(root / "third_party");
+}
+
+bool HasDevKitSourceTree(const fs::path& root, bool requireMicroSources) {
+    if (root.empty()) {
+        return false;
+    }
+
+    const bool basicTree =
+        FileExists(root / "CMakeLists.txt") &&
+        FileExists(root / "include") &&
+        FileExists(root / "src") &&
+        FileExists(root / "third_party");
+
+    if (!basicTree) {
+        return false;
+    }
+
+    if (requireMicroSources && !FileExists(root / "src" / "app" / "tiny")) {
+        return false;
+    }
+
+    return true;
 }
 
 fs::path GetExecutableDirectory() {
@@ -121,19 +162,34 @@ bool IsUsableAppRoot(const fs::path& root) {
         return false;
     }
 
-    const bool hasDevKit =
-        FileExists(root / "dev_kit" / "CMakeLists.txt") &&
-        FileExists(root / "dev_kit" / "include") &&
-        FileExists(root / "dev_kit" / "src") &&
-        FileExists(root / "dev_kit" / "third_party");
-
-    const bool hasSourceTree =
-        FileExists(root / "templates" / "Standalone_CMakeLists.txt") &&
-        FileExists(root / "include") &&
-        FileExists(root / "src") &&
-        FileExists(root / "third_party");
+    const bool hasDevKit = HasDevKitSourceTree(root / "dev_kit", false);
+    const bool hasSourceTree = HasStandaloneSourceTree(root);
 
     return hasDevKit || hasSourceTree;
+}
+
+fs::path ResolveStandaloneSourceRoot(const fs::path& appRoot) {
+    std::vector<fs::path> candidates;
+    if (!appRoot.empty()) {
+        candidates.push_back(appRoot);
+
+        fs::path current = appRoot;
+        for (int i = 0; i < 5; ++i) {
+            current = current.parent_path();
+            if (current.empty()) {
+                break;
+            }
+            candidates.push_back(current);
+        }
+    }
+
+    for (const fs::path& candidate : candidates) {
+        if (HasStandaloneSourceTree(candidate)) {
+            return candidate;
+        }
+    }
+
+    return {};
 }
 
 fs::path ResolveBuildAppRoot(const fs::path& requestedRoot) {
@@ -418,6 +474,61 @@ bool HasBundledWindowsSdk(const fs::path& baseRoot, std::string& outPath) {
 }
 
 bool ResolveCrinklerPath(const fs::path& appRoot, std::string& outPath) {
+    auto toAbsolutePathString = [](const fs::path& path) -> std::string {
+        std::error_code ec;
+        fs::path absolutePath = fs::absolute(path, ec);
+        if (!ec && !absolutePath.empty()) {
+            return absolutePath.string();
+        }
+        return path.string();
+    };
+
+    auto checkCandidates = [&](const std::vector<fs::path>& candidates) -> bool {
+        for (const auto& candidate : candidates) {
+            if (FileExists(candidate)) {
+                outPath = toAbsolutePathString(candidate);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    std::vector<fs::path> preferredBundledCandidates;
+
+    auto appendCrinklerCandidatesForRoot = [&](const fs::path& root) {
+        if (root.empty()) {
+            return;
+        }
+
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "crinkler" / "Win32" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "Crinkler" / "Win32" / "Crinkler.exe");
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "crinkler" / "Win64" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "Crinkler" / "Win64" / "Crinkler.exe");
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "dev_kit" / "third_party" / "Crinkler.exe");
+
+        preferredBundledCandidates.push_back(root / "third_party" / "crinkler" / "Win32" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "third_party" / "Crinkler" / "Win32" / "Crinkler.exe");
+        preferredBundledCandidates.push_back(root / "third_party" / "crinkler" / "Win64" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "third_party" / "Crinkler" / "Win64" / "Crinkler.exe");
+        preferredBundledCandidates.push_back(root / "third_party" / "crinkler.exe");
+        preferredBundledCandidates.push_back(root / "third_party" / "Crinkler.exe");
+    };
+
+    appendCrinklerCandidatesForRoot(appRoot);
+    fs::path current = appRoot;
+    for (int i = 0; i < 6; ++i) {
+        current = current.parent_path();
+        if (current.empty()) {
+            break;
+        }
+        appendCrinklerCandidatesForRoot(current);
+    }
+
+    if (checkCandidates(preferredBundledCandidates)) {
+        return true;
+    }
+
     auto envToPath = [&](const char* varName) -> bool {
         char buffer[MAX_PATH] = {};
         DWORD len = GetEnvironmentVariableA(varName, buffer, MAX_PATH);
@@ -430,11 +541,11 @@ bool ResolveCrinklerPath(const fs::path& appRoot, std::string& outPath) {
         if (fs::is_directory(candidate, ec) && !ec) {
             fs::path exePath = candidate / "crinkler.exe";
             if (FileExists(exePath)) {
-                outPath = exePath.string();
+                outPath = toAbsolutePathString(exePath);
                 return true;
             }
         } else if (FileExists(candidate)) {
-            outPath = candidate.string();
+            outPath = toAbsolutePathString(candidate);
             return true;
         }
         return false;
@@ -445,19 +556,8 @@ bool ResolveCrinklerPath(const fs::path& appRoot, std::string& outPath) {
 
     if (FindOnPathFull("crinkler.exe", outPath)) return true;
 
-    const fs::path bundledCandidates[] = {
-        appRoot / "third_party" / "crinkler.exe",
-        appRoot / "third_party" / "Crinkler.exe",
-        appRoot / "third_party" / "crinkler" / "Win64" / "crinkler.exe",
-        appRoot / "third_party" / "Crinkler" / "Win64" / "crinkler.exe",
-        appRoot / "third_party" / "crinkler" / "Win32" / "crinkler.exe",
-        appRoot / "third_party" / "Crinkler" / "Win32" / "crinkler.exe"
-    };
-    for (const auto& candidate : bundledCandidates) {
-        if (FileExists(candidate)) {
-            outPath = candidate.string();
-            return true;
-        }
+    if (checkCandidates(preferredBundledCandidates)) {
+        return true;
     }
 
     const char* knownPaths[] = {
@@ -1530,7 +1630,12 @@ bool CreateIsolatedSdkSourceDirectory(
     const fs::path& buildRoot,
     fs::path& outSourceRoot,
     std::string& outError) {
-    const fs::path appRoot(request.appRoot);
+    const fs::path sourceRoot = ResolveStandaloneSourceRoot(fs::path(request.appRoot));
+    if (sourceRoot.empty()) {
+        outError = "Missing standalone source tree for isolated SDK source (searched from app root): " + request.appRoot;
+        return false;
+    }
+
     outSourceRoot = buildRoot / "sdk_source";
 
     std::error_code ec;
@@ -1542,7 +1647,7 @@ bool CreateIsolatedSdkSourceDirectory(
         return false;
     }
 
-    const fs::path templateCmake = appRoot / "templates" / "Standalone_CMakeLists.txt";
+    const fs::path templateCmake = sourceRoot / "templates" / "Standalone_CMakeLists.txt";
     if (!FileExists(templateCmake)) {
         outError = "Missing Standalone CMake template: " + templateCmake.string();
         return false;
@@ -1555,9 +1660,9 @@ bool CreateIsolatedSdkSourceDirectory(
 
     const std::vector<CopyEntry> entries = {
         {templateCmake, outSourceRoot / "CMakeLists.txt"},
-        {appRoot / "include", outSourceRoot / "include"},
-        {appRoot / "src", outSourceRoot / "src"},
-        {appRoot / "third_party", outSourceRoot / "third_party"}
+        {sourceRoot / "include", outSourceRoot / "include"},
+        {sourceRoot / "src", outSourceRoot / "src"},
+        {sourceRoot / "third_party", outSourceRoot / "third_party"}
     };
 
     for (const auto& entry : entries) {
@@ -2132,12 +2237,21 @@ BuildResult BuildPipeline::BuildSelfContained(
     log("Target Output: " + request.targetExePath);
 
     fs::path sourceDir = effectiveAppRoot / "dev_kit";
-    bool isDevKit = fs::exists(sourceDir) && fs::exists(sourceDir / "CMakeLists.txt");
+    const bool requireMicroSources = useMicroPlayer;
+    bool isDevKit = HasDevKitSourceTree(sourceDir, requireMicroSources);
 
     if (isDevKit) {
         log("Using Dev Kit source: " + sourceDir.string());
     } else {
-        log("Dev Kit not found at " + (effectiveAppRoot / "dev_kit").string());
+        if (fs::exists(sourceDir)) {
+            if (requireMicroSources && !FileExists(sourceDir / "src" / "app" / "tiny")) {
+                log("Dev Kit source missing micro runtime subtree (src/app/tiny): " + sourceDir.string());
+            } else {
+                log("Dev Kit source is incomplete: " + sourceDir.string());
+            }
+        } else {
+            log("Dev Kit not found at " + (effectiveAppRoot / "dev_kit").string());
+        }
         std::string sdkError;
         if (!CreateIsolatedSdkSourceDirectory(resolvedRequest, buildRootPath, sourceDir, sdkError)) {
             log("Error: Failed to create isolated SDK source directory.");
@@ -2191,10 +2305,10 @@ BuildResult BuildPipeline::BuildSelfContained(
     }
 
     if (tinyProfile) {
-        log("Tiny Player Profile: ON (1K-64K size target)");
-        log("Tiny Profile Runtime: dynamic CRT (/MD) for compatibility and size");
+        log("Budget Runtime Profile: ON (64K-1024K budget target)");
+        log("Budget Runtime CRT: dynamic CRT (/MD) for compatibility and size");
     } else {
-        log("Tiny Player Profile: OFF (full runtime profile)");
+        log("Budget Runtime Profile: OFF (full runtime profile)");
     }
 
     log(std::string("Target Architecture: ") + (useX86Target ? "x86" : "x64"));
@@ -2204,9 +2318,9 @@ BuildResult BuildPipeline::BuildSelfContained(
             log("MicroPlayer developer mode: ON (overlay diagnostics enabled)");
         }
         if (useCrinkler) {
-            log("MicroPlayer mode: ON (tiny preset path, ShaderLabMicroPlayer + Crinkler)");
+            log("MicroPlayer mode: ON (budget runtime path, ShaderLabMicroPlayer + Crinkler)");
         } else {
-            log("MicroPlayer mode: ON (tiny preset path, ShaderLabMicroPlayer)");
+            log("MicroPlayer mode: ON (budget runtime path, ShaderLabMicroPlayer)");
         }
     } else {
         log("MicroPlayer mode: OFF (full runtime path)");
@@ -2229,6 +2343,10 @@ BuildResult BuildPipeline::BuildSelfContained(
 
     if (useCrinkler) {
         log("Crinkler: enabled (" + crinklerPath + ")");
+        if (PathContainsTokenCaseInsensitive(fs::path(crinklerPath), "\\dev_kit\\third_party\\") ||
+            PathContainsTokenCaseInsensitive(fs::path(crinklerPath), "\\third_party\\")) {
+            log("Crinkler source: bundled with ShaderLab Dev Kit/repo (preferred).");
+        }
     } else if (hasCrinkler && !hasNinja) {
         log("Crinkler detected but Ninja not found; skipping Crinkler.");
     } else {
@@ -2567,17 +2685,104 @@ BuildResult BuildPipeline::BuildSelfContained(
         }
     }
 
+    if (!releaseBuildOk && useCrinkler) {
+        auto resolveBundledCrinklerCandidate = [&]() -> std::string {
+            std::vector<fs::path> roots;
+            roots.push_back(sourceDir);
+
+            const fs::path standaloneRoot = ResolveStandaloneSourceRoot(effectiveAppRoot);
+            if (!standaloneRoot.empty()) {
+                roots.push_back(standaloneRoot);
+            }
+
+            roots.push_back(effectiveAppRoot);
+
+            for (const auto& root : roots) {
+                if (root.empty()) {
+                    continue;
+                }
+
+                std::vector<fs::path> candidates;
+                if (useX86Target) {
+                    candidates = {
+                        root / "third_party" / "crinkler" / "Win32" / "crinkler.exe",
+                        root / "third_party" / "Crinkler" / "Win32" / "crinkler.exe",
+                        root / "third_party" / "Crinkler" / "Win32" / "Crinkler.exe",
+                        root / "third_party" / "crinkler.exe",
+                        root / "third_party" / "Crinkler.exe"
+                    };
+                } else {
+                    candidates = {
+                        root / "third_party" / "crinkler" / "Win64" / "crinkler.exe",
+                        root / "third_party" / "Crinkler" / "Win64" / "crinkler.exe",
+                        root / "third_party" / "Crinkler" / "Win64" / "Crinkler.exe",
+                        root / "third_party" / "crinkler.exe",
+                        root / "third_party" / "Crinkler.exe"
+                    };
+                }
+
+                for (const auto& candidate : candidates) {
+                    if (FileExists(candidate)) {
+                        return candidate.string();
+                    }
+                }
+            }
+
+            return std::string();
+        };
+
+        const std::string bundledCrinkler = resolveBundledCrinklerCandidate();
+        if (!bundledCrinkler.empty()) {
+            fs::path current = fs::path(crinklerPath);
+            fs::path bundled = fs::path(bundledCrinkler);
+            std::error_code ecCurrent;
+            std::error_code ecBundled;
+            const fs::path currentNorm = fs::weakly_canonical(current, ecCurrent);
+            const fs::path bundledNorm = fs::weakly_canonical(bundled, ecBundled);
+            const bool sameBinary = (!ecCurrent && !ecBundled) ? (currentNorm == bundledNorm) : (current == bundled);
+
+            if (!sameBinary) {
+                log("Crinkler link failed. Retrying with bundled Crinkler binary for stability: " + bundledCrinkler);
+                crinklerPath = bundledCrinkler;
+
+                if (!writeInitialCache(true)) {
+                    log("Error: Failed to update CMake initial cache for bundled Crinkler fallback.");
+                    return result;
+                }
+
+                std::error_code resetEc;
+                fs::remove(buildDir / "CMakeCache.txt", resetEc);
+                resetEc.clear();
+                fs::remove(buildDir / "build.ninja", resetEc);
+                resetEc.clear();
+                fs::remove_all(buildDir / "CMakeFiles", resetEc);
+
+                std::string retryConfigureWithEnv = WrapWithVcVars(cmd, activeVcvarsArgs);
+                log("Retry Configure Command: " + retryConfigureWithEnv);
+                if (RunCommand(retryConfigureWithEnv, log)) {
+                    buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
+                    log("Retry Build Command: " + buildCmdWithEnv);
+                    releaseBuildOk = RunCommand(buildCmdWithEnv, log);
+                    if (releaseBuildOk) {
+                        log("Crinkler stability fallback succeeded with bundled Crinkler.");
+                    }
+                }
+            }
+        }
+    }
+
     if (!releaseBuildOk && useMicroPlayer && useCrinkler) {
-        log("Crinkler link failed for MicroPlayer. Retrying with /TINYIMPORT disabled for stability.");
+        log("Crinkler link failed for MicroPlayer. Retrying with conservative Crinkler settings.");
         std::string stableCmd = cmd + " -DSHADERLAB_CRINKLER_TINYIMPORT=OFF";
         std::string stableCmdWithEnv = WrapWithVcVars(stableCmd, activeVcvarsArgs);
         log("Retry Configure Command: " + stableCmdWithEnv);
 
         if (RunCommand(stableCmdWithEnv, log)) {
+            buildCmdWithEnv = WrapWithVcVars(buildCmd, activeVcvarsArgs);
             log("Retry Build Command: " + buildCmdWithEnv);
             releaseBuildOk = RunCommand(buildCmdWithEnv, log);
             if (releaseBuildOk) {
-                log("Crinkler stability fallback succeeded (/TINYIMPORT disabled).");
+                log("Crinkler stability fallback succeeded (conservative settings).");
             }
         }
     }
@@ -2629,7 +2834,7 @@ BuildResult BuildPipeline::BuildSelfContained(
     log("----------------------------------------");
     log("[3/6] Verify runtime artifact");
 
-    const std::vector<fs::path> candidateArtifacts = {
+    std::vector<fs::path> candidateArtifacts = {
         buildDir / "bin" / (targetName + targetExtension),
         buildDir / "bin" / "Debug" / (targetName + targetExtension),
         buildDir / "bin" / "Release" / (targetName + targetExtension),
@@ -2637,6 +2842,14 @@ BuildResult BuildPipeline::BuildSelfContained(
         buildDir / "Debug" / (targetName + targetExtension),
         buildDir / "Release" / (targetName + targetExtension)
     };
+
+    if (useMicroPlayer) {
+        candidateArtifacts.insert(candidateArtifacts.end(), {
+            buildDir / "src" / "app" / "tiny" / "Release" / (targetName + targetExtension),
+            buildDir / "src" / "app" / "tiny" / "Debug" / (targetName + targetExtension),
+            buildDir / "src" / "app" / "tiny" / (targetName + targetExtension)
+        });
+    }
 
     fs::path playerExe;
     for (const auto& candidate : candidateArtifacts) {
@@ -3040,14 +3253,21 @@ PSInput main(VSInput input) {
 
     fs::path packProjectPath = packRoot / "project.json";
 
-    if (request.restrictedCompactTrack) {
-        log("Restricted optimization: compact track binary enabled");
+    bool compactTrackPayloadQueued = false;
+    const bool writeCompactTrackPayload = request.restrictedCompactTrack || useMicroPlayer;
+    if (writeCompactTrackPayload) {
+        if (useMicroPlayer) {
+            log("MicroPlayer packaging: compact track binary enabled");
+        } else {
+            log("Restricted optimization: compact track binary enabled");
+        }
         fs::path compactTrackPath = packRoot / "assets" / "track.bin";
         if (!WriteCompactTrackBinary(project, compactTrackPath, writeError)) {
             log("Error: " + writeError);
             return result;
         }
         extraFiles.push_back({ compactTrackPath.string(), "assets/track.bin" });
+        compactTrackPayloadQueued = true;
 
         project.track.name.clear();
         project.track.rows.clear();
@@ -3065,6 +3285,11 @@ PSInput main(VSInput input) {
         for (auto& clip : project.audioLibrary) {
             clip.name.clear();
         }
+    }
+
+    if (useMicroPlayer && !compactTrackPayloadQueued) {
+        log("Error: MicroPlayer packaging contract violated: compact track payload was not queued for embedding.");
+        return result;
     }
 
     if (!Serializer::SaveProject(project, packProjectPath.string())) {
@@ -3175,7 +3400,7 @@ PSInput main(VSInput input) {
         if (isPackagedDemo) {
             log("Runtime Target Path: Packaged Demo (.zip with runtime + assets)");
         } else if (useMicroPlayer) {
-            log("Runtime Target Path: MicroPlayer (x86 tiny preset path)");
+            log("Runtime Target Path: MicroPlayer (x86 budget runtime path)");
         } else {
             log("Runtime Target Path: Full Runtime Player (x64 open/free demo path)");
         }

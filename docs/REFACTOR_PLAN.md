@@ -1,7 +1,119 @@
 # ShaderLab Refactor Plan: Component Separation
 
-Date: 2026-02-20
-Status: Draft v2 (decisions captured, one packaging ambiguity remains)
+Date: 2026-02-21
+Status: Draft v3 (M6 prebuilt packaging spike implemented and validated)
+
+## Recent Progress (2026-02-20)
+
+Additional progress (2026-02-21):
+
+- Completed a milestone-sized behavior-preserving decomposition of `src/core/Serializer.cpp` packaging flow:
+  - introduced file-scope helpers for stream reads, project asset-path traversal, directory blob creation, output directory creation, and final packed executable writing.
+  - introduced `ExecutablePackAccumulator` to centralize packed-entry dedupe/indexing and asset ingestion (`project.json`, project assets, extra files).
+  - reduced `Serializer::PackExecutable` to orchestration-only flow (read/load -> accumulate -> directory blob -> write).
+- Validated the decomposition with full workspace CMake builds and `tools/check.ps1` guardrails after each refactor slice.
+- During the larger extraction pass, one namespace regression (`PackedExtraFile` type scope) was intentionally tolerated, diagnosed, fixed immediately, and revalidated to green.
+
+Completed runtime refactor slices in `src/app/runtime` with behavior-preserving changes and successful runtime target builds:
+
+- Extracted window/presentation helpers into:
+  - `include/ShaderLab/Runtime/RuntimeWindowPolicy.h`
+  - `src/app/runtime/RuntimeWindowPolicy.cpp`
+- Extracted startup/system helpers into:
+  - `include/ShaderLab/Runtime/RuntimeStartupPolicy.h`
+  - `src/app/runtime/RuntimeStartupPolicy.cpp`
+- Refactored `PlayerApp.cpp` to use the policy modules for:
+  - fullscreen/windowed transitions
+  - title/FPS updates and initial black frame present
+  - single-instance mutex + runtime error log
+  - debug console setup + cursor lifecycle
+- Consolidated player runtime state and resources in `PlayerApp.cpp`:
+  - `RuntimeAppState` (flags/timing/title/window/cursor)
+  - `RuntimeResources` (device/queue/swapchain/player)
+- Deduplicated teardown path via `ShutdownRuntimeResources()` used by both startup-failure and normal shutdown.
+- Added non-breaking CMake groundwork targets for separation:
+  - `ShaderLabCoreApi`
+  - `ShaderLabDevKit`
+  - `ShaderLabEditorLib`
+  while preserving existing executable linkage through `ShaderLabCore`.
+- Migrated `ShaderLabBuildCli` linkage to the split graph (`ShaderLabDevKit` + `ShaderLabCoreApi`) and validated build.
+- Tightened concern boundaries in CMake target split:
+  - `ShaderLabDevKit` is now player-focused (runtime player sources only).
+  - build/export orchestration moved to `ShaderLabDevKitBuildTools`.
+  - `ShaderLabPlayer` / `ShaderLabScreenSaver` now link entrypoint-only executables against `ShaderLabDevKit` + `ShaderLabCoreApi`.
+  - `ShaderLabMicroPlayer` CMake wiring now follows the same entrypoint-only pattern (when `SHADERLAB_BUILD_MICRO_PLAYER=ON`).
+  - `ShaderLabBuildCli` now links `ShaderLabDevKitBuildTools` + `ShaderLabCoreApi`.
+  - `ShaderLabEditor` now links split libs (`ShaderLabEditorLib` + `ShaderLabDevKitBuildTools` + `ShaderLabCoreApi`) instead of monolithic `ShaderLabCore`.
+- Removed monolithic `ShaderLabCore` target from the main workspace `CMakeLists.txt`; split targets are now the authoritative build graph.
+- Migrated `templates/Standalone_CMakeLists.txt` to split targets (`ShaderLabCoreApi` + `ShaderLabDevKit`) and entrypoint-only player executable linkage.
+- Completed runtime include boundary cleanup:
+  - added `include/ShaderLab/Runtime/RuntimeStartupPolicy.h`
+  - added `include/ShaderLab/Runtime/RuntimeWindowPolicy.h`
+  - switched runtime sources to include the new Runtime headers
+  - removed temporary compatibility forwarders under `include/ShaderLab/App`
+- Began Dev Kit include boundary migration for build/export APIs:
+  - added `include/ShaderLab/DevKit/BuildPipeline.h`
+  - added `include/ShaderLab/DevKit/RuntimeExporter.h`
+  - switched editor/build-cli/build-tools includes to `ShaderLab/DevKit/*`
+  - removed temporary compatibility forwarders under `include/ShaderLab/Core`
+- Completed docs synchronization for split architecture:
+  - `docs/ARCHITECTURE.md` updated with split target graph and ownership boundaries
+  - `docs/STRUCTURE.md` updated with include/layer ownership map
+  - `docs/BUILD.md` updated with linkage graph and layering check flow
+- Updated editor dev_kit post-build assembly paths to copy only DevKit/player-relevant include/src/third_party content.
+- Added startup/relaunch matrix validation script and VS Code task:
+  - `tools/validate_startup_relaunch_matrix.ps1`
+  - task label: `Startup Relaunch Validation`
+
+Current remaining follow-up:
+- Decide whether M6 prebuilt packaging becomes the default Dev Kit distribution mode (spike completed).
+
+Guardrail status:
+- Configure-time layering checks are now active in both:
+  - main workspace `CMakeLists.txt`
+  - `templates/Standalone_CMakeLists.txt`
+- Current checks fail fast if runtime/player targets include build-export (`BuildPipeline`/`RuntimeExporter`) or UI source paths.
+- `tools/check.ps1` now runs a dedicated CMake configure pass under `vcvars64.bat` to validate layering assertions in the normal local validation flow.
+- `tools/check.ps1` now also enforces the MicroPlayer compact-track packaging contract via `ShaderLabBuildCli` log assertion.
+- Release workflow now runs `tools/check.ps1` after Release build to keep guardrails active on clean-machine CI.
+
+Notes:
+- Existing Pylance ANSI/Unicode Win32 signature diagnostics in `PlayerApp.cpp` remain unchanged from baseline and are non-blocking for current build config.
+
+## Near-Term Execution Plan (Next Steps)
+
+1. **M1 target split groundwork (CMake-only, no behavior change)**
+  - Introduce explicit target groupings (`CoreApi`, `DevKit`, `EditorLib` naming may remain provisional).
+  - Keep link outputs identical while moving source lists behind new target boundaries.
+  - Verify Debug + Release + runtime executables.
+
+2. **Runtime include boundary cleanup** ✅
+  - runtime policy headers moved to `include/ShaderLab/Runtime`.
+  - temporary compatibility includes under `include/ShaderLab/App` removed.
+  - main + standalone CMake runtime source/header lists updated and validated.
+
+3. **Dev Kit ownership migration for build/export orchestration** ✅
+  - `BuildPipeline` / `RuntimeExporter` include boundaries moved to `ShaderLab/DevKit` with compatibility forwards.
+  - compatibility forwards removed; canonical includes now `ShaderLab/DevKit/*`.
+  - editor orchestration remains API-driven.
+  - standalone build-cli and editor flows validated in workspace build.
+
+4. **Editor isolation and integration** (in progress)
+  - continue enforcing editor boundary as entrypoint + editor-lib orchestration only.
+  - add explicit CMake layering assertion for `ShaderLabEditor` executable target.
+  - add `tools/check.ps1` include-surface gate to prevent editor/UI code from including runtime-internal headers.
+  - enforce the same guard in CI on pull requests/pushes via `.github/workflows/validate.yml`.
+
+5. **Layering guardrails + smoke checks** (in progress)
+  - Add lightweight checks preventing `src/ui/*` from leaking into runtime/core-only targets.
+  - Add launch/relaunch smoke matrix script hooks for runtime outputs.
+  - keep local/CI validation gates aligned (`tools/check.ps1`, `.github/workflows/validate.yml`, release guard step).
+  - enforce no-exclusive-fullscreen policy via `tools/check.ps1` runtime API scan.
+  - Keep “no exclusive fullscreen” policy validated.
+
+6. **Docs sync for architecture boundaries** ✅
+  - `docs/ARCHITECTURE.md`, `docs/STRUCTURE.md`, and build notes updated.
+  - docs now reflect split target graph and ownership rules.
 
 ## Confirmed Decisions (2026-02-20)
 
@@ -146,9 +258,20 @@ Refactor the solution into three explicit deliverables with clear ownership and 
 Purpose: resolve whether Dev Kit should support a practical prebuilt distribution that includes player binaries + precompiled shaders + compact track/sync payloads.
 
 **Tasks**
-- Define candidate bundle layout (binaries, `assets/shaders/*.cso`, compact track payload, manifest).
-- Validate runtime loader expectations against bundled structure.
-- Produce one reference prebuilt package and run launch matrix.
+- Define candidate bundle layout (binaries, `assets/shaders/*.cso`, compact track payload, manifest). ✅
+- Validate runtime loader expectations against bundled structure. ✅
+- Produce one reference prebuilt package and run launch matrix. ✅
+
+Implementation notes:
+
+- Added `tools/validate_devkit_prebuilt_spike.ps1`:
+  - builds a reference packaged zip via `ShaderLabBuildCli` with `--target packaged --restricted-compact-track`
+  - validates extracted layout (`project.json`, runtime exe, `assets/track.bin`, precompiled shader outputs)
+  - validates manifest-driven loader contract (relative asset paths + resolved precompiled files)
+  - runs startup/relaunch matrix by default (can be skipped with `-SkipLaunchMatrix`)
+- Added VS Code task: `M6 Prebuilt Packaging Spike`.
+- Wired a lightweight M6 gate into `tools/check.ps1` (runs validator with `-SkipLaunchMatrix` for routine checks).
+- Wired full M6 spike into `.github/workflows/validate.yml` as a dedicated job for nightly schedule and optional manual dispatch (`run_full_m6=true`).
 
 **Checkpoints**
 - Package builds and runs without editor present.
@@ -157,14 +280,15 @@ Purpose: resolve whether Dev Kit should support a practical prebuilt distributio
 
 ## Work Breakdown Backlog (Initial)
 
-- [ ] Create target split in `CMakeLists.txt`
-- [ ] Introduce `DevKit` include namespace or folder boundary
-- [ ] Move `BuildPipeline` / `RuntimeExporter` under Dev Kit ownership
-- [ ] Remove editor source files from core target
-- [ ] Introduce runtime startup/presentation policy utility (shared by all players)
-- [ ] Update editor post-build dev_kit assembly paths
+- [x] Create target split in `CMakeLists.txt`
+- [x] Introduce `DevKit` include namespace or folder boundary
+- [x] Move `BuildPipeline` / `RuntimeExporter` under Dev Kit ownership
+- [x] Remove editor source files from core target
+- [x] Introduce runtime startup/presentation policy utility (shared by all players)
+- [x] Update editor post-build dev_kit assembly paths
 - [ ] Update docs and add architecture diagram
-- [ ] Add regression scripts for startup/relaunch matrix
+- [x] Add regression scripts for startup/relaunch matrix
+- [x] Wire layering/micro packaging guard checks into release CI
 
 ## Definition of Done (Program-Level)
 

@@ -103,7 +103,67 @@ bool IconButton(const char* id, uint32_t iconCodepoint, const char* tooltip, con
         textY = min.y + (buttonSize.y - textSize.y) * 0.5f;
     }
 
-    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(UIConfig::ColorCheckMark), icon.c_str());
+    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(ImGuiCol_CheckMark), icon.c_str());
+
+    if (ImGui::IsItemHovered() && tooltip && *tooltip) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    return pressed;
+}
+
+bool LabeledActionButton(const char* id, uint32_t iconCodepoint, const char* label, const char* tooltip, const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+    const std::string icon = OpenFontIcons::ToUtf8(iconCodepoint);
+    const std::string buttonId = std::string("##") + id;
+    const char* safeLabel = (label && *label) ? label : "";
+
+    ImVec2 buttonSize = size;
+    if (buttonSize.x <= 0.0f) {
+        buttonSize.x = ImGui::CalcItemWidth();
+    }
+    if (buttonSize.y <= 0.0f) {
+        buttonSize.y = ImGui::GetFrameHeight();
+    }
+
+    const bool pressed = ImGui::InvisibleButton(buttonId.c_str(), buttonSize);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : (hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+    drawList->AddRectFilled(min, max, bg, style.FrameRounding);
+    if (style.FrameBorderSize > 0.0f) {
+        drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding, 0, style.FrameBorderSize);
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize();
+    const ImVec2 iconSize = ImGui::CalcTextSize(icon.c_str());
+    const ImVec2 labelSize = ImGui::CalcTextSize(safeLabel);
+    const float gap = safeLabel[0] ? style.ItemInnerSpacing.x : 0.0f;
+    const float contentWidth = iconSize.x + gap + labelSize.x;
+    const float baseX = min.x + (buttonSize.x - contentWidth) * 0.5f;
+    float iconX = baseX;
+    float iconY = min.y + (buttonSize.y - iconSize.y) * 0.5f;
+    if (font) {
+        if (ImFontBaked* baked = font->GetFontBaked(fontSize)) {
+            if (ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(iconCodepoint))) {
+                const float glyphW = glyph->X1 - glyph->X0;
+                const float glyphH = glyph->Y1 - glyph->Y0;
+                iconX = baseX + (iconSize.x - glyphW) * 0.5f - glyph->X0;
+                iconY = min.y + (buttonSize.y - glyphH) * 0.5f - glyph->Y0;
+            }
+        }
+    }
+    const float labelY = min.y + (buttonSize.y - labelSize.y) * 0.5f;
+
+    drawList->AddText(font, fontSize, ImVec2(std::floor(iconX), std::floor(iconY)), ImGui::GetColorU32(ImGuiCol_CheckMark), icon.c_str());
+    if (safeLabel[0]) {
+        drawList->AddText(ImVec2(std::floor(baseX + iconSize.x + gap), std::floor(labelY)), ImGui::GetColorU32(ImGuiCol_TextLink), safeLabel);
+    }
 
     if (ImGui::IsItemHovered() && tooltip && *tooltip) {
         ImGui::SetTooltip("%s", tooltip);
@@ -175,7 +235,9 @@ void UISystem::ShowModeWindows() {
         ImVec2 cursorStart = ImGui::GetCursorPos();
         ImVec2 screenStart = ImGui::GetCursorScreenPos();
         ImVec2 screenEnd = ImVec2(screenStart.x + avail.x, screenStart.y + avail.y);
-        ImGui::GetWindowDrawList()->AddRectFilled(screenStart, screenEnd, IM_COL32(10, 10, 12, 255));
+        ImVec4 previewBackdrop = m_uiThemeColors.WindowBackground;
+        previewBackdrop.w = (std::clamp)(m_uiThemeColors.PanelOpacity, 0.0f, 1.0f);
+        ImGui::GetWindowDrawList()->AddRectFilled(screenStart, screenEnd, ImGui::GetColorU32(previewBackdrop));
 
         ImGui::SetCursorPos(ImVec2(cursorStart.x + (avail.x - drawSize.x) * 0.5f, cursorStart.y + (avail.y - drawSize.y) * 0.5f));
 
@@ -204,7 +266,7 @@ void UISystem::ShowModeWindows() {
 
                 ImGui::TextUnformatted("Screen Keys");
                 ImGui::SameLine();
-                if (IconButton("ScreenKeysCopy", OpenFontIcons::kCopy, "Copy key log", CompactActionSize())) {
+                if (LabeledActionButton("ScreenKeysCopy", OpenFontIcons::kCopy, "Copy", "Copy key log", ImVec2(100.0f, 0.0f))) {
                     std::string clipboard;
                     clipboard.reserve(m_screenKeyLog.size() * 8);
                     for (size_t i = 0; i < m_screenKeyLog.size(); ++i) {
@@ -219,7 +281,7 @@ void UISystem::ShowModeWindows() {
                     ImGui::SetClipboardText(clipboard.c_str());
                 }
                 ImGui::SameLine();
-                if (IconButton("ScreenKeysClear", OpenFontIcons::kTrash2, "Clear key log", CompactActionSize())) {
+                if (LabeledActionButton("ScreenKeysClear", OpenFontIcons::kTrash2, "Clear", "Clear key log", ImVec2(100.0f, 0.0f))) {
                     m_screenKeyLog.clear();
                 }
 
@@ -252,13 +314,14 @@ void UISystem::ShowModeWindows() {
 
     // Demo mode windows
     if (m_currentMode == UIMode::Demo) {
+        ShowDemoMetadata();
         ShowDemoPlaylist();
         ShowAudioLibrary();
 
         ShowSceneList();
 
         if (ImGui::Begin("Demo: Runtime Log")) {
-            if (IconButton("ClearRuntimeLog", OpenFontIcons::kTrash2, "Clear log")) {
+            if (LabeledActionButton("ClearRuntimeLog", OpenFontIcons::kTrash2, "Clear Log", "Clear log")) {
                 m_demoLog.clear();
             }
             ImGui::SameLine();
@@ -297,6 +360,8 @@ void UISystem::ShowModeWindows() {
                 ImGui::Separator();
             }
 
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, m_uiThemeColors.ConsoleBackground);
+            ImGui::PushStyleColor(ImGuiCol_Text, m_uiThemeColors.ConsoleFontColor);
             if (ImGui::BeginChild("RuntimeLog", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar)) {
                 for (const auto& line : m_demoLog) {
                     ImGui::TextUnformatted(line.c_str());
@@ -306,6 +371,7 @@ void UISystem::ShowModeWindows() {
                 }
             }
             ImGui::EndChild();
+            ImGui::PopStyleColor(2);
         }
         ImGui::End();
 
@@ -360,7 +426,7 @@ void UISystem::ShowModeWindows() {
                     return (int)scene.bindings.size() % 8;
                 };
 
-                if (IconButton("AddFileTexture", OpenFontIcons::kFilePlus, "Add file texture")) {
+                if (LabeledActionButton("AddFileTexture", OpenFontIcons::kFilePlus, "Add File", "Add file texture", ImVec2(120.0f, 0.0f))) {
                     TextureBinding binding;
                     binding.enabled = true;
                     binding.bindingType = BindingType::File;
@@ -386,7 +452,7 @@ void UISystem::ShowModeWindows() {
                     scene.bindings.push_back(binding);
                 }
                 ImGui::SameLine();
-                if (IconButton("AddSceneSampler", OpenFontIcons::kPlus, "Add scene sampler")) {
+                if (LabeledActionButton("AddSceneSampler", OpenFontIcons::kPlus, "Add Scene", "Add scene sampler", ImVec2(130.0f, 0.0f))) {
                     TextureBinding binding;
                     binding.enabled = true;
                     binding.bindingType = BindingType::Scene;
@@ -556,7 +622,7 @@ void UISystem::ShowModeWindows() {
                                         binding.fileTextureValid = binding.textureResource != nullptr;
                                     }
                                 }
-                                if (IconButton("BrowseTexture", OpenFontIcons::kFolder, "Browse texture file")) {
+                                if (LabeledActionButton("BrowseTexture", OpenFontIcons::kFolder, "Browse", "Browse texture file", ImVec2(120.0f, 0.0f))) {
                                     OPENFILENAMEA ofn = {};
                                     char szFile[260] = {};
                                     ofn.lStructSize = sizeof(ofn);
@@ -619,7 +685,7 @@ void UISystem::ShowModeWindows() {
                 ImGui::EndListBox();
             }
 
-            if (IconButton("AddPreset", OpenFontIcons::kPlus, "Add preset effect")) {
+            if (LabeledActionButton("AddPreset", OpenFontIcons::kPlus, "Add Preset", "Add preset effect", ImVec2(130.0f, 0.0f))) {
                 if (selectedPresetIndex >= 0 && selectedPresetIndex < (int)kPostFxPresetCount) {
                     const auto& preset = kPostFxPresets[selectedPresetIndex];
                     m_postFxDraftChain.emplace_back(preset.name, preset.code);
@@ -628,7 +694,7 @@ void UISystem::ShowModeWindows() {
                 }
             }
             ImGui::SameLine();
-            if (IconButton("AddEmptyFx", OpenFontIcons::kFilePlus, "Add empty effect")) {
+            if (LabeledActionButton("AddEmptyFx", OpenFontIcons::kFilePlus, "Add Empty", "Add empty effect", ImVec2(130.0f, 0.0f))) {
                 m_postFxDraftChain.emplace_back("New FX", "float4 main(float2 fragCoord, float2 iResolution, float iTime) {\n    float2 uv = fragCoord / iResolution;\n    return iChannel0.Sample(iSampler0, uv);\n}\n");
                 m_postFxSelectedIndex = (int)m_postFxDraftChain.size() - 1;
                 SyncPostFxEditorToSelection();
@@ -660,7 +726,7 @@ void UISystem::ShowModeWindows() {
             }
 
             if (m_postFxSourceSceneIndex >= 0 && m_postFxSourceSceneIndex < (int)m_scenes.size()) {
-                if (IconButton("ApplyFxDraft", OpenFontIcons::kCheck, "Apply draft to scene")) {
+                if (LabeledActionButton("ApplyFxDraft", OpenFontIcons::kCheck, "Apply", "Apply draft to scene", ImVec2(110.0f, 0.0f))) {
                     m_scenes[m_postFxSourceSceneIndex].postFxChain = m_postFxDraftChain;
                 }
             }
@@ -687,17 +753,17 @@ void UISystem::ShowModeWindows() {
 
             if (m_postFxSelectedIndex >= 0 && m_postFxSelectedIndex < (int)m_postFxDraftChain.size()) {
                 ImGui::Separator();
-                if (IconButton("MoveFxUp", OpenFontIcons::kChevronUp, "Move effect up") && m_postFxSelectedIndex > 0) {
+                if (LabeledActionButton("MoveFxUp", OpenFontIcons::kChevronUp, "Up", "Move effect up", ImVec2(90.0f, 0.0f)) && m_postFxSelectedIndex > 0) {
                     std::swap(m_postFxDraftChain[m_postFxSelectedIndex], m_postFxDraftChain[m_postFxSelectedIndex - 1]);
                     m_postFxSelectedIndex -= 1;
                 }
                 ImGui::SameLine();
-                if (IconButton("MoveFxDown", OpenFontIcons::kChevronDown, "Move effect down") && m_postFxSelectedIndex + 1 < (int)m_postFxDraftChain.size()) {
+                if (LabeledActionButton("MoveFxDown", OpenFontIcons::kChevronDown, "Down", "Move effect down", ImVec2(90.0f, 0.0f)) && m_postFxSelectedIndex + 1 < (int)m_postFxDraftChain.size()) {
                     std::swap(m_postFxDraftChain[m_postFxSelectedIndex], m_postFxDraftChain[m_postFxSelectedIndex + 1]);
                     m_postFxSelectedIndex += 1;
                 }
                 ImGui::SameLine();
-                if (IconButton("RemoveFx", OpenFontIcons::kTrash2, "Remove effect")) {
+                if (LabeledActionButton("RemoveFx", OpenFontIcons::kTrash2, "Remove", "Remove effect", ImVec2(110.0f, 0.0f))) {
                     m_postFxDraftChain.erase(m_postFxDraftChain.begin() + m_postFxSelectedIndex);
                     if (m_postFxSelectedIndex >= (int)m_postFxDraftChain.size()) {
                         m_postFxSelectedIndex = (int)m_postFxDraftChain.size() - 1;
@@ -744,7 +810,9 @@ void UISystem::ShowFullscreenPreview() {
     ImVec2 cursorStart = ImGui::GetCursorPos();
     ImVec2 screenStart = ImGui::GetCursorScreenPos();
     ImVec2 screenEnd = ImVec2(screenStart.x + avail.x, screenStart.y + avail.y);
-    ImGui::GetWindowDrawList()->AddRectFilled(screenStart, screenEnd, IM_COL32(10, 10, 12, 255));
+    ImVec4 previewBackdrop = m_uiThemeColors.WindowBackground;
+    previewBackdrop.w = (std::clamp)(m_uiThemeColors.PanelOpacity, 0.0f, 1.0f);
+    ImGui::GetWindowDrawList()->AddRectFilled(screenStart, screenEnd, ImGui::GetColorU32(previewBackdrop));
     ImGui::SetCursorPos(ImVec2(cursorStart.x + (avail.x - drawSize.x) * 0.5f, cursorStart.y + (avail.y - drawSize.y) * 0.5f));
 
     if (m_previewTexture && m_previewRenderer && hasShader) {
@@ -766,7 +834,7 @@ void UISystem::ShowSceneList() {
         ImGui::Separator();
 
         // Add scene button
-        if (IconButton("AddScene", OpenFontIcons::kPlus, "Add scene")) {
+        if (LabeledActionButton("AddScene", OpenFontIcons::kPlus, "Add Scene", "Add scene", ImVec2(130.0f, 0.0f))) {
             char nameBuf[64];
             snprintf(nameBuf, sizeof(nameBuf), "Scene %d", (int)m_scenes.size() + 1);
 
@@ -841,23 +909,27 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
             ImGui::PopID();
         }
 
-        ImGui::Separator();
-        // Properties for active scene
-        if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
-            auto& scene = m_scenes[m_activeSceneIndex];
-            ImGui::Text("Scene Config");
+        if (m_currentMode == UIMode::Scene) {
+            ImGui::Separator();
+            if (m_activeSceneIndex >= 0 && m_activeSceneIndex < (int)m_scenes.size()) {
+                auto& scene = m_scenes[m_activeSceneIndex];
+                ImGui::Text("Scene Config");
 
-            char sceneNameBuffer[128];
-            std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "%s", scene.name.c_str());
-            if (ImGui::InputText("Scene Name", sceneNameBuffer, sizeof(sceneNameBuffer))) {
-                if (sceneNameBuffer[0] == '\0') {
-                    std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "Scene %d", m_activeSceneIndex + 1);
+                char sceneNameBuffer[128];
+                std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "%s", scene.name.c_str());
+                if (ImGui::InputText("Scene Name", sceneNameBuffer, sizeof(sceneNameBuffer))) {
+                    if (sceneNameBuffer[0] == '\0') {
+                        std::snprintf(sceneNameBuffer, sizeof(sceneNameBuffer), "Scene %d", m_activeSceneIndex + 1);
+                    }
+                    scene.name = sceneNameBuffer;
                 }
-                scene.name = sceneNameBuffer;
-            }
 
-            // Audio/Tracker settings moved to Demo Playlist view
-            ImGui::TextDisabled("Audio managed in 'Demo: Playlist'");
+                char sceneDescriptionBuffer[1024];
+                std::snprintf(sceneDescriptionBuffer, sizeof(sceneDescriptionBuffer), "%s", scene.description.c_str());
+                if (ImGui::InputTextMultiline("Description", sceneDescriptionBuffer, sizeof(sceneDescriptionBuffer), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 5.5f))) {
+                    scene.description = sceneDescriptionBuffer;
+                }
+            }
         }
     }
     ImGui::End();
@@ -900,14 +972,10 @@ void UISystem::ShowSnippetBin() {
     ImGui::Combo("##SnippetFolder", &m_selectedSnippetFolderIndex, folderNames.data(), (int)folderNames.size());
 
     static char newFolderName[64] = "";
-    const float folderActionButtonSize = CompactActionHeight();
-    const float folderActionSpacing = ImGui::GetStyle().ItemSpacing.x;
-    float folderInputWidth = ImGui::GetContentRegionAvail().x - (folderActionButtonSize * 2.0f + folderActionSpacing);
-    folderInputWidth = (std::max)(90.0f, folderInputWidth);
-    ImGui::SetNextItemWidth(folderInputWidth);
+    ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputText("##NewSnippetFolder", newFolderName, sizeof(newFolderName));
-    ImGui::SameLine(0.0f, folderActionSpacing);
-    if (IconButton("SnippetAddFolder", OpenFontIcons::kPlus, "Add folder", CompactActionSize(folderActionButtonSize))) {
+
+    if (LabeledActionButton("SnippetAddFolder", OpenFontIcons::kPlus, "Add Folder", "Add folder", ImVec2(140.0f, 0.0f))) {
         std::string folderName = newFolderName;
         if (folderName.empty()) {
             folderName = "Folder " + std::to_string((int)m_snippetFolders.size() + 1);
@@ -948,8 +1016,8 @@ void UISystem::ShowSnippetBin() {
         SaveGlobalSnippets();
         newFolderName[0] = '\0';
     }
-    ImGui::SameLine(0.0f, folderActionSpacing);
-    if (IconButton("SnippetDeleteFolder", OpenFontIcons::kTrash2, "Delete folder", CompactActionSize(folderActionButtonSize)) && m_snippetFolders.size() > 1) {
+    ImGui::SameLine();
+    if (LabeledActionButton("SnippetDeleteFolder", OpenFontIcons::kTrash2, "Delete Folder", "Delete folder", ImVec2(160.0f, 0.0f)) && m_snippetFolders.size() > 1) {
         fs::path fileToDelete = m_snippetFolders[m_selectedSnippetFolderIndex].filePath;
         m_snippetFolders.erase(m_snippetFolders.begin() + m_selectedSnippetFolderIndex);
         if (m_selectedSnippetFolderIndex >= (int)m_snippetFolders.size()) {
@@ -972,7 +1040,7 @@ void UISystem::ShowSnippetBin() {
         ImGui::TableSetupColumn("CreateA", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("CreateB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableNextColumn();
-        if (IconButton("SnippetSaveCurrent", OpenFontIcons::kSave, "Save current shader as snippet", CompactActionSize())) {
+        if (LabeledActionButton("SnippetSaveCurrent", OpenFontIcons::kSave, "Save Current", "Save current shader as snippet", ImVec2(-FLT_MIN, 0.0f))) {
             ShaderSnippet snippet;
             snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
             snippet.code = m_shaderState.text;
@@ -984,7 +1052,7 @@ void UISystem::ShowSnippetBin() {
         }
 
         ImGui::TableNextColumn();
-        if (IconButton("SnippetAddEmpty", OpenFontIcons::kFilePlus, "Add empty snippet", CompactActionSize())) {
+        if (LabeledActionButton("SnippetAddEmpty", OpenFontIcons::kFilePlus, "Add Empty", "Add empty snippet", ImVec2(-FLT_MIN, 0.0f))) {
             ShaderSnippet snippet;
             snippet.name = "Snippet " + std::to_string(m_nextSnippetId++);
             snippet.code = "float4 SnippetFunc(float2 uv, float t) {\n    return float4(uv, sin(t), 1.0);\n}\n";
@@ -1035,12 +1103,12 @@ void UISystem::ShowSnippetBin() {
         ImGui::TableSetupColumn("SnipActB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("SnipActC", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableNextColumn();
-        if (IconButton("SnippetInsert", OpenFontIcons::kInsert, "Insert at cursor", CompactActionSize())) {
+        if (LabeledActionButton("SnippetInsert", OpenFontIcons::kInsert, "Insert", "Insert at cursor", ImVec2(-FLT_MIN, 0.0f))) {
             InsertSnippetIntoEditor(selected.code);
         }
 
         ImGui::TableNextColumn();
-        if (IconButton("SnippetOverwrite", OpenFontIcons::kCopy, "Overwrite snippet with current shader", CompactActionSize())) {
+        if (LabeledActionButton("SnippetOverwrite", OpenFontIcons::kCopy, "Overwrite", "Overwrite snippet with current shader", ImVec2(-FLT_MIN, 0.0f))) {
             selected.code = m_shaderState.text;
             m_snippetDraftCode = selected.code;
             m_snippetTextEditor.SetText(m_snippetDraftCode);
@@ -1049,7 +1117,7 @@ void UISystem::ShowSnippetBin() {
         }
 
         ImGui::TableNextColumn();
-        if (IconButton("SnippetDelete", OpenFontIcons::kTrash2, "Delete snippet", CompactActionSize())) {
+        if (LabeledActionButton("SnippetDelete", OpenFontIcons::kTrash2, "Delete", "Delete snippet", ImVec2(-FLT_MIN, 0.0f))) {
             snippets.erase(snippets.begin() + m_selectedSnippetIndex);
             if (m_selectedSnippetIndex >= (int)snippets.size()) {
                 m_selectedSnippetIndex = (int)snippets.size() - 1;
@@ -1065,7 +1133,10 @@ void UISystem::ShowSnippetBin() {
     ImGui::Separator();
     ImGui::TextUnformatted("Snippet Code");
     ImGui::SameLine();
-    if (IconButton("SnippetEditMode", m_snippetCodeLocked ? OpenFontIcons::kLock : OpenFontIcons::kUnlock, m_snippetCodeLocked ? "Locked" : "Unlocked")) {
+    if (LabeledActionButton("SnippetEditMode", m_snippetCodeLocked ? OpenFontIcons::kLock : OpenFontIcons::kUnlock,
+                            m_snippetCodeLocked ? "Locked" : "Edit",
+                            m_snippetCodeLocked ? "Snippet is locked" : "Edit snippet draft",
+                            ImVec2(120.0f, 0.0f))) {
         m_snippetCodeLocked = !m_snippetCodeLocked;
         if (!m_snippetCodeLocked) {
             m_snippetDraftCode = selected.code;
@@ -1104,14 +1175,14 @@ void UISystem::ShowSnippetBin() {
             ImGui::TableSetupColumn("DraftA", ImGuiTableColumnFlags_WidthStretch, 1.0f);
             ImGui::TableSetupColumn("DraftB", ImGuiTableColumnFlags_WidthStretch, 1.0f);
             ImGui::TableNextColumn();
-            if (IconButton("SnippetSaveDraft", OpenFontIcons::kSave, "Save snippet edits", CompactActionSize())) {
+            if (LabeledActionButton("SnippetSaveDraft", OpenFontIcons::kSave, "Save Edits", "Save snippet edits", ImVec2(-FLT_MIN, 0.0f))) {
                 selected.code = m_snippetDraftCode;
                 m_snippetDraftDirty = false;
                 SaveGlobalSnippets();
             }
 
             ImGui::TableNextColumn();
-            if (IconButton("SnippetRevertDraft", OpenFontIcons::kRefresh, "Revert unsaved edits", CompactActionSize())) {
+            if (LabeledActionButton("SnippetRevertDraft", OpenFontIcons::kRefresh, "Revert", "Revert unsaved edits", ImVec2(-FLT_MIN, 0.0f))) {
                 m_snippetDraftCode = selected.code;
                 m_snippetTextEditor.SetText(m_snippetDraftCode);
                 m_snippetDraftDirty = false;
@@ -1156,30 +1227,30 @@ void UISystem::ShowShaderEditor() {
     if (ImGui::Begin("Shader Editor")) {
         // Compile button and status
         const char* statusText = "Clean";
-        ImVec4 statusColor = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+        ImVec4 statusColor = m_uiThemeColors.StatusFontColor;
         switch (m_shaderState.status) {
             case CompileStatus::Dirty:
                 statusText = "Dirty";
-                statusColor = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+                statusColor = m_uiThemeColors.TrackerAccentBeatFontColor;
                 break;
             case CompileStatus::Compiling:
                 statusText = "Compiling...";
-                statusColor = ImVec4(0.0f, 0.5f, 1.0f, 1.0f);
+                statusColor = m_uiThemeColors.IconColor;
                 break;
             case CompileStatus::Success:
                 statusText = "OK";
-                statusColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
+                statusColor = m_uiThemeColors.ButtonIconColor;
                 break;
             case CompileStatus::Error:
                 statusText = "Error";
-                statusColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+                statusColor = m_uiThemeColors.ActivePanelTitleColor;
                 break;
         }
 
         const bool editorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         const bool ctrlDown = ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl);
         const bool ctrlEnterPressed = editorFocused && ctrlDown && ImGui::IsKeyPressed(ImGuiKey_Enter);
-        if (IconButton("CompileShader", OpenFontIcons::kCode, "Compile (Ctrl+Enter / F7)") ||
+        if (LabeledActionButton("CompileShader", OpenFontIcons::kPlay, "Compile", "Compile (Ctrl+Enter / F7)", ImVec2(120.0f, 0.0f)) ||
             ctrlEnterPressed ||
             (editorFocused && ImGui::IsKeyPressed(ImGuiKey_F7))) {
 
@@ -1341,6 +1412,7 @@ void UISystem::ShowShaderEditor() {
                     ApplyPalette(TextEditor::GetRetroBluePalette());
                     break;
             }
+            ApplyCodeEditorControlOpacity();
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(fontSizeWidth);
@@ -1359,20 +1431,22 @@ void UISystem::ShowShaderEditor() {
         }
 
         if (m_shaderState.showSearchReplace) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+            ImVec4 searchBarBg = m_uiThemeColors.ControlBackground;
+            searchBarBg.w = (std::clamp)(m_uiThemeColors.ControlOpacity, 0.0f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, searchBarBg);
             ImGui::BeginChild("SearchBar", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 3.5f), true);
 
             // Search field
-            ImGui::Text("Search:");
+            ImGui::Text("Find:");
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(-80);
+            ImGui::SetNextItemWidth(-130);
             // Set focus on search field when first opened
             if (ImGui::IsWindowAppearing()) {
                 ImGui::SetKeyboardFocusHere();
             }
             ImGui::InputText("##Search", m_shaderState.searchBuffer, sizeof(m_shaderState.searchBuffer));
             ImGui::SameLine();
-            if (IconButton("FindNext", OpenFontIcons::kSearch, "Find next")) {
+            if (LabeledActionButton("FindNext", OpenFontIcons::kSearch, "Next", "Find next", ImVec2(120.0f, 0.0f))) {
                 std::string searchStr = m_shaderState.searchBuffer;
                 if (!searchStr.empty()) {
                     std::string text = m_textEditor.GetText();
@@ -1420,10 +1494,10 @@ void UISystem::ShowShaderEditor() {
             // Replace field
             ImGui::Text("Replace:");
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(-80);
+            ImGui::SetNextItemWidth(-130);
             ImGui::InputText("##Replace", m_shaderState.replaceBuffer, sizeof(m_shaderState.replaceBuffer));
             ImGui::SameLine();
-            if (IconButton("ReplaceAll", OpenFontIcons::kRefresh, "Replace all")) {
+            if (LabeledActionButton("ReplaceAll", OpenFontIcons::kRefresh, "Replace All", "Replace all", ImVec2(120.0f, 0.0f))) {
                 std::string search = m_shaderState.searchBuffer;
                 std::string replace = m_shaderState.replaceBuffer;
                 if (!search.empty()) {
@@ -1453,7 +1527,7 @@ void UISystem::ShowShaderEditor() {
             }
 
             // Close button on new line
-            if (IconButton("CloseSearch", OpenFontIcons::kX, "Close search")) {
+            if (LabeledActionButton("CloseSearch", OpenFontIcons::kX, "Close", "Close search", ImVec2(120.0f, 0.0f))) {
                 m_shaderState.showSearchReplace = false;
             }
 
@@ -1545,10 +1619,10 @@ void UISystem::ShowDiagnostics() {
         if (m_shaderState.diagnostics.empty()) {
             ImGui::TextDisabled("No errors or warnings.");
             if (m_shaderState.status == CompileStatus::Success) {
-                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Compilation Successful.");
+                 ImGui::TextColored(m_uiThemeColors.ButtonIconColor, "Compilation Successful.");
             }
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, m_uiThemeColors.ActivePanelTitleColor);
             PushNumericFont();
             ImGui::Text("%d", (int)m_shaderState.diagnostics.size());
             PopNumericFont();
@@ -1624,16 +1698,19 @@ void UISystem::BuildLayout(UIMode mode) {
         // 3. Right: Split into Tracker (Top) and Preview (Bottom)
         ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Up, 0.50f, &dock_right_top, &dock_right_bottom);
 
-        // 4. Split Left Stack into Scene / Audio / Log
+        // 4. Split Left Stack into Metadata / Scene / Audio / Log
         ImGuiID dock_left_mid = 0;
+        ImGuiID dock_left_upper = 0;
         ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.33f, &dock_left_bottom, &dock_left);
         ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.50f, &dock_left_mid, &dock_left_top);
+        ImGui::DockBuilderSplitNode(dock_left_top, ImGuiDir_Down, 0.60f, &dock_left_top, &dock_left_upper);
 
         ImGui::DockBuilderDockWindow("Transport", dock_up);
         ImGui::DockBuilderDockWindow("Demo: Playlist", dock_right_top);
         ImGui::DockBuilderDockWindow("Preview", dock_right_bottom);
 
-        ImGui::DockBuilderDockWindow("Demo: Scene Library", dock_left_top);
+        ImGui::DockBuilderDockWindow("Demo: Metadata", dock_left_top);
+        ImGui::DockBuilderDockWindow("Demo: Scene Library", dock_left_upper);
         ImGui::DockBuilderDockWindow("Audio Library", dock_left_mid);
         ImGui::DockBuilderDockWindow("Demo: Runtime Log", dock_left_bottom);
 

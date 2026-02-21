@@ -26,8 +26,8 @@
 #include "ShaderLab/Graphics/Swapchain.h"
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 #include "ShaderLab/Audio/AudioSystem.h"
-#include "ShaderLab/Core/BuildPipeline.h"
-#include "ShaderLab/Core/RuntimeExporter.h"
+#include "ShaderLab/DevKit/BuildPipeline.h"
+#include "ShaderLab/DevKit/RuntimeExporter.h"
 #include "ShaderLab/Core/Serializer.h"
 #include <nlohmann/json.hpp>
 
@@ -128,23 +128,22 @@ fs::path GetUiSettingsPath(const std::string& appRoot) {
 }
 
 SizeTargetPreset ParseSizePresetFromString(const std::string& value) {
-    if (value == "1k") return SizeTargetPreset::K1;
-    if (value == "2k") return SizeTargetPreset::K2;
-    if (value == "4k") return SizeTargetPreset::K4;
-    if (value == "16k") return SizeTargetPreset::K16;
-    if (value == "32k") return SizeTargetPreset::K32;
+    if (value == "1k" || value == "2k" || value == "4k" || value == "16k" || value == "32k") return SizeTargetPreset::K64;
     if (value == "64k") return SizeTargetPreset::K64;
+    if (value == "128k") return SizeTargetPreset::K128;
+    if (value == "256k") return SizeTargetPreset::K256;
+    if (value == "512k") return SizeTargetPreset::K512;
+    if (value == "1024k" || value == "1m") return SizeTargetPreset::K1024;
     return SizeTargetPreset::None;
 }
 
 std::string SizePresetToString(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return "1k";
-        case SizeTargetPreset::K2: return "2k";
-        case SizeTargetPreset::K4: return "4k";
-        case SizeTargetPreset::K16: return "16k";
-        case SizeTargetPreset::K32: return "32k";
         case SizeTargetPreset::K64: return "64k";
+        case SizeTargetPreset::K128: return "128k";
+        case SizeTargetPreset::K256: return "256k";
+        case SizeTargetPreset::K512: return "512k";
+        case SizeTargetPreset::K1024: return "1024k";
         default: return "none";
     }
 }
@@ -163,6 +162,242 @@ std::string BuildTargetKindToString(BuildTargetKind kind) {
         case BuildTargetKind::MicroDemo: return "micro";
         default: return "selfcontained";
     }
+}
+
+ImVec4 JsonToColor(const json& value, const ImVec4& fallback) {
+    if (!value.is_array() || value.size() < 4) {
+        return fallback;
+    }
+    ImVec4 color = fallback;
+    for (size_t i = 0; i < 4; ++i) {
+        if (value[i].is_number()) {
+            (&color.x)[i] = value[i].get<float>();
+        }
+    }
+    return color;
+}
+
+json ColorToJson(const ImVec4& color) {
+    return json::array({ color.x, color.y, color.z, color.w });
+}
+
+UIThemeColors DefaultUiThemeColors() {
+    return UIThemeColors{};
+}
+
+std::vector<NamedUITheme> BuiltInThemes() {
+    std::vector<NamedUITheme> themes;
+
+    {
+        NamedUITheme t;
+        t.name = "ShaderPunk";
+        t.colors = DefaultUiThemeColors();
+        t.colors.PanelOpacity = 0.90f;
+        t.colors.PanelHeadingOpacity = 0.95f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "SandTracker";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.46f, 0.36f, 0.23f, 0.75f);
+        t.colors.ControlBackground = ImVec4(0.22f, 0.18f, 0.13f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(0.96f, 0.90f, 0.76f, 1.0f);
+        t.colors.IconColor = ImVec4(0.92f, 0.75f, 0.43f, 1.0f);
+        t.colors.ButtonIconColor = ImVec4(0.97f, 0.84f, 0.51f, 1.0f);
+        t.colors.ButtonLabelColor = ImVec4(0.94f, 0.88f, 0.72f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.28f, 0.22f, 0.15f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.15f, 0.12f, 0.09f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.11f, 0.09f, 0.07f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.24f, 0.18f, 0.12f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(0.93f, 0.77f, 0.45f, 1.0f);
+        t.colors.PanelOpacity = 0.86f;
+        t.colors.PanelHeadingOpacity = 0.94f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "16BitWarrior";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.22f, 0.77f, 0.42f, 0.75f);
+        t.colors.ControlBackground = ImVec4(0.07f, 0.14f, 0.10f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(0.74f, 1.0f, 0.70f, 1.0f);
+        t.colors.IconColor = ImVec4(0.37f, 1.0f, 0.58f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.12f, 0.24f, 0.16f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.04f, 0.11f, 0.07f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.03f, 0.08f, 0.05f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.08f, 0.20f, 0.12f, 1.0f);
+        t.colors.ActiveTabBackground = ImVec4(0.14f, 0.40f, 0.23f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(0.44f, 1.0f, 0.65f, 1.0f);
+        t.colors.PanelOpacity = 0.84f;
+        t.colors.PanelHeadingOpacity = 0.92f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "CodeNinja";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.24f, 0.25f, 0.27f, 0.75f);
+        t.colors.ControlBackground = ImVec4(0.09f, 0.10f, 0.11f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(0.87f, 0.89f, 0.92f, 1.0f);
+        t.colors.IconColor = ImVec4(0.61f, 0.67f, 0.74f, 1.0f);
+        t.colors.ButtonIconColor = ImVec4(0.86f, 0.93f, 1.0f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.14f, 0.15f, 0.17f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.07f, 0.08f, 0.10f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.05f, 0.06f, 0.08f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.11f, 0.12f, 0.15f, 1.0f);
+        t.colors.ActivePanelTitleColor = ImVec4(0.23f, 0.25f, 0.31f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(0.84f, 0.90f, 0.98f, 1.0f);
+        t.colors.PanelOpacity = 0.88f;
+        t.colors.PanelHeadingOpacity = 0.95f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "PinkHack";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.72f, 0.18f, 0.50f, 0.80f);
+        t.colors.ControlBackground = ImVec4(0.20f, 0.07f, 0.16f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(1.0f, 0.86f, 0.95f, 1.0f);
+        t.colors.IconColor = ImVec4(1.0f, 0.45f, 0.86f, 1.0f);
+        t.colors.ButtonIconColor = ImVec4(1.0f, 0.66f, 0.92f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.30f, 0.10f, 0.24f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.12f, 0.04f, 0.10f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.09f, 0.03f, 0.08f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.24f, 0.08f, 0.20f, 1.0f);
+        t.colors.ActiveTabBackground = ImVec4(0.52f, 0.16f, 0.42f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(1.0f, 0.58f, 0.89f, 1.0f);
+        t.colors.PanelOpacity = 0.84f;
+        t.colors.PanelHeadingOpacity = 0.93f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "Galaxy";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.32f, 0.36f, 0.69f, 0.72f);
+        t.colors.ControlBackground = ImVec4(0.08f, 0.09f, 0.21f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(0.86f, 0.90f, 1.0f, 1.0f);
+        t.colors.IconColor = ImVec4(0.51f, 0.72f, 1.0f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.12f, 0.13f, 0.29f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.05f, 0.06f, 0.14f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.03f, 0.04f, 0.10f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.10f, 0.12f, 0.30f, 1.0f);
+        t.colors.ActiveTabBackground = ImVec4(0.20f, 0.30f, 0.62f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(0.69f, 0.82f, 1.0f, 1.0f);
+        t.colors.BackgroundImage = "editor_assets/themes/galaxy_tile.ppm";
+        t.colors.PanelOpacity = 0.80f;
+        t.colors.PanelHeadingOpacity = 0.92f;
+        themes.push_back(t);
+    }
+
+    {
+        NamedUITheme t;
+        t.name = "Noizr";
+        t.colors = DefaultUiThemeColors();
+        t.colors.LinesAccentColorDim = ImVec4(0.25f, 0.26f, 0.27f, 0.65f);
+        t.colors.ControlBackground = ImVec4(0.10f, 0.10f, 0.10f, 1.0f);
+        t.colors.ControlFontColor = ImVec4(0.90f, 0.90f, 0.90f, 1.0f);
+        t.colors.IconColor = ImVec4(0.72f, 0.76f, 0.80f, 1.0f);
+        t.colors.ButtonBackgroundColor = ImVec4(0.14f, 0.14f, 0.14f, 1.0f);
+        t.colors.PanelBackground = ImVec4(0.07f, 0.07f, 0.07f, 0.95f);
+        t.colors.WindowBackground = ImVec4(0.04f, 0.04f, 0.04f, 1.0f);
+        t.colors.PanelTitleBackground = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
+        t.colors.LogoFontColor = ImVec4(0.88f, 0.88f, 0.88f, 1.0f);
+        t.colors.BackgroundImage = "editor_assets/themes/noizr_tile.ppm";
+        t.colors.PanelOpacity = 0.78f;
+        t.colors.PanelHeadingOpacity = 0.90f;
+        themes.push_back(t);
+    }
+
+    return themes;
+}
+
+void ApplyThemeColorFromJson(UIThemeColors& colors, const json& src) {
+    colors.LinesAccentColorDim = JsonToColor(src.value("LinesAccentColorDim", json::array()), colors.LinesAccentColorDim);
+    colors.ControlBackground = JsonToColor(src.value("ControlBackground", json::array()), colors.ControlBackground);
+    colors.ControlFontColor = JsonToColor(src.value("ControlFontColor", json::array()), colors.ControlFontColor);
+    colors.IconColor = JsonToColor(src.value("IconColor", json::array()), colors.IconColor);
+    colors.ButtonIconColor = JsonToColor(src.value("ButtonIconColor", json::array()), colors.ButtonIconColor);
+    colors.ButtonLabelColor = JsonToColor(src.value("ButtonLabelColor", json::array()), colors.ButtonLabelColor);
+    colors.ButtonBackgroundColor = JsonToColor(src.value("ButtonBackgroundColor", json::array()), colors.ButtonBackgroundColor);
+    colors.PanelBackground = JsonToColor(src.value("PanelBackground", json::array()), colors.PanelBackground);
+    colors.WindowBackground = JsonToColor(src.value("WindowBackground", json::array()), colors.WindowBackground);
+    colors.TrackerHeadingBackground = JsonToColor(src.value("TrackerHeadingBackground", json::array()), colors.TrackerHeadingBackground);
+    colors.TrackerHeadingFontColor = JsonToColor(src.value("TrackerHeadingFontColor", json::array()), colors.TrackerHeadingFontColor);
+    colors.TrackerAccentBeatBackground = JsonToColor(src.value("TrackerAccentBeatBackground", json::array()), colors.TrackerAccentBeatBackground);
+    colors.TrackerAccentBeatFontColor = JsonToColor(src.value("TrackerAccentBeatFontColor", json::array()), colors.TrackerAccentBeatFontColor);
+    colors.TrackerBeatBackground = JsonToColor(src.value("TrackerBeatBackground", json::array()), colors.TrackerBeatBackground);
+    colors.TrackerBeatFontColor = JsonToColor(src.value("TrackerBeatFontColor", json::array()), colors.TrackerBeatFontColor);
+    colors.LabelFontColor = JsonToColor(src.value("LabelFontColor", json::array()), colors.LabelFontColor);
+    colors.PanelTitleFontColor = JsonToColor(src.value("PanelTitleFontColor", json::array()), colors.PanelTitleFontColor);
+    colors.PanelTitleBackground = JsonToColor(src.value("PanelTitleBackground", json::array()), colors.PanelTitleBackground);
+    colors.ActiveTabFontColor = JsonToColor(src.value("ActiveTabFontColor", json::array()), colors.ActiveTabFontColor);
+    colors.ActiveTabBackground = JsonToColor(src.value("ActiveTabBackground", json::array()), colors.ActiveTabBackground);
+    colors.PassiveTabFontColor = JsonToColor(src.value("PassiveTabFontColor", json::array()), colors.PassiveTabFontColor);
+    colors.PassiveTabBackground = JsonToColor(src.value("PassiveTabBackground", json::array()), colors.PassiveTabBackground);
+    colors.ActivePanelTitleColor = JsonToColor(src.value("ActivePanelTitleColor", json::array()), colors.ActivePanelTitleColor);
+    colors.ActivePanelBackground = JsonToColor(src.value("ActivePanelBackground", json::array()), colors.ActivePanelBackground);
+    colors.PassivePanelTitleColor = JsonToColor(src.value("PassivePanelTitleColor", json::array()), colors.PassivePanelTitleColor);
+    colors.PassivePanelBackground = JsonToColor(src.value("PassivePanelBackground", json::array()), colors.PassivePanelBackground);
+    colors.LogoFontColor = JsonToColor(src.value("LogoFontColor", json::array()), colors.LogoFontColor);
+    colors.ConsoleFontColor = JsonToColor(src.value("ConsoleFontColor", json::array()), colors.ConsoleFontColor);
+    colors.ConsoleBackground = JsonToColor(src.value("ConsoleBackground", json::array()), colors.ConsoleBackground);
+    colors.StatusFontColor = JsonToColor(src.value("StatusFontColor", json::array()), colors.StatusFontColor);
+    if (src.contains("ControlOpacity") && src["ControlOpacity"].is_number()) {
+        colors.ControlOpacity = (std::clamp)(src["ControlOpacity"].get<float>(), 0.0f, 1.0f);
+    }
+    if (src.contains("PanelOpacity") && src["PanelOpacity"].is_number()) {
+        colors.PanelOpacity = (std::clamp)(src["PanelOpacity"].get<float>(), 0.0f, 1.0f);
+    }
+    if (src.contains("PanelHeadingOpacity") && src["PanelHeadingOpacity"].is_number()) {
+        colors.PanelHeadingOpacity = (std::clamp)(src["PanelHeadingOpacity"].get<float>(), 0.0f, 1.0f);
+    }
+    colors.BackgroundImage = src.value("BackgroundImage", colors.BackgroundImage);
+}
+
+json ThemeColorsToJson(const UIThemeColors& colors) {
+    return {
+        {"LinesAccentColorDim", ColorToJson(colors.LinesAccentColorDim)},
+        {"ControlBackground", ColorToJson(colors.ControlBackground)},
+        {"ControlFontColor", ColorToJson(colors.ControlFontColor)},
+        {"IconColor", ColorToJson(colors.IconColor)},
+        {"ButtonIconColor", ColorToJson(colors.ButtonIconColor)},
+        {"ButtonLabelColor", ColorToJson(colors.ButtonLabelColor)},
+        {"ButtonBackgroundColor", ColorToJson(colors.ButtonBackgroundColor)},
+        {"PanelBackground", ColorToJson(colors.PanelBackground)},
+        {"WindowBackground", ColorToJson(colors.WindowBackground)},
+        {"TrackerHeadingBackground", ColorToJson(colors.TrackerHeadingBackground)},
+        {"TrackerHeadingFontColor", ColorToJson(colors.TrackerHeadingFontColor)},
+        {"TrackerAccentBeatBackground", ColorToJson(colors.TrackerAccentBeatBackground)},
+        {"TrackerAccentBeatFontColor", ColorToJson(colors.TrackerAccentBeatFontColor)},
+        {"TrackerBeatBackground", ColorToJson(colors.TrackerBeatBackground)},
+        {"TrackerBeatFontColor", ColorToJson(colors.TrackerBeatFontColor)},
+        {"LabelFontColor", ColorToJson(colors.LabelFontColor)},
+        {"PanelTitleFontColor", ColorToJson(colors.PanelTitleFontColor)},
+        {"PanelTitleBackground", ColorToJson(colors.PanelTitleBackground)},
+        {"ActiveTabFontColor", ColorToJson(colors.ActiveTabFontColor)},
+        {"ActiveTabBackground", ColorToJson(colors.ActiveTabBackground)},
+        {"PassiveTabFontColor", ColorToJson(colors.PassiveTabFontColor)},
+        {"PassiveTabBackground", ColorToJson(colors.PassiveTabBackground)},
+        {"ActivePanelTitleColor", ColorToJson(colors.ActivePanelTitleColor)},
+        {"ActivePanelBackground", ColorToJson(colors.ActivePanelBackground)},
+        {"PassivePanelTitleColor", ColorToJson(colors.PassivePanelTitleColor)},
+        {"PassivePanelBackground", ColorToJson(colors.PassivePanelBackground)},
+        {"LogoFontColor", ColorToJson(colors.LogoFontColor)},
+        {"ConsoleFontColor", ColorToJson(colors.ConsoleFontColor)},
+        {"ConsoleBackground", ColorToJson(colors.ConsoleBackground)},
+        {"StatusFontColor", ColorToJson(colors.StatusFontColor)},
+        {"ControlOpacity", colors.ControlOpacity},
+        {"PanelOpacity", colors.PanelOpacity},
+        {"PanelHeadingOpacity", colors.PanelHeadingOpacity},
+        {"BackgroundImage", colors.BackgroundImage}
+    };
 }
 
 void LoadUiBuildSettings(
@@ -320,7 +555,7 @@ bool IconButton(const char* id, uint32_t iconCodepoint, const char* tooltip, con
         textY = min.y + (buttonSize.y - textSize.y) * 0.5f;
     }
 
-    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(UIConfig::ColorCheckMark), icon.c_str());
+    drawList->AddText(font, fontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(ImGuiCol_CheckMark), icon.c_str());
 
     if (ImGui::IsItemHovered() && tooltip && *tooltip) {
         ImGui::SetTooltip("%s", tooltip);
@@ -334,24 +569,22 @@ const char* BuildModeLabel(BuildMode mode) {
 
 const char* SizePresetLabel(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return "1K";
-        case SizeTargetPreset::K2: return "2K";
-        case SizeTargetPreset::K4: return "4K";
-        case SizeTargetPreset::K16: return "16K";
-        case SizeTargetPreset::K32: return "32K";
         case SizeTargetPreset::K64: return "64K";
+        case SizeTargetPreset::K128: return "128K";
+        case SizeTargetPreset::K256: return "256K";
+        case SizeTargetPreset::K512: return "512K";
+        case SizeTargetPreset::K1024: return "1024K";
         default: return "None";
     }
 }
 
 uint64_t SizePresetBytes(SizeTargetPreset preset) {
     switch (preset) {
-        case SizeTargetPreset::K1: return 1024ull;
-        case SizeTargetPreset::K2: return 2048ull;
-        case SizeTargetPreset::K4: return 4096ull;
-        case SizeTargetPreset::K16: return 16ull * 1024ull;
-        case SizeTargetPreset::K32: return 32ull * 1024ull;
         case SizeTargetPreset::K64: return 64ull * 1024ull;
+        case SizeTargetPreset::K128: return 128ull * 1024ull;
+        case SizeTargetPreset::K256: return 256ull * 1024ull;
+        case SizeTargetPreset::K512: return 512ull * 1024ull;
+        case SizeTargetPreset::K1024: return 1024ull * 1024ull;
         default: return 0ull;
     }
 }
@@ -383,6 +616,8 @@ UISystem::UISystem() {
         m_buildSettingsMicroDeveloperBuild,
         m_buildSettingsCleanSolutionRootPath,
         m_buildSettingsCrinklerPath);
+
+    LoadUiThemeSettings();
 
     CreateDefaultScene();
     CreateDefaultTrack();
@@ -467,6 +702,7 @@ UISystem::UISystem() {
     palette[(int)TextEditor::PaletteIndex::Preprocessor] = 0xff9b9b9b;
     m_textEditor.SetPalette(palette);
     m_snippetTextEditor.SetPalette(palette);
+    ApplyCodeEditorControlOpacity();
 
     m_textEditor.SetShowWhitespaces(false);
     m_snippetTextEditor.SetShowWhitespaces(false);
@@ -670,6 +906,8 @@ bool UISystem::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
 }
 
 void UISystem::Shutdown() {
+    SaveUiThemeSettings();
+
     SaveUiBuildSettings(
         m_appRoot,
         m_buildSettingsTargetKind,
@@ -692,6 +930,11 @@ void UISystem::Shutdown() {
     m_previewTexture.Reset();
     m_titlebarIconTexture.Reset();
     m_titlebarIconSrvGpuHandle = {};
+    m_themeBackgroundTexture.Reset();
+    m_themeBackgroundSrvGpuHandle = {};
+    m_themeBackgroundWidth = 0;
+    m_themeBackgroundHeight = 0;
+    m_loadedThemeBackgroundPath.clear();
     m_previewRtvHeap.Reset();
     m_srvHeap.Reset();
     m_initialized = false;
@@ -1024,80 +1267,448 @@ void UISystem::SetupImGuiStyle() {
     style.FramePadding = ImVec2(5, 3);
     style.ItemSpacing = ImVec2(6, 4);
 
-    // Demoscene / Cyberpunk Palette - Enhanced futuristic cyan/teal theme
-    // Deep blacks, dark grays, and electric cyan accents
+    ApplyUiTheme();
+}
+
+void UISystem::ApplyUiTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    const UIThemeColors& theme = m_uiThemeColors;
+    const float controlOpacity = (std::clamp)(theme.ControlOpacity, 0.0f, 1.0f);
+    const float panelOpacity = (std::clamp)(theme.PanelOpacity, 0.0f, 1.0f);
+    const float headingOpacity = (std::clamp)(theme.PanelHeadingOpacity, 0.0f, 1.0f);
+    auto WithAlpha = [](ImVec4 color, float alpha) {
+        color.w = alpha;
+        return color;
+    };
+
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text] = UIConfig::ColorText;
-    colors[ImGuiCol_TextDisabled] = UIConfig::ColorTextDisabled;
-    colors[ImGuiCol_WindowBg] = UIConfig::ColorWindowBg;
-    colors[ImGuiCol_ChildBg] = UIConfig::ColorChildBg;
-    colors[ImGuiCol_PopupBg] = UIConfig::ColorPopupBg;
-    colors[ImGuiCol_Border] = UIConfig::ColorBorder;
-    colors[ImGuiCol_BorderShadow] = UIConfig::ColorBorderShadow;
+    colors[ImGuiCol_Text] = theme.LabelFontColor;
+    colors[ImGuiCol_TextDisabled] = theme.StatusFontColor;
+    colors[ImGuiCol_TextLink] = theme.ButtonLabelColor;
+    colors[ImGuiCol_WindowBg] = WithAlpha(theme.WindowBackground, panelOpacity);
+    colors[ImGuiCol_ChildBg] = WithAlpha(theme.PanelBackground, panelOpacity);
+    colors[ImGuiCol_PopupBg] = WithAlpha(theme.ControlBackground, controlOpacity);
+    colors[ImGuiCol_Border] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 
-    // Input Fields - darker with cyan tint
-    colors[ImGuiCol_FrameBg] = UIConfig::ColorFrameBg;
-    colors[ImGuiCol_FrameBgHovered] = UIConfig::ColorFrameBgHovered;
-    colors[ImGuiCol_FrameBgActive] = UIConfig::ColorFrameBgActive;
+    colors[ImGuiCol_FrameBg] = WithAlpha(theme.ControlBackground, controlOpacity);
+    colors[ImGuiCol_FrameBgHovered] = WithAlpha(theme.ActivePanelBackground, controlOpacity);
+    colors[ImGuiCol_FrameBgActive] = WithAlpha(theme.ActivePanelTitleColor, controlOpacity);
 
-    // Title Bars - darker with bright cyan accent
-    colors[ImGuiCol_TitleBg] = UIConfig::ColorTitleBg;
-    colors[ImGuiCol_TitleBgActive] = UIConfig::ColorTitleBgActive;
-    colors[ImGuiCol_TitleBgCollapsed] = UIConfig::ColorTitleBgCollapsed;
+    colors[ImGuiCol_TitleBg] = WithAlpha(theme.PassivePanelTitleColor, headingOpacity);
+    colors[ImGuiCol_TitleBgActive] = WithAlpha(theme.ActivePanelTitleColor, headingOpacity);
+    colors[ImGuiCol_TitleBgCollapsed] = WithAlpha(theme.PassivePanelTitleColor, headingOpacity * 0.9f);
 
-    // Menus - very dark
-    colors[ImGuiCol_MenuBarBg] = UIConfig::ColorMenuBarBg;
+    colors[ImGuiCol_MenuBarBg] = WithAlpha(theme.PanelTitleBackground, headingOpacity);
 
-    // Scrollbar
-    colors[ImGuiCol_ScrollbarBg] = UIConfig::ColorScrollbarBg;
-    colors[ImGuiCol_ScrollbarGrab] = UIConfig::ColorScrollbarGrab;
-    colors[ImGuiCol_ScrollbarGrabHovered] = UIConfig::ColorScrollbarGrabHovered;
-    colors[ImGuiCol_ScrollbarGrabActive] = UIConfig::ColorScrollbarGrabActive;
+    colors[ImGuiCol_ScrollbarBg] = theme.PanelBackground;
+    colors[ImGuiCol_ScrollbarGrab] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_ScrollbarGrabHovered] = theme.ActivePanelTitleColor;
+    colors[ImGuiCol_ScrollbarGrabActive] = theme.ActiveTabBackground;
 
-    // Sliders & Checks - bright cyan
-    colors[ImGuiCol_CheckMark] = UIConfig::ColorCheckMark;
-    colors[ImGuiCol_SliderGrab] = UIConfig::ColorSliderGrab;
-    colors[ImGuiCol_SliderGrabActive] = UIConfig::ColorSliderGrabActive;
+    colors[ImGuiCol_CheckMark] = theme.ButtonIconColor;
+    colors[ImGuiCol_SliderGrab] = theme.IconColor;
+    colors[ImGuiCol_SliderGrabActive] = theme.ButtonIconColor;
 
-    // Buttons - dark with cyan accents
-    colors[ImGuiCol_Button] = UIConfig::ColorButton;
-    colors[ImGuiCol_ButtonHovered] = UIConfig::ColorButtonHovered;
-    colors[ImGuiCol_ButtonActive] = UIConfig::ColorButtonActive;
+    colors[ImGuiCol_Button] = WithAlpha(theme.ButtonBackgroundColor, panelOpacity);
+    colors[ImGuiCol_ButtonHovered] = WithAlpha(theme.ActivePanelBackground, panelOpacity);
+    colors[ImGuiCol_ButtonActive] = WithAlpha(theme.ActivePanelTitleColor, headingOpacity);
 
-    // Headers (Collapsing Headers, Tree Nodes)
-    colors[ImGuiCol_Header] = UIConfig::ColorHeader;
-    colors[ImGuiCol_HeaderHovered] = UIConfig::ColorHeaderHovered;
-    colors[ImGuiCol_HeaderActive] = UIConfig::ColorHeaderActive;
+    colors[ImGuiCol_Header] = WithAlpha(theme.PanelTitleBackground, headingOpacity);
+    colors[ImGuiCol_HeaderHovered] = WithAlpha(theme.ActivePanelBackground, panelOpacity);
+    colors[ImGuiCol_HeaderActive] = WithAlpha(theme.ActivePanelTitleColor, headingOpacity);
 
-    // Separators - cyan
-    colors[ImGuiCol_Separator] = UIConfig::ColorSeparator;
-    colors[ImGuiCol_SeparatorHovered] = UIConfig::ColorSeparatorHovered;
-    colors[ImGuiCol_SeparatorActive] = UIConfig::ColorSeparatorActive;
+    colors[ImGuiCol_Separator] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_SeparatorHovered] = theme.ActivePanelTitleColor;
+    colors[ImGuiCol_SeparatorActive] = theme.ActiveTabBackground;
 
-    // Resize Grip - cyan
-    colors[ImGuiCol_ResizeGrip] = UIConfig::ColorResizeGrip;
-    colors[ImGuiCol_ResizeGripHovered] = UIConfig::ColorResizeGripHovered;
-    colors[ImGuiCol_ResizeGripActive] = UIConfig::ColorResizeGripActive;
+    colors[ImGuiCol_ResizeGrip] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_ResizeGripHovered] = theme.ActivePanelTitleColor;
+    colors[ImGuiCol_ResizeGripActive] = theme.ActiveTabBackground;
 
-    // Tabs - dark with cyan active state
-    colors[ImGuiCol_Tab] = UIConfig::ColorTab;
-    colors[ImGuiCol_TabHovered] = UIConfig::ColorTabHovered;
-    colors[ImGuiCol_TabActive] = UIConfig::ColorTabActive;
-    colors[ImGuiCol_TabUnfocused] = UIConfig::ColorTabUnfocused;
-    colors[ImGuiCol_TabUnfocusedActive] = UIConfig::ColorTabUnfocusedActive;
+    colors[ImGuiCol_Tab] = WithAlpha(theme.PassiveTabBackground, headingOpacity);
+    colors[ImGuiCol_TabHovered] = WithAlpha(theme.ActivePanelBackground, headingOpacity);
+    colors[ImGuiCol_TabActive] = WithAlpha(theme.ActiveTabBackground, headingOpacity);
+    colors[ImGuiCol_TabUnfocused] = WithAlpha(theme.PassiveTabBackground, headingOpacity);
+    colors[ImGuiCol_TabUnfocusedActive] = WithAlpha(theme.ActiveTabBackground, headingOpacity);
 
-    // Plots - cyan theme
-    colors[ImGuiCol_PlotLines] = UIConfig::ColorPlotLines;
-    colors[ImGuiCol_PlotLinesHovered] = UIConfig::ColorPlotLinesHovered;
-    colors[ImGuiCol_PlotHistogram] = UIConfig::ColorPlotHistogram;
-    colors[ImGuiCol_PlotHistogramHovered] = UIConfig::ColorPlotHistogramHovered;
+    colors[ImGuiCol_TableHeaderBg] = WithAlpha(theme.TrackerHeadingBackground, headingOpacity);
+    colors[ImGuiCol_TableBorderStrong] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_TableBorderLight] = theme.LinesAccentColorDim;
+    colors[ImGuiCol_TableRowBg] = WithAlpha(theme.TrackerBeatBackground, panelOpacity);
+    colors[ImGuiCol_TableRowBgAlt] = WithAlpha(theme.PanelBackground, panelOpacity);
 
-    colors[ImGuiCol_TextSelectedBg] = UIConfig::ColorTextSelectedBg;
-    colors[ImGuiCol_DragDropTarget] = UIConfig::ColorDragDropTarget;
-    colors[ImGuiCol_NavHighlight] = UIConfig::ColorNavHighlight;
-    colors[ImGuiCol_NavWindowingHighlight] = UIConfig::ColorNavWindowingHighlight;
-    colors[ImGuiCol_NavWindowingDimBg] = UIConfig::ColorNavWindowingDimBg;
-    colors[ImGuiCol_ModalWindowDimBg] = UIConfig::ColorModalWindowDimBg;
+    colors[ImGuiCol_TextSelectedBg] = theme.ActiveTabBackground;
+    colors[ImGuiCol_DragDropTarget] = theme.IconColor;
+    colors[ImGuiCol_NavHighlight] = theme.ActivePanelTitleColor;
+    colors[ImGuiCol_NavWindowingHighlight] = theme.ControlFontColor;
+    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+
+    colors[ImGuiCol_PlotLines] = theme.IconColor;
+    colors[ImGuiCol_PlotLinesHovered] = theme.ButtonIconColor;
+    colors[ImGuiCol_PlotHistogram] = theme.IconColor;
+    colors[ImGuiCol_PlotHistogramHovered] = theme.ButtonIconColor;
+
+    ApplyCodeEditorControlOpacity();
+    EnsureThemeBackgroundTexture();
+}
+
+void UISystem::ApplyCodeEditorControlOpacity() {
+    const float controlOpacity = (std::clamp)(m_uiThemeColors.ControlOpacity, 0.0f, 1.0f);
+    auto ApplyOpacityToEditorBackground = [controlOpacity](TextEditor& editor) {
+        TextEditor::Palette palette = editor.GetPalette();
+        const int bgIndex = static_cast<int>(TextEditor::PaletteIndex::Background);
+        ImVec4 bg = ImGui::ColorConvertU32ToFloat4(palette[bgIndex]);
+        bg.w = controlOpacity;
+        palette[bgIndex] = ImGui::ColorConvertFloat4ToU32(bg);
+        editor.SetPalette(palette);
+    };
+
+    ApplyOpacityToEditorBackground(m_textEditor);
+    ApplyOpacityToEditorBackground(m_snippetTextEditor);
+}
+
+bool UISystem::AddOrReplaceCustomTheme(const std::string& name, const UIThemeColors& colors) {
+    if (name.empty()) {
+        return false;
+    }
+
+    auto it = std::find_if(m_customThemes.begin(), m_customThemes.end(), [&](const NamedUITheme& item) {
+        return item.name == name;
+    });
+
+    if (it != m_customThemes.end()) {
+        it->colors = colors;
+        return true;
+    }
+
+    m_customThemes.push_back({ name, colors });
+    return true;
+}
+
+void UISystem::LoadUiThemeSettings() {
+    m_uiThemeColors = DefaultUiThemeColors();
+    m_customThemes.clear();
+    for (const auto& theme : BuiltInThemes()) {
+        AddOrReplaceCustomTheme(theme.name, theme.colors);
+    }
+    m_activeThemeName = "ShaderPunk";
+    std::snprintf(m_themeNameBuffer, sizeof(m_themeNameBuffer), "%s", "");
+
+    const fs::path settingsPath = GetUiSettingsPath(m_appRoot);
+    std::ifstream in(settingsPath, std::ios::binary);
+    if (!in.is_open()) {
+        return;
+    }
+
+    json root;
+    try {
+        in >> root;
+    } catch (...) {
+        return;
+    }
+
+    const json themeRoot = root.value("theme", json::object());
+    m_activeThemeName = themeRoot.value("active", std::string("ShaderPunk"));
+    ApplyThemeColorFromJson(m_uiThemeColors, themeRoot.value("activeColors", json::object()));
+
+    const json themes = themeRoot.value("themes", json::array());
+    if (themes.is_array()) {
+        for (const auto& item : themes) {
+            if (!item.is_object()) {
+                continue;
+            }
+            const std::string name = item.value("name", std::string());
+            if (name.empty()) {
+                continue;
+            }
+
+            UIThemeColors colors = DefaultUiThemeColors();
+            auto existing = std::find_if(m_customThemes.begin(), m_customThemes.end(), [&](const NamedUITheme& t) { return t.name == name; });
+            if (existing != m_customThemes.end()) {
+                colors = existing->colors;
+            }
+            ApplyThemeColorFromJson(colors, item.value("colors", json::object()));
+            AddOrReplaceCustomTheme(name, colors);
+        }
+    }
+
+    auto it = std::find_if(m_customThemes.begin(), m_customThemes.end(), [&](const NamedUITheme& item) {
+        return item.name == m_activeThemeName;
+    });
+    if (it != m_customThemes.end()) {
+        m_uiThemeColors = it->colors;
+    } else {
+        m_activeThemeName = "ShaderPunk";
+        auto fallback = std::find_if(m_customThemes.begin(), m_customThemes.end(), [&](const NamedUITheme& item) {
+            return item.name == m_activeThemeName;
+        });
+        if (fallback != m_customThemes.end()) {
+            m_uiThemeColors = fallback->colors;
+        }
+    }
+}
+
+void UISystem::SaveUiThemeSettings() const {
+    const fs::path settingsPath = GetUiSettingsPath(m_appRoot);
+    std::error_code ec;
+    fs::create_directories(settingsPath.parent_path(), ec);
+
+    json root;
+    std::ifstream in(settingsPath, std::ios::binary);
+    if (in.is_open()) {
+        try {
+            in >> root;
+        } catch (...) {
+            root = json::object();
+        }
+    }
+
+    json themes = json::array();
+    for (const auto& item : m_customThemes) {
+        themes.push_back({
+            {"name", item.name},
+            {"colors", ThemeColorsToJson(item.colors)}
+        });
+    }
+
+    root["theme"] = {
+        {"active", m_activeThemeName},
+        {"themes", themes},
+        {"activeColors", ThemeColorsToJson(m_uiThemeColors)}
+    };
+
+    std::ofstream out(settingsPath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+    out << root.dump(2);
+}
+
+void UISystem::EnsureThemeBackgroundTexture() {
+    std::string requestedPath = m_uiThemeColors.BackgroundImage;
+    if (requestedPath.empty()) {
+        m_themeBackgroundTexture.Reset();
+        m_themeBackgroundSrvGpuHandle = {};
+        m_themeBackgroundWidth = 0;
+        m_themeBackgroundHeight = 0;
+        m_loadedThemeBackgroundPath.clear();
+        return;
+    }
+
+    fs::path resolvedPath(requestedPath);
+    if (resolvedPath.is_relative()) {
+        resolvedPath = fs::path(m_appRoot) / resolvedPath;
+    }
+    resolvedPath = resolvedPath.lexically_normal();
+    requestedPath = resolvedPath.string();
+
+    if (requestedPath == m_loadedThemeBackgroundPath && m_themeBackgroundTexture && m_themeBackgroundSrvGpuHandle.ptr != 0) {
+        return;
+    }
+
+    m_themeBackgroundTexture.Reset();
+    m_themeBackgroundSrvGpuHandle = {};
+    m_themeBackgroundWidth = 0;
+    m_themeBackgroundHeight = 0;
+    m_loadedThemeBackgroundPath.clear();
+
+    if (!m_deviceRef || !m_srvHeap || !fs::exists(resolvedPath)) {
+        return;
+    }
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    unsigned char* data = stbi_load(requestedPath.c_str(), &width, &height, &channels, 4);
+    if (!data || width <= 0 || height <= 0) {
+        if (data) stbi_image_free(data);
+        return;
+    }
+
+    CreateTextureFromData(data, width, height, 4, m_themeBackgroundTexture);
+    stbi_image_free(data);
+    if (!m_themeBackgroundTexture) {
+        return;
+    }
+
+    constexpr UINT kThemeBackgroundSrvIndex = 126;
+    const UINT descriptorSize = m_deviceRef->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += static_cast<SIZE_T>(kThemeBackgroundSrvIndex) * descriptorSize;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    m_deviceRef->GetDevice()->CreateShaderResourceView(m_themeBackgroundTexture.Get(), &srvDesc, cpuHandle);
+
+    m_themeBackgroundSrvGpuHandle = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    m_themeBackgroundSrvGpuHandle.ptr += static_cast<SIZE_T>(kThemeBackgroundSrvIndex) * descriptorSize;
+    m_themeBackgroundWidth = width;
+    m_themeBackgroundHeight = height;
+    m_loadedThemeBackgroundPath = requestedPath;
+}
+
+void UISystem::DrawThemeBackgroundTiled() {
+    if (!m_themeBackgroundTexture || m_themeBackgroundSrvGpuHandle.ptr == 0 || m_themeBackgroundWidth <= 0 || m_themeBackgroundHeight <= 0) {
+        return;
+    }
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (!viewport) {
+        return;
+    }
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList(viewport);
+    const ImVec2 origin = viewport->Pos;
+    const ImVec2 maxPos = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
+    const float tileW = static_cast<float>(m_themeBackgroundWidth);
+    const float tileH = static_cast<float>(m_themeBackgroundHeight);
+
+    if (tileW < 1.0f || tileH < 1.0f) {
+        return;
+    }
+
+    for (float y = origin.y; y < maxPos.y; y += tileH) {
+        for (float x = origin.x; x < maxPos.x; x += tileW) {
+            const ImVec2 pMin(x, y);
+            const ImVec2 pMax((std::min)(x + tileW, maxPos.x), (std::min)(y + tileH, maxPos.y));
+
+            const float uMax = (pMax.x - pMin.x) / tileW;
+            const float vMax = (pMax.y - pMin.y) / tileH;
+            bg->AddImage((ImTextureID)m_themeBackgroundSrvGpuHandle.ptr, pMin, pMax, ImVec2(0.0f, 0.0f), ImVec2(uMax, vMax), IM_COL32(255, 255, 255, 255));
+        }
+    }
+}
+
+void UISystem::ShowThemeEditorPopup() {
+    if (m_showThemeEditor) {
+        ImGui::OpenPopup("Theme Editor");
+        m_showThemeEditor = false;
+    }
+
+    if (!ImGui::BeginPopupModal("Theme Editor", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    ImGui::TextUnformatted("Theme name");
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::InputText("##ThemeName", m_themeNameBuffer, sizeof(m_themeNameBuffer));
+
+    char backgroundPathBuffer[512];
+    std::snprintf(backgroundPathBuffer, sizeof(backgroundPathBuffer), "%s", m_uiThemeColors.BackgroundImage.c_str());
+    ImGui::SetNextItemWidth(240.0f);
+    if (ImGui::InputText("BackgroundImage", backgroundPathBuffer, sizeof(backgroundPathBuffer))) {
+        m_uiThemeColors.BackgroundImage = backgroundPathBuffer;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Browse...")) {
+        char filePath[512] = {};
+        if (!m_uiThemeColors.BackgroundImage.empty()) {
+            fs::path currentPath(m_uiThemeColors.BackgroundImage);
+            if (currentPath.is_relative()) {
+                currentPath = fs::path(m_appRoot) / currentPath;
+            }
+            const std::string currentPathString = currentPath.lexically_normal().string();
+            std::strncpy(filePath, currentPathString.c_str(), sizeof(filePath) - 1);
+        }
+        const std::string defaultThemeDir = (fs::path(m_appRoot) / "editor_assets" / "themes").lexically_normal().string();
+        char initialDir[MAX_PATH] = {};
+        std::strncpy(initialDir, defaultThemeDir.c_str(), sizeof(initialDir) - 1);
+        OPENFILENAMEA ofn = {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
+        ofn.lpstrFile = filePath;
+        ofn.nMaxFile = sizeof(filePath);
+        ofn.lpstrInitialDir = initialDir;
+        ofn.lpstrFilter = "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.ppm)\0*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.ppm\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+        if (GetOpenFileNameA(&ofn)) {
+            fs::path selected = fs::path(filePath).lexically_normal();
+            std::error_code ec;
+            fs::path relative = fs::relative(selected, fs::path(m_appRoot), ec);
+            const std::string relativeStr = relative.generic_string();
+            if (!ec && !relative.empty() && relativeStr.rfind("..", 0) != 0) {
+                m_uiThemeColors.BackgroundImage = relative.generic_string();
+            } else {
+                m_uiThemeColors.BackgroundImage = selected.string();
+            }
+        }
+    }
+    ImGui::TextDisabled("Relative paths resolve from app root (e.g. editor_assets/themes/tile.png)");
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::SliderFloat("ControlOpacity", &m_uiThemeColors.ControlOpacity, 0.15f, 1.0f, "%.2f");
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::SliderFloat("PanelOpacity", &m_uiThemeColors.PanelOpacity, 0.15f, 1.0f, "%.2f");
+    ImGui::SetNextItemWidth(240.0f);
+    ImGui::SliderFloat("PanelHeadingOpacity", &m_uiThemeColors.PanelHeadingOpacity, 0.15f, 1.0f, "%.2f");
+
+    ImGui::SeparatorText("Colors");
+
+    const ImGuiColorEditFlags pickerFlags = ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf;
+    ImGui::BeginChild("ThemeColorList", ImVec2(520.0f, 420.0f), true);
+    ImGui::ColorEdit4("LinesAccentColorDim", &m_uiThemeColors.LinesAccentColorDim.x, pickerFlags);
+    ImGui::ColorEdit4("ControlBackground", &m_uiThemeColors.ControlBackground.x, pickerFlags);
+    ImGui::ColorEdit4("ControlFontColor", &m_uiThemeColors.ControlFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("IconColor", &m_uiThemeColors.IconColor.x, pickerFlags);
+    ImGui::ColorEdit4("ButtonIconColor", &m_uiThemeColors.ButtonIconColor.x, pickerFlags);
+    ImGui::ColorEdit4("ButtonLabelColor", &m_uiThemeColors.ButtonLabelColor.x, pickerFlags);
+    ImGui::ColorEdit4("ButtonBackgroundColor", &m_uiThemeColors.ButtonBackgroundColor.x, pickerFlags);
+    ImGui::ColorEdit4("PanelBackground", &m_uiThemeColors.PanelBackground.x, pickerFlags);
+    ImGui::ColorEdit4("WindowBackground", &m_uiThemeColors.WindowBackground.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerHeadingBackground", &m_uiThemeColors.TrackerHeadingBackground.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerHeadingFontColor", &m_uiThemeColors.TrackerHeadingFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerAccentBeatBackground", &m_uiThemeColors.TrackerAccentBeatBackground.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerAccentBeatFontColor", &m_uiThemeColors.TrackerAccentBeatFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerBeatBackground", &m_uiThemeColors.TrackerBeatBackground.x, pickerFlags);
+    ImGui::ColorEdit4("TrackerBeatFontColor", &m_uiThemeColors.TrackerBeatFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("LabelFontColor", &m_uiThemeColors.LabelFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("PanelTitleFontColor", &m_uiThemeColors.PanelTitleFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("PanelTitleBackground", &m_uiThemeColors.PanelTitleBackground.x, pickerFlags);
+    ImGui::ColorEdit4("ActiveTabFontColor", &m_uiThemeColors.ActiveTabFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("ActiveTabBackground", &m_uiThemeColors.ActiveTabBackground.x, pickerFlags);
+    ImGui::ColorEdit4("PassiveTabFontColor", &m_uiThemeColors.PassiveTabFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("PassiveTabBackground", &m_uiThemeColors.PassiveTabBackground.x, pickerFlags);
+    ImGui::ColorEdit4("ActivePanelTitleColor", &m_uiThemeColors.ActivePanelTitleColor.x, pickerFlags);
+    ImGui::ColorEdit4("ActivePanelBackground", &m_uiThemeColors.ActivePanelBackground.x, pickerFlags);
+    ImGui::ColorEdit4("PassivePanelTitleColor", &m_uiThemeColors.PassivePanelTitleColor.x, pickerFlags);
+    ImGui::ColorEdit4("PassivePanelBackground", &m_uiThemeColors.PassivePanelBackground.x, pickerFlags);
+    ImGui::ColorEdit4("LogoFontColor", &m_uiThemeColors.LogoFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("ConsoleFontColor", &m_uiThemeColors.ConsoleFontColor.x, pickerFlags);
+    ImGui::ColorEdit4("ConsoleBackground", &m_uiThemeColors.ConsoleBackground.x, pickerFlags);
+    ImGui::ColorEdit4("StatusFontColor", &m_uiThemeColors.StatusFontColor.x, pickerFlags);
+    ImGui::EndChild();
+
+    ApplyUiTheme();
+
+    if (ImGui::Button("Save Theme", ImVec2(120.0f, 0.0f))) {
+        std::string themeName = m_themeNameBuffer;
+        if (!themeName.empty() && AddOrReplaceCustomTheme(themeName, m_uiThemeColors)) {
+            m_activeThemeName = themeName;
+            SaveUiThemeSettings();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset to Default", ImVec2(140.0f, 0.0f))) {
+        auto shaderPunk = std::find_if(m_customThemes.begin(), m_customThemes.end(), [&](const NamedUITheme& t) {
+            return t.name == "ShaderPunk";
+        });
+        m_uiThemeColors = (shaderPunk != m_customThemes.end()) ? shaderPunk->colors : DefaultUiThemeColors();
+        m_activeThemeName = "ShaderPunk";
+        ApplyUiTheme();
+        SaveUiThemeSettings();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(100.0f, 0.0f))) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 void UISystem::PushNumericFont() {
@@ -1129,19 +1740,6 @@ void UISystem::SetNextNumericFieldWidth(float requestedWidth) {
     const float minWidth = GetNumericFieldMinWidth();
     const float width = (requestedWidth > 0.0f) ? (std::max)(requestedWidth, minWidth) : minWidth;
     ImGui::SetNextItemWidth(width);
-}
-
-bool UISystem::IsPointInTitlebarButtons(POINT screenPt) const {
-    return screenPt.x >= m_titlebarButtonsMin.x && screenPt.x <= m_titlebarButtonsMax.x &&
-           screenPt.y >= m_titlebarButtonsMin.y && screenPt.y <= m_titlebarButtonsMax.y;
-}
-
-bool UISystem::IsPointInTitlebarDrag(POINT screenPt) const {
-    if (m_titlebarDragMin.x > m_titlebarDragMax.x || m_titlebarDragMin.y > m_titlebarDragMax.y) {
-        return false;
-    }
-    return screenPt.x >= m_titlebarDragMin.x && screenPt.x <= m_titlebarDragMax.x &&
-           screenPt.y >= m_titlebarDragMin.y && screenPt.y <= m_titlebarDragMax.y;
 }
 
 void UISystem::BeginFrame() {
@@ -1200,6 +1798,9 @@ void UISystem::BeginFrame() {
     }
 
     // Setup fullscreen dockspace
+    EnsureThemeBackgroundTexture();
+    DrawThemeBackgroundTiled();
+
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImVec2 titlebarPad(UIConfig::TitlebarPadX, UIConfig::TitlebarPadY);
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + titlebarPad.x, viewport->Pos.y + titlebarPad.y));
@@ -1213,11 +1814,13 @@ void UISystem::BeginFrame() {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::Begin("MainDockspace", nullptr, windowFlags);
     ImGui::PopStyleVar(2);
 
     // Show menu bar first
     ShowMainMenuBar();
+    ShowThemeEditorPopup();
 
     // Show mode tabs below menu bar
     UIMode pendingMode = m_currentMode;
@@ -1241,26 +1844,32 @@ void UISystem::BeginFrame() {
     if (ImGui::BeginTabBar("ModeTabBar", ImGuiTabBarFlags_None)) {
         const bool allowTabSwitch = !forceSelect;
         ImGuiTabItemFlags demoFlags = (forceSelect && requestedMode == UIMode::Demo) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        ImGui::PushStyleColor(ImGuiCol_Text, (m_currentMode == UIMode::Demo) ? m_uiThemeColors.ActiveTabFontColor : m_uiThemeColors.PassiveTabFontColor);
         if (ImGui::BeginTabItem("Demo", nullptr, demoFlags)) {
             if (allowTabSwitch) {
                 pendingMode = UIMode::Demo;
             }
             ImGui::EndTabItem();
         }
+        ImGui::PopStyleColor();
         ImGuiTabItemFlags sceneFlags = (forceSelect && requestedMode == UIMode::Scene) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        ImGui::PushStyleColor(ImGuiCol_Text, (m_currentMode == UIMode::Scene) ? m_uiThemeColors.ActiveTabFontColor : m_uiThemeColors.PassiveTabFontColor);
         if (ImGui::BeginTabItem("Scene", nullptr, sceneFlags)) {
             if (allowTabSwitch) {
                 pendingMode = UIMode::Scene;
             }
             ImGui::EndTabItem();
         }
+        ImGui::PopStyleColor();
         ImGuiTabItemFlags postFlags = (forceSelect && requestedMode == UIMode::PostFX) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        ImGui::PushStyleColor(ImGuiCol_Text, (m_currentMode == UIMode::PostFX) ? m_uiThemeColors.ActiveTabFontColor : m_uiThemeColors.PassiveTabFontColor);
         if (ImGui::BeginTabItem("Post FX", nullptr, postFlags)) {
             if (allowTabSwitch) {
                 pendingMode = UIMode::PostFX;
             }
             ImGui::EndTabItem();
         }
+        ImGui::PopStyleColor();
         ImGui::EndTabBar();
     }
 
@@ -1336,28 +1945,26 @@ void UISystem::BeginFrame() {
 }
 
 void UISystem::ShowMainMenuBar() {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIConfig::MenuFramePadX, UIConfig::MenuFramePadY));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(UIConfig::MenuItemSpacingX, UIConfig::MenuItemSpacingY));
     if (ImGui::BeginMenuBar()) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIConfig::MenuFramePadX, UIConfig::MenuFramePadY));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(UIConfig::MenuItemSpacingX, UIConfig::MenuItemSpacingY));
 
         const float startY = ImGui::GetCursorPosY();
+        const float frameHeight = ImGui::GetFrameHeight();
+        const float minHeight = 0.0f;
+        const float autoHeight = (std::max)(frameHeight + UIConfig::MenuTopPad + UIConfig::MenuBottomPad, minHeight);
+        const float targetHeight = UIConfig::MenuBarHeight > 0.0f
+            ? (std::max)(UIConfig::MenuBarHeight, minHeight)
+            : autoHeight;
         ImGui::SetCursorPosY(startY + UIConfig::MenuTopPad);
 
         ImGui::Dummy(ImVec2(UIConfig::MenuLeftPad, 0.0f));
         ImGui::SameLine(0.0f, 0.0f);
 
-        if (m_titlebarIconTexture && m_titlebarIconSrvGpuHandle.ptr != 0) {
-            const float iconSize = ImGui::GetFrameHeight();
-            ImGui::Image((ImTextureID)m_titlebarIconSrvGpuHandle.ptr, ImVec2(iconSize, iconSize));
-            ImGui::SameLine(0.0f, UIConfig::MenuItemSpacingX);
-        }
-
-        m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
-        m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
-
         if (m_fontMenuSmall) {
             ImGui::PushFont(m_fontMenuSmall);
         }
+        ImGui::PushStyleColor(ImGuiCol_Text, m_uiThemeColors.LabelFontColor);
 
         float menuMaxX = ImGui::GetCursorScreenPos().x;
         
@@ -1368,6 +1975,9 @@ void UISystem::ShowMainMenuBar() {
                 m_track = DemoTrack();
                 CreateDefaultTrack();
                 m_audioLibrary.clear();
+                m_demoTitle = "Untitled Demo";
+                m_demoAuthor.clear();
+                m_demoDescription.clear();
                 m_currentProjectPath.clear();
                 if (m_audioSystem) m_audioSystem->Stop();
             }
@@ -1422,6 +2032,27 @@ void UISystem::ShowMainMenuBar() {
             ImGui::EndMenu();
         }
         menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
+        if (ImGui::BeginMenu("Theme")) {
+            if (!m_customThemes.empty()) {
+                for (const auto& theme : m_customThemes) {
+                    const bool selected = (m_activeThemeName == theme.name);
+                    if (ImGui::MenuItem(theme.name.c_str(), nullptr, selected)) {
+                        m_uiThemeColors = theme.colors;
+                        m_activeThemeName = theme.name;
+                        ApplyUiTheme();
+                        SaveUiThemeSettings();
+                    }
+                }
+            }
+
+            ImGui::Separator();
+            if (ImGui::MenuItem("Edit Theme...")) {
+                std::snprintf(m_themeNameBuffer, sizeof(m_themeNameBuffer), "%s", m_activeThemeName.c_str());
+                m_showThemeEditor = true;
+            }
+            ImGui::EndMenu();
+        }
+        menuMaxX = (std::max)(menuMaxX, ImGui::GetItemRectMax().x);
         if (ImGui::BeginMenu("Device")) {
             auto adapters = Device::GetAvailableAdapters();
             int currentIdx = -1;
@@ -1470,7 +2101,7 @@ void UISystem::ShowMainMenuBar() {
         if (fpsFont) {
             ImGui::PushFont(fpsFont);
         }
-        ImGui::PushStyleColor(ImGuiCol_Text, UIConfig::ColorTextDisabled);
+        ImGui::PushStyleColor(ImGuiCol_Text, m_uiThemeColors.StatusFontColor);
         ImGui::Text("FPS %.1f", ImGui::GetIO().Framerate);
         ImGui::PopStyleColor();
         if (fpsFont) {
@@ -1479,101 +2110,146 @@ void UISystem::ShowMainMenuBar() {
 
         const float controlsEndX = fpsX + fpsSlotWidth;
 
-        float buttonSize = ImGui::GetFrameHeight();
-        float totalButtonsWidth = buttonSize * 2.0f + ImGui::GetStyle().ItemSpacing.x;
-        const float buttonStartScreenX = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - UIConfig::MenuRightPad - totalButtonsWidth;
-        ImGui::SetCursorPosX(buttonStartScreenX - ImGui::GetWindowPos().x);
-
-        const bool canUseWindow = m_hwnd != nullptr;
-        m_titlebarButtonsMin = ImVec2(FLT_MAX, FLT_MAX);
-        m_titlebarButtonsMax = ImVec2(-FLT_MAX, -FLT_MAX);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIConfig::ColorFrameBgHovered);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, UIConfig::ColorFrameBgActive);
-        if (IconButton("TitlebarMinimize", OpenFontIcons::kChevronDown, "Minimize", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
-            SendMessage(m_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
-        }
-        ImGui::PopStyleColor(2);
-        {
-            ImVec2 min = ImGui::GetItemRectMin();
-            ImVec2 max = ImGui::GetItemRectMax();
-            m_titlebarButtonsMin.x = (std::min)(m_titlebarButtonsMin.x, min.x);
-            m_titlebarButtonsMin.y = (std::min)(m_titlebarButtonsMin.y, min.y);
-            m_titlebarButtonsMax.x = (std::max)(m_titlebarButtonsMax.x, max.x);
-            m_titlebarButtonsMax.y = (std::max)(m_titlebarButtonsMax.y, max.y);
-        }
-        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UIConfig::ColorHeaderHovered);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, UIConfig::ColorHeaderActive);
-        if (IconButton("TitlebarClose", OpenFontIcons::kXCircle, "Close", ImVec2(buttonSize, buttonSize)) && canUseWindow) {
-            SendMessage(m_hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
-        }
-        ImGui::PopStyleColor(2);
-        {
-            ImVec2 min = ImGui::GetItemRectMin();
-            ImVec2 max = ImGui::GetItemRectMax();
-            m_titlebarButtonsMin.x = (std::min)(m_titlebarButtonsMin.x, min.x);
-            m_titlebarButtonsMin.y = (std::min)(m_titlebarButtonsMin.y, min.y);
-            m_titlebarButtonsMax.x = (std::max)(m_titlebarButtonsMax.x, max.x);
-            m_titlebarButtonsMax.y = (std::max)(m_titlebarButtonsMax.y, max.y);
-        }
         if (m_fontMenuSmall) {
             ImGui::PopFont();
         }
+        ImGui::PopStyleColor();
 
         const float endY = ImGui::GetCursorPosY();
-        float minHeight = 0.0f;
-        const float autoHeight = (std::max)(endY - startY + UIConfig::MenuBottomPad, minHeight);
-        const float targetHeight = UIConfig::MenuBarHeight > 0.0f
-            ? (std::max)(UIConfig::MenuBarHeight, minHeight)
-            : autoHeight;
         const float extra = targetHeight - (endY - startY);
         if (extra > 0.0f) {
             ImGui::Dummy(ImVec2(0.0f, extra));
         }
 
-        ImVec2 barMin = ImGui::GetWindowPos();
-        barMin.y += startY;
-        ImVec2 barMax = ImVec2(barMin.x + ImGui::GetWindowWidth(), barMin.y + targetHeight);
-        float dragMinX = (std::max)(menuMaxX, controlsEndX) + UIConfig::MenuItemSpacingX;
-        float dragMaxX = m_titlebarButtonsMin.x - UIConfig::MenuItemSpacingX;
-        if (dragMaxX > dragMinX) {
-            m_titlebarDragMin = ImVec2(dragMinX, barMin.y);
-            m_titlebarDragMax = ImVec2(dragMaxX, barMax.y);
-        } else {
-            m_titlebarDragMin = ImVec2(FLT_MAX, FLT_MAX);
-            m_titlebarDragMax = ImVec2(-FLT_MAX, -FLT_MAX);
-        }
+        (void)controlsEndX;
 
-        std::string demoTitle = "Untitled Demo";
-        if (!m_currentProjectPath.empty()) {
-            const std::string stem = fs::path(m_currentProjectPath).stem().string();
-            if (!stem.empty()) {
-                demoTitle = stem;
-            }
-        }
-
-        const float titleLeft = (std::max)(dragMinX + UIConfig::MenuItemSpacingX, controlsEndX + UIConfig::MenuItemSpacingX);
-        const float titleRight = dragMaxX - UIConfig::MenuItemSpacingX;
-        if (titleRight > titleLeft + 8.0f) {
-            if (m_fontMenuSmall) {
-                ImGui::PushFont(m_fontMenuSmall);
-            }
-            ImVec2 titleSize = ImGui::CalcTextSize(demoTitle.c_str());
-
-            float titleX = ((titleLeft + titleRight) - titleSize.x) * 0.5f;
-            titleX = (std::max)(titleLeft, (std::min)(titleX, titleRight - titleSize.x));
-            const float titleY = barMin.y + (targetHeight - titleSize.y) * 0.5f;
-            ImGui::GetWindowDrawList()->AddText(
-                ImVec2(std::floor(titleX), std::floor(titleY)),
-                ImGui::GetColorU32(UIConfig::ColorText),
-                demoTitle.c_str());
-            if (m_fontMenuSmall) {
-                ImGui::PopFont();
-            }
-        }
-
-        ImGui::PopStyleVar(2);
         ImGui::EndMenuBar();
+    }
+    ImGui::PopStyleVar(2);
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float stripHeight = UIConfig::TitlebarPadY;
+    if (viewport && stripHeight > 4.0f) {
+        ImDrawList* fg = ImGui::GetWindowDrawList();
+        const ImVec2 stripMin = viewport->Pos;
+        const ImVec2 stripMax = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + stripHeight);
+        fg->PushClipRect(stripMin, stripMax, false);
+        ImVec4 stripColor = m_uiThemeColors.PanelTitleBackground;
+        stripColor.w = (std::clamp)(m_uiThemeColors.PanelHeadingOpacity, 0.0f, 1.0f);
+        fg->AddRectFilled(stripMin, stripMax, ImGui::GetColorU32(stripColor));
+        fg->AddLine(ImVec2(stripMin.x, stripMax.y - 1.0f), ImVec2(stripMax.x, stripMax.y - 1.0f), ImGui::GetColorU32(m_uiThemeColors.LinesAccentColorDim), 1.0f);
+
+        const float edgePad = UIConfig::MenuRightPad;
+        const float itemPad = UIConfig::MenuItemSpacingX;
+        const float buttonSize = (std::max)(14.0f, stripHeight - 8.0f);
+        const float buttonY = stripMin.y + (stripHeight - buttonSize) * 0.5f;
+        const float closeX = stripMax.x - edgePad - buttonSize;
+        const float minX = closeX - itemPad - buttonSize;
+
+        auto DrawTitlebarButton = [&](float x, float y, float size, uint32_t iconCode, bool hovered) {
+            const ImVec2 rectMin(x, y);
+            const ImVec2 rectMax(x + size, y + size);
+            const ImU32 bg = ImGui::GetColorU32(hovered ? m_uiThemeColors.ActivePanelBackground : m_uiThemeColors.ButtonBackgroundColor);
+            fg->AddRectFilled(rectMin, rectMax, bg, 0.0f);
+            fg->AddRect(rectMin, rectMax, ImGui::GetColorU32(m_uiThemeColors.LinesAccentColorDim), 0.0f);
+
+            const std::string icon = OpenFontIcons::ToUtf8(iconCode);
+            ImFont* iconFont = m_fontMenuSmall ? m_fontMenuSmall : ImGui::GetFont();
+            const float iconFontSize = ImGui::GetFontSize();
+
+            float textX = x;
+            float textY = y;
+            bool usedGlyphBounds = false;
+            if (iconFont) {
+                if (ImFontBaked* baked = iconFont->GetFontBaked(iconFontSize)) {
+                    if (ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(iconCode))) {
+                        const float glyphW = glyph->X1 - glyph->X0;
+                        const float glyphH = glyph->Y1 - glyph->Y0;
+                        textX = x + (size - glyphW) * 0.5f - glyph->X0;
+                        textY = y + (size - glyphH) * 0.5f - glyph->Y0 + 1.0f;
+                        if (iconCode == OpenFontIcons::kChevronDown) {
+                            textX -= 2.0f;
+                            textY += 1.0f;
+                        }
+                        if (iconCode == OpenFontIcons::kXCircle) {
+                            textX += 0.5f;
+                        }
+                        usedGlyphBounds = true;
+                    }
+                }
+            }
+            if (!usedGlyphBounds) {
+                const ImVec2 textSize = ImGui::CalcTextSize(icon.c_str());
+                textX = x + (size - textSize.x) * 0.5f;
+                textY = y + (size - textSize.y) * 0.5f + 1.0f;
+                if (iconCode == OpenFontIcons::kChevronDown) {
+                    textX -= 2.0f;
+                    textY += 1.0f;
+                }
+                if (iconCode == OpenFontIcons::kXCircle) {
+                    textX += 0.5f;
+                }
+            }
+            fg->AddText(iconFont, iconFontSize, ImVec2(std::floor(textX), std::floor(textY)), ImGui::GetColorU32(m_uiThemeColors.ButtonIconColor), icon.c_str());
+        };
+
+        const bool canUseWindow = m_hwnd != nullptr;
+        const ImVec2 minButtonMin(minX, buttonY);
+        const ImVec2 minButtonMax(minX + buttonSize, buttonY + buttonSize);
+        const ImVec2 closeButtonMin(closeX, buttonY);
+        const ImVec2 closeButtonMax(closeX + buttonSize, buttonY + buttonSize);
+
+        const bool hoverMin = ImGui::IsMouseHoveringRect(minButtonMin, minButtonMax, false);
+        const bool hoverClose = ImGui::IsMouseHoveringRect(closeButtonMin, closeButtonMax, false);
+        const bool leftClicked = (GetAsyncKeyState(VK_LBUTTON) & 0x0001) != 0;
+        const bool minPressed = hoverMin && leftClicked;
+        const bool closePressed = hoverClose && leftClicked;
+
+        DrawTitlebarButton(minX, buttonY, buttonSize, OpenFontIcons::kChevronDown, hoverMin);
+        DrawTitlebarButton(closeX, buttonY, buttonSize, OpenFontIcons::kXCircle, hoverClose);
+
+        if (canUseWindow) {
+            if (minPressed) {
+                ShowWindow(m_hwnd, SW_MINIMIZE);
+            }
+            if (closePressed) {
+                PostMessage(m_hwnd, WM_CLOSE, 0, 0);
+            }
+        }
+
+        float iconRightX = stripMin.x + edgePad;
+        if (m_titlebarIconTexture && m_titlebarIconSrvGpuHandle.ptr != 0) {
+            const float iconSize = buttonSize;
+            const float iconX = stripMin.x + edgePad;
+            const float iconY = stripMin.y + (stripHeight - iconSize) * 0.5f;
+            fg->AddImage((ImTextureID)m_titlebarIconSrvGpuHandle.ptr, ImVec2(iconX, iconY), ImVec2(iconX + iconSize, iconY + iconSize));
+            iconRightX = iconX + iconSize + itemPad;
+        }
+
+        std::string demoTitle = m_demoTitle;
+        if (demoTitle.empty()) {
+            demoTitle = GetProjectName();
+        }
+        if (demoTitle.empty()) {
+            demoTitle = "Untitled Demo";
+        }
+
+        if (m_fontMenuSmall) {
+            ImGui::PushFont(m_fontMenuSmall);
+        }
+        const ImVec2 titleSize = ImGui::CalcTextSize(demoTitle.c_str());
+        const float titleX = viewport->Pos.x + (viewport->Size.x - titleSize.x) * 0.5f;
+        const float titleY = viewport->Pos.y + (stripHeight - titleSize.y) * 0.5f + 1.0f;
+        fg->AddText(
+            ImVec2(std::floor(titleX), std::floor(titleY)),
+            ImGui::GetColorU32(m_uiThemeColors.PanelTitleFontColor),
+            demoTitle.c_str());
+        fg->PopClipRect();
+        if (m_fontMenuSmall) {
+            ImGui::PopFont();
+        }
+
+        (void)iconRightX;
     }
 }
 
@@ -1981,6 +2657,9 @@ ProjectState UISystem::CaptureState() {
     state.audioLibrary = m_audioLibrary;
     state.track = m_track;
     state.transport = m_transport;
+    state.demoTitle = m_demoTitle;
+    state.demoAuthor = m_demoAuthor;
+    state.demoDescription = m_demoDescription;
     state.currentMode = m_currentMode;
     state.shaderState = m_shaderState;
     state.activeSceneIndex = m_activeSceneIndex;
@@ -2018,6 +2697,9 @@ void UISystem::RestoreState(const ProjectState& state) {
     m_audioLibrary = state.audioLibrary;
     m_track = state.track;
     m_transport = state.transport;
+    m_demoTitle = state.demoTitle;
+    m_demoAuthor = state.demoAuthor;
+    m_demoDescription = state.demoDescription;
     m_currentMode = state.currentMode;
     m_shaderState = state.shaderState;
     m_activeSceneIndex = state.activeSceneIndex;
@@ -2156,10 +2838,60 @@ void UISystem::ShowBuildSettingsWindow() {
         return;
     }
 
+    auto LabeledActionButton = [](const char* id, uint32_t iconCodepoint, const char* label, const char* tooltip, const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+        const std::string icon = OpenFontIcons::ToUtf8(iconCodepoint);
+        const std::string buttonId = std::string("##") + id;
+        const char* safeLabel = (label && *label) ? label : "";
+
+        ImVec2 buttonSize = size;
+        if (buttonSize.x <= 0.0f) {
+            buttonSize.x = ImGui::CalcItemWidth();
+        }
+        if (buttonSize.y <= 0.0f) {
+            buttonSize.y = ImGui::GetFrameHeight();
+        }
+
+        const bool pressed = ImGui::InvisibleButton(buttonId.c_str(), buttonSize);
+        const bool hovered = ImGui::IsItemHovered();
+        const bool held = ImGui::IsItemActive();
+
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : (hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+        drawList->AddRectFilled(min, max, bg, style.FrameRounding);
+        if (style.FrameBorderSize > 0.0f) {
+            drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding, 0, style.FrameBorderSize);
+        }
+
+        const ImVec2 iconSize = ImGui::CalcTextSize(icon.c_str());
+        const ImVec2 labelSize = ImGui::CalcTextSize(safeLabel);
+        const float gap = safeLabel[0] ? style.ItemInnerSpacing.x : 0.0f;
+        const float contentWidth = iconSize.x + gap + labelSize.x;
+        const float baseX = min.x + (buttonSize.x - contentWidth) * 0.5f;
+        const float iconY = min.y + (buttonSize.y - iconSize.y) * 0.5f +
+            ((iconCodepoint == OpenFontIcons::kPlus || iconCodepoint == OpenFontIcons::kMinus) ? 1.0f : 0.0f);
+        const float labelY = min.y + (buttonSize.y - labelSize.y) * 0.5f;
+
+        drawList->AddText(ImVec2(std::floor(baseX), std::floor(iconY)), ImGui::GetColorU32(ImGuiCol_CheckMark), icon.c_str());
+        if (safeLabel[0]) {
+            drawList->AddText(ImVec2(std::floor(baseX + iconSize.x + gap), std::floor(labelY)), ImGui::GetColorU32(ImGuiCol_TextLink), safeLabel);
+        }
+
+        if (ImGui::IsItemHovered() && tooltip && *tooltip) {
+            ImGui::SetTooltip("%s", tooltip);
+        }
+        return pressed;
+    };
+
     bool buildModeChanged = false;
     int modeIndex = (m_buildSettingsMode == BuildMode::ReleaseCrinkled) ? 1 : 0;
-    const char* modeLabels[] = { "Release (standard)", "Release Crinkled (smallest, requires Crinkler + Ninja)" };
-    if (ImGui::Combo("Build Mode", &modeIndex, modeLabels, 2)) {
+    const char* modeLabels[] = { "Release (standard)", "Release Crinkled (smaller size, requires Crinkler + Ninja)" };
+    ImGui::TextUnformatted("Build Mode");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##BuildMode", &modeIndex, modeLabels, 2)) {
         m_buildSettingsMode = modeIndex == 1 ? BuildMode::ReleaseCrinkled : BuildMode::Release;
         m_buildSettingsRefreshRequested = true;
         buildModeChanged = true;
@@ -2174,12 +2906,14 @@ void UISystem::ShowBuildSettingsWindow() {
         case BuildTargetKind::MicroDemo: targetIndex = 3; break;
     }
     const char* targetLabels[] = {
-        "Packaged Demo (.zip)",
-        "Self-Contained Demo (.exe)",
-        "Self-Contained Screen Saver (.scr)",
+        "Packaged (.zip)",
+        "Self-Contained (.exe)",
+        "Screen Saver (.scr)",
         "Micro-Demo (.exe)"
     };
-    if (ImGui::Combo("Build Target", &targetIndex, targetLabels, 4)) {
+    ImGui::TextUnformatted("Build Target");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##BuildTarget", &targetIndex, targetLabels, 4)) {
         switch (targetIndex) {
             case 0: m_buildSettingsTargetKind = BuildTargetKind::PackagedDemo; break;
             case 2: m_buildSettingsTargetKind = BuildTargetKind::SelfContainedScreenSaver; break;
@@ -2188,17 +2922,18 @@ void UISystem::ShowBuildSettingsWindow() {
         }
         m_microUbershaderConflictsDirty = true;
     }
-    ImGui::TextDisabled("File menu build actions preselect this target.");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("File menu builds use this target.");
+    ImGui::PopTextWrapPos();
 
-    ImGui::SeparatorText("Budget Target");
+    ImGui::SeparatorText("Size Budget");
     static const SizeTargetPreset presets[] = {
         SizeTargetPreset::None,
-        SizeTargetPreset::K1,
-        SizeTargetPreset::K2,
-        SizeTargetPreset::K4,
-        SizeTargetPreset::K16,
-        SizeTargetPreset::K32,
-        SizeTargetPreset::K64
+        SizeTargetPreset::K64,
+        SizeTargetPreset::K128,
+        SizeTargetPreset::K256,
+        SizeTargetPreset::K512,
+        SizeTargetPreset::K1024
     };
     bool sizePresetChanged = false;
     for (SizeTargetPreset preset : presets) {
@@ -2212,9 +2947,6 @@ void UISystem::ShowBuildSettingsWindow() {
             m_buildSettingsAutoSwitchedToCrinkled = false;
         }
         ImGui::PopID();
-        if (preset == SizeTargetPreset::K4) {
-            ImGui::SameLine();
-        }
     }
 
     const bool tinyTargetSelected = (m_buildSettingsSizeTarget != SizeTargetPreset::None) || m_buildSettingsTargetKind == BuildTargetKind::MicroDemo;
@@ -2232,32 +2964,42 @@ void UISystem::ShowBuildSettingsWindow() {
     }
 
     if (autoSwitchedToCrinkled || m_buildSettingsAutoSwitchedToCrinkled) {
-        ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "Auto-switched to Release Crinkled for tiny target.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "Switched to Release Crinkled for this size budget.");
+        ImGui::PopTextWrapPos();
     }
 
     if (m_buildSettingsMode == BuildMode::Release && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
-        ImGui::TextDisabled("Tiny targets (1K-64K) use MicroPlayer on x86 by default. Open demos (no size target) use full runtime on x64.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Size budgets use MicroPlayer (x86). No budget uses full runtime (x64).");
+        ImGui::PopTextWrapPos();
     }
 
-    ImGui::Checkbox("Restricted compact track mode", &m_buildSettingsRestrictedCompactTrack);
-    ImGui::TextDisabled("Stores track data as assets/track.bin and strips verbose JSON fields before packing.");
-    ImGui::Checkbox("Include runtime debug logs", &m_buildSettingsRuntimeDebugLog);
-    ImGui::TextDisabled("Compiles runtime log strings and debug output paths (adds bytes to final executable).");
-    ImGui::Checkbox("Include compact-track debug logs", &m_buildSettingsCompactTrackDebugLog);
-    ImGui::TextDisabled("Compiles compact timeline decode diagnostics (adds bytes to final executable).");
+    ImGui::Checkbox("Compact track mode", &m_buildSettingsRestrictedCompactTrack);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Stores track data in assets/track.bin and removes extra JSON fields.");
+    ImGui::Checkbox("Runtime debug logs", &m_buildSettingsRuntimeDebugLog);
+    ImGui::TextDisabled("Adds runtime log text (increases build size).");
+    ImGui::Checkbox("Compact-track debug logs", &m_buildSettingsCompactTrackDebugLog);
+    ImGui::TextDisabled("Adds compact-track diagnostics (increases build size).");
+    ImGui::PopTextWrapPos();
 
     if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo) {
-        ImGui::Checkbox("Micro developer build (overlay console)", &m_buildSettingsMicroDeveloperBuild);
-        ImGui::TextDisabled("Enables tiny on-screen diagnostics; this variant is for debugging only.");
+        ImGui::Checkbox("Micro developer mode (overlay)", &m_buildSettingsMicroDeveloperBuild);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Shows on-screen MicroPlayer diagnostics for debugging.");
+        ImGui::PopTextWrapPos();
         if (m_buildSettingsMicroDeveloperBuild && !m_buildSettingsRuntimeDebugLog) {
             m_buildSettingsRuntimeDebugLog = true;
         }
 
         bool microConflictSelectionChanged = false;
         ImGui::SeparatorText("Micro Ubershader Conflicts");
-        ImGui::TextDisabled("Duplicate helper signatures are shown side-by-side. Highlight one or more implementations to keep.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Duplicate helper signatures are listed side by side. Pick what to keep.");
+        ImGui::PopTextWrapPos();
 
-        if (IconButton("ResetMicroConflictKeepAll", OpenFontIcons::kRefresh, "Reset all conflicts to keep all implementations", ImVec2(180.0f, 0.0f))) {
+        if (LabeledActionButton("ResetMicroConflictKeepAll", OpenFontIcons::kRefresh, "Reset All", "Keep all implementations for all conflicts")) {
             for (const auto& conflict : m_microUbershaderConflicts) {
                 auto& keep = m_microUbershaderKeepEntrypointsBySignature[conflict.signatureKey];
                 keep.clear();
@@ -2272,7 +3014,7 @@ void UISystem::ShowBuildSettingsWindow() {
         if (m_currentProjectPath.empty()) {
             ImGui::TextDisabled("Save the project to analyze micro ubershader conflicts.");
         } else if (m_microUbershaderConflicts.empty()) {
-            ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "No duplicate local function signatures detected.");
+            ImGui::TextColored(ImVec4(0.2f, 0.85f, 0.4f, 1.0f), "No duplicate local function signatures found.");
         } else {
             for (size_t conflictIndex = 0; conflictIndex < m_microUbershaderConflicts.size(); ++conflictIndex) {
                 auto& conflict = m_microUbershaderConflicts[conflictIndex];
@@ -2281,7 +3023,7 @@ void UISystem::ShowBuildSettingsWindow() {
                 ImGui::PushID(static_cast<int>(conflictIndex));
                 ImGui::SeparatorText(conflict.signatureDisplay.c_str());
                 if (keep.empty()) {
-                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Unresolved: choose one or more implementations to keep.");
+                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Unresolved: choose one or more implementations.");
                 }
                 const int columnCount = (std::max)(1, static_cast<int>(conflict.options.size()));
                 if (ImGui::BeginTable("MicroConflictOptions", columnCount, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame)) {
@@ -2357,35 +3099,43 @@ void UISystem::ShowBuildSettingsWindow() {
             initialized = true;
         }
 
-        if (ImGui::InputText("Solution Root (required)", cleanRootBuffer, sizeof(cleanRootBuffer))) {
+        ImGui::TextUnformatted("Solution Root");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::InputText("##SolutionRoot", cleanRootBuffer, sizeof(cleanRootBuffer))) {
             m_buildSettingsCleanSolutionRootPath = cleanRootBuffer;
         }
-        if (IconButton("ClearSolutionRoot", OpenFontIcons::kTrash2, "Clear custom solution root", ImVec2(150, 0))) {
+        if (LabeledActionButton("ClearSolutionRoot", OpenFontIcons::kTrash2, "Clear", "Clear solution root")) {
             m_buildSettingsCleanSolutionRootPath.clear();
             cleanRootBuffer[0] = '\0';
         }
-        ImGui::TextDisabled("Build root is mandatory. Existing content is versioned and replaced on each build.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Required. Existing content is versioned and replaced each build.");
+        ImGui::PopTextWrapPos();
     }
 
     if (m_buildSettingsRuntimeDebugLog && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Warning: Runtime debug logs increase binary size and can hurt tiny targets.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Runtime debug logs can make you miss the size budget.");
+        ImGui::PopTextWrapPos();
     }
     if (m_buildSettingsCompactTrackDebugLog && m_buildSettingsSizeTarget != SizeTargetPreset::None) {
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Warning: Compact-track debug logs increase binary size and can hurt tiny targets.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.25f, 1.0f), "Compact-track debug logs can make you miss the size budget.");
+        ImGui::PopTextWrapPos();
     }
 
     ImGui::SeparatorText("Dependencies");
-    if (IconButton("RefreshDeps", OpenFontIcons::kRefresh, "Refresh dependency detection", ImVec2(120, 0))) {
+    if (LabeledActionButton("RefreshDeps", OpenFontIcons::kRefresh, "Refresh", "Refresh dependency status")) {
         m_buildSettingsRefreshRequested = true;
     }
-    ImGui::SameLine();
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("Mode: %s", BuildModeLabel(m_buildSettingsMode));
-    ImGui::SameLine();
     const char* targetLabel = "Self-Contained Demo (.exe)";
     if (m_buildSettingsTargetKind == BuildTargetKind::PackagedDemo) targetLabel = "Packaged Demo (.zip)";
     else if (m_buildSettingsTargetKind == BuildTargetKind::SelfContainedScreenSaver) targetLabel = "Self-Contained Screen Saver (.scr)";
     else if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo) targetLabel = "Micro-Demo (.exe)";
     ImGui::TextDisabled("Target: %s", targetLabel);
+    ImGui::PopTextWrapPos();
 
     const bool crinklerPossible =
         (m_buildSettingsMode == BuildMode::ReleaseCrinkled) &&
@@ -2394,7 +3144,7 @@ void UISystem::ShowBuildSettingsWindow() {
     const char* activeLinker = (m_buildSettingsMode == BuildMode::Release)
         ? "MSVC link.exe"
         : (crinklerPossible ? "Crinkler" : "Unavailable (missing Crinkler or Ninja)");
-    ImGui::Text("Active linker: %s", activeLinker);
+    ImGui::Text("Linker: %s", activeLinker);
 
     struct DepRow {
         const char* name;
@@ -2442,7 +3192,7 @@ void UISystem::ShowBuildSettingsWindow() {
 
             ImGui::TableSetColumnIndex(3);
             ImGui::PushID((int)i + 1000);
-            if (!dep.present && IconButton("Cfg", OpenFontIcons::kFolder, dep.configureLabel, ImVec2(96.0f, 0.0f))) {
+            if (!dep.present && LabeledActionButton("Cfg", OpenFontIcons::kFolder, dep.configureLabel, dep.configureLabel, ImVec2(-FLT_MIN, 0.0f))) {
                 OpenExternal(dep.configureTarget);
             }
             ImGui::PopID();
@@ -2451,7 +3201,7 @@ void UISystem::ShowBuildSettingsWindow() {
     }
 
     if (!m_buildSettingsPrereq.hasCrinkler) {
-        if (IconButton("PickCrinklerExe", OpenFontIcons::kFolder, "Select crinkler.exe and set SHADERLAB_CRINKLER", ImVec2(260, 0))) {
+        if (LabeledActionButton("PickCrinklerExe", OpenFontIcons::kFolder, "Crinkler Override", "Use a custom crinkler.exe (bundled copy is preferred)")) {
             char pathBuf[512] = { 0 };
             OPENFILENAMEA ofn = { 0 };
             ofn.lStructSize = sizeof(ofn);
@@ -2470,8 +3220,7 @@ void UISystem::ShowBuildSettingsWindow() {
     }
 
     if (!m_buildSettingsPrereq.hasNinja) {
-        ImGui::SameLine();
-        if (IconButton("CopyNinjaWinget", OpenFontIcons::kCopy, "Copy Ninja install command", ImVec2(230, 0))) {
+        if (LabeledActionButton("CopyNinjaWinget", OpenFontIcons::kCopy, "Copy Ninja Command", "Copy Ninja install command")) {
             ImGui::SetClipboardText("winget install Ninja-build.Ninja");
         }
     }
@@ -2487,22 +3236,23 @@ void UISystem::ShowBuildSettingsWindow() {
     if (!canCloseBuildWindow) {
         ImGui::BeginDisabled();
     }
-    if (IconButton("CloseBuildSettings", OpenFontIcons::kXCircle, "Close", ImVec2(120, 0)) && canCloseBuildWindow) {
+    if (LabeledActionButton("CloseBuildSettings", OpenFontIcons::kXCircle, "Close", "Close", ImVec2(140.0f, 0.0f)) && canCloseBuildWindow) {
         m_showBuildSettings = false;
     }
     if (!canCloseBuildWindow) {
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::TextDisabled("Build in progress... window closes after completion.");
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Build in progress. This window will close when done.");
+        ImGui::PopTextWrapPos();
     }
-    ImGui::SameLine();
+
     const bool hasCleanRoot = !m_buildSettingsCleanSolutionRootPath.empty();
     const bool canBuild = m_buildSettingsPrereq.ok && hasCleanRoot;
     const bool canStartBuild = canBuild && !m_isBuilding;
     if (!canStartBuild) {
         ImGui::BeginDisabled();
     }
-    if (IconButton("BuildFromSettings", OpenFontIcons::kPlay, "Choose output path and build", ImVec2(220, 0))) {
+    if (LabeledActionButton("BuildFromSettings", OpenFontIcons::kPlay, "Build Now", "Build to the selected solution root", ImVec2(180.0f, 0.0f))) {
         if (m_currentMode == UIMode::PostFX && m_postFxSourceSceneIndex >= 0 && m_postFxSourceSceneIndex < (int)m_scenes.size()) {
             m_scenes[m_postFxSourceSceneIndex].postFxChain = m_postFxDraftChain;
         }
@@ -2592,7 +3342,7 @@ void UISystem::ShowBuildSettingsWindow() {
             m_buildLog += std::string("Clean Solution Root: ") + m_buildSettingsCleanSolutionRootPath + "\n";
             m_buildLog += std::string("Output Binary: ") + targetOutputPath + "\n";
             if (m_buildSettingsAutoSwitchedToCrinkled) {
-                m_buildLog += "Build Mode Auto-Switch: Release -> Release Crinkled (tiny target with Crinkler+Ninja detected)\n";
+                m_buildLog += "Build Mode Auto-Switch: Release -> Release Crinkled (size budget with Crinkler+Ninja detected)\n";
                 m_buildSettingsAutoSwitchedToCrinkled = false;
             }
 
@@ -2643,19 +3393,18 @@ void UISystem::ShowBuildSettingsWindow() {
     if (!canStartBuild) {
         ImGui::EndDisabled();
         if (!canBuild) {
-            ImGui::SameLine();
+            ImGui::PushTextWrapPos(0.0f);
             if (!hasCleanRoot) {
-                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Set Clean Solution Root to enable build.");
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Set Solution Root to enable build.");
             } else {
-                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Resolve required dependencies to enable build.");
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Install missing required dependencies to enable build.");
             }
+            ImGui::PopTextWrapPos();
         } else if (m_isBuilding) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("Build already running...");
+            ImGui::TextDisabled("Build already running.");
         }
     }
     if (m_buildSettingsTargetKind == BuildTargetKind::MicroDemo && unresolvedMicroConflictCount > 0) {
-        ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Unresolved conflicts: %d", unresolvedMicroConflictCount);
     }
 
@@ -2664,6 +3413,8 @@ void UISystem::ShowBuildSettingsWindow() {
         static bool didAutoCopy = false;
 
         ImGui::SeparatorText("Build Console");
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, m_uiThemeColors.ConsoleBackground);
+        ImGui::PushStyleColor(ImGuiCol_Text, m_uiThemeColors.ConsoleFontColor);
         ImGui::BeginChild("BuildConsoleRegion", ImVec2(0.0f, 220.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
         {
             std::lock_guard<std::mutex> lock(m_buildLogMutex);
@@ -2673,12 +3424,13 @@ void UISystem::ShowBuildSettingsWindow() {
             }
         }
         ImGui::EndChild();
+        ImGui::PopStyleColor(2);
 
         if (!m_isBuilding && m_buildComplete) {
             if (m_buildSuccess) {
-                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Build Completed Successfully!");
+                ImGui::TextColored(m_uiThemeColors.StatusFontColor, "Build Completed Successfully!");
             } else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Build Failed.");
+                ImGui::TextColored(m_uiThemeColors.StatusFontColor, "Build Failed.");
                 if (autoCopyOnFailure && !didAutoCopy) {
                     std::lock_guard<std::mutex> lock(m_buildLogMutex);
                     ImGui::SetClipboardText(m_buildLog.c_str());
@@ -2693,12 +3445,11 @@ void UISystem::ShowBuildSettingsWindow() {
             ImGui::Text("Building%s", dots);
         }
 
-        if (IconButton("CopyBuildLogInline", OpenFontIcons::kCopy, "Copy build log", ImVec2(140, 0))) {
+        if (LabeledActionButton("CopyBuildLogInline", OpenFontIcons::kCopy, "Copy Log", "Copy build log text", ImVec2(150.0f, 0.0f))) {
             std::lock_guard<std::mutex> lock(m_buildLogMutex);
             ImGui::SetClipboardText(m_buildLog.c_str());
         }
-        ImGui::SameLine();
-        ImGui::Checkbox("Auto-copy on failure", &autoCopyOnFailure);
+        ImGui::Checkbox("Auto copy on failure", &autoCopyOnFailure);
     }
 
     const bool settingsChanged =

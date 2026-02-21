@@ -3,8 +3,10 @@
 #include "ShaderLab/Graphics/Swapchain.h"
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
-#ifndef SHADERLAB_TINY_PLAYER
-#define SHADERLAB_TINY_PLAYER 0
+#include "ShaderLab/Runtime/RuntimeStartupPolicy.h"
+
+#if SHADERLAB_TINY_PLAYER && !defined(SHADERLAB_TINY_DEMOPLAYER_BRIDGE)
+#error Shared runtime DemoPlayer.cpp is non-tiny only. Use src/app/tiny/TinyDemoPlayer.cpp for tiny builds.
 #endif
 
 #if !SHADERLAB_TINY_PLAYER
@@ -117,24 +119,6 @@ static std::string GetExecutableDirectory() {
         return {};
     }
     return GetDirectoryName(std::string(exePath, length));
-}
-
-static void AppendRuntimeErrorLogLine(const std::string& message) {
-    char exePath[MAX_PATH] = {};
-    const DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-    std::string logPath;
-    if (length > 0 && length < MAX_PATH) {
-        std::string exe(exePath, length);
-        logPath = JoinPath(GetDirectoryName(exe), "runtime_error.log");
-    } else {
-        logPath = "runtime_error.log";
-    }
-
-    std::ofstream logFile(logPath, std::ios::out | std::ios::app);
-    if (!logFile.is_open()) {
-        return;
-    }
-    logFile << message << "\n";
 }
 
 static bool LoadBytecodeFromFile(const std::string& path, std::vector<uint8_t>& outData) {
@@ -317,6 +301,15 @@ static void TinyTrace(const std::string& message) {
     (void)message;
 }
 #endif
+
+static inline void RuntimeErr(const char* code, const char* shortText) {
+#if !SHADERLAB_TINY_PLAYER
+    RuntimeStartupPolicy::EmitRuntimeError(code, shortText);
+#else
+    (void)code;
+    (void)shortText;
+#endif
+}
 
 #if SHADERLAB_TINY_DEV_OVERLAY
 static std::vector<std::string>& TinyDevLogLines() {
@@ -628,6 +621,46 @@ static bool LoadCompactTrackBinaryFromPathCandidates(const std::string& relative
     return false;
 }
 
+#if !SHADERLAB_TINY_PLAYER
+static bool IsTrackBinManifestPath(const std::string& manifestPath) {
+    if (manifestPath.empty()) {
+        return false;
+    }
+
+    std::string lowerManifest = manifestPath;
+    for (char& c : lowerManifest) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    return lowerManifest.size() >= 10 &&
+           lowerManifest.rfind("track.bin") == lowerManifest.size() - 9;
+}
+
+static bool LoadCompactTrackFromManifestOrFallback(const std::string& manifestPath,
+                                                   DemoTrack& outTrack,
+                                                   TinyTrackMetadata* outMeta,
+                                                   std::string& outResolvedTrackPath,
+                                                   std::string& outError) {
+    outResolvedTrackPath.clear();
+    outError.clear();
+
+    bool trackLoaded = LoadCompactTrackBinaryFromPathCandidates(
+        "assets/track.bin", manifestPath, outTrack, outMeta, outResolvedTrackPath, outError);
+
+    if (!trackLoaded && IsTrackBinManifestPath(manifestPath)) {
+        std::string localError;
+        if (LoadCompactTrackBinaryFromFile(manifestPath, outTrack, outMeta, localError)) {
+            trackLoaded = true;
+            outResolvedTrackPath = manifestPath;
+        } else if (!localError.empty()) {
+            outError = localError;
+        }
+    }
+
+    return trackLoaded;
+}
+#endif
+
 struct MicroUbershaderLibrary {
     std::string source;
     int moduleCount = 0;
@@ -642,6 +675,9 @@ static bool TryLoadMicroUbershaderBytecodeBlob(bool packedAssets, std::vector<ui
         return !outBlob.empty();
     }
 
+#if SHADERLAB_TINY_PLAYER
+    return LoadBytecodeFromFile(kPackedMicroUbershaderBytecodePath, outBlob);
+#else
     const char* candidates[] = {
         "assets/shaders/ubershader.bin",
         "shaders/ubershader.bin"
@@ -655,6 +691,7 @@ static bool TryLoadMicroUbershaderBytecodeBlob(bool packedAssets, std::vector<ui
         }
     }
     return false;
+#endif
 }
 
 static bool ParseMicroUbershaderBytecodeBlob(const std::vector<uint8_t>& blob,
@@ -693,6 +730,11 @@ static bool ParseMicroUbershaderBytecodeBlob(const std::vector<uint8_t>& blob,
         const size_t row = tableStart + static_cast<size_t>(moduleIndex) * 8u;
         const uint32_t offset = readU32(row);
         const uint32_t size = readU32(row + 4u);
+#if SHADERLAB_TINY_PLAYER
+        auto& module = outModules[moduleIndex];
+        module.assign(blob.begin() + static_cast<size_t>(offset),
+                      blob.begin() + static_cast<size_t>(offset) + static_cast<size_t>(size));
+#else
         if (size == 0) {
             continue;
         }
@@ -703,6 +745,7 @@ static bool ParseMicroUbershaderBytecodeBlob(const std::vector<uint8_t>& blob,
         auto& module = outModules[moduleIndex];
         module.assign(blob.begin() + static_cast<size_t>(offset),
                       blob.begin() + static_cast<size_t>(offset) + static_cast<size_t>(size));
+#endif
     }
 
     return true;
@@ -715,6 +758,14 @@ static bool TryLoadMicroUbershaderText(bool packedAssets, std::string& outText) 
         return !outText.empty();
     }
 
+#if SHADERLAB_TINY_PLAYER
+    std::ifstream file(kPackedMicroUbershaderPath, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    outText.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return !outText.empty();
+#else
     const char* candidates[] = {
         "assets/shaders/ubershader.hlsl",
         "shaders/ubershader.hlsl"
@@ -728,6 +779,7 @@ static bool TryLoadMicroUbershaderText(bool packedAssets, std::string& outText) 
         }
     }
     return false;
+#endif
 }
 
 static bool ParseMicroUbershaderText(const std::string& text, MicroUbershaderLibrary& outLibrary) {
@@ -738,8 +790,22 @@ static bool ParseMicroUbershaderText(const std::string& text, MicroUbershaderLib
     }
 
     const std::string header = text.substr(0, eol);
+    if (header.rfind("U:", 0) != 0) {
+        return false;
+    }
+
     unsigned long long sourceLength = 0;
-    if (std::sscanf(header.c_str(), "U:%llu", &sourceLength) != 1) {
+    try {
+        const std::string lengthText = header.substr(2);
+        if (lengthText.empty()) {
+            return false;
+        }
+        size_t consumed = 0;
+        sourceLength = std::stoull(lengthText, &consumed, 10);
+        if (consumed != lengthText.size()) {
+            return false;
+        }
+    } catch (...) {
         return false;
     }
 
@@ -1004,7 +1070,7 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
         // We need to fix PreviewRenderer::Initialize to accept null compiler if we want this to work without DLL.
         // For now, let's assume if it fails, we log it.
     #if !SHADERLAB_TINY_PLAYER
-        std::cerr << "Renderer Init failed\n";
+        RuntimeErr("E201", "renderer init failed");
     #endif
     }
     
@@ -1012,7 +1078,7 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
 #if !SHADERLAB_TINY_PLAYER
     m_audio = new AudioSystem();
     if (!m_audio->Initialize()) {
-        std::cerr << "Failed to init audio\n";
+        RuntimeErr("E202", "audio init failed");
     }
 #else
     m_audio = nullptr;
@@ -1083,8 +1149,8 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
         
         // Build font atlas manually to ensure ImGui doesn't assert before backend is ready
         unsigned char* pixels;
-        int width, height;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        int atlasWidth, atlasHeight;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &atlasWidth, &atlasHeight);
 
         // Descriptor Heap for ImGui
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
@@ -1118,7 +1184,7 @@ void DemoPlayer::LoadProject(const std::string& manifestPath) {
         m_rendererReady = m_renderer->Initialize(m_device, compiler, DXGI_FORMAT_R8G8B8A8_UNORM, precompiledVs);
 #if !SHADERLAB_TINY_PLAYER
         if (!m_rendererReady) {
-            std::cerr << "Renderer initialization retry failed after loading manifest: " << manifestPath << "\n";
+            RuntimeErr("E203", "renderer reinit failed after manifest load");
         }
 #endif
     }
@@ -1246,6 +1312,8 @@ void DemoPlayer::PrimeRuntimeResources() {
 
 // Minimal helpers
 static ComPtr<ID3D12Resource> LoadTexture(Device* dev, const std::string& path) {
+    (void)dev;
+    (void)path;
     // ... Implementation omitted for brevity
     return nullptr;
 }
@@ -1255,6 +1323,21 @@ void DemoPlayer::Update(double wallTime, float dt) {
     if (m_loadingFailed) {
         return;
     }
+
+#if !SHADERLAB_TINY_PLAYER
+    auto loadAudioClip = [&](const auto& clip, bool packedAssets) {
+        if (!m_audio) {
+            return;
+        }
+
+        if (packedAssets && PackageManager::Get().HasFile(clip.path)) {
+            auto audioData = PackageManager::Get().GetFile(clip.path);
+            m_audio->LoadAudioFromMemory(audioData.data(), audioData.size());
+        } else {
+            m_audio->LoadAudio(clip.path);
+        }
+    };
+#endif
 
 #if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
     if (m_loadingStage != m_debugLastLoadingStage) {
@@ -1299,31 +1382,11 @@ void DemoPlayer::Update(double wallTime, float dt) {
                 auto trackData = PackageManager::Get().GetFile("assets/track.bin");
                 trackLoaded = LoadCompactTrackBinaryFromBytes(trackData, decodedTrack, &decodedMeta, trackError);
             } else {
-                std::string resolvedTrackPath;
-                trackLoaded = LoadCompactTrackBinaryFromPathCandidates(
-                    "assets/track.bin", m_manifestPath, decodedTrack, &decodedMeta, resolvedTrackPath, trackError);
-
-                if (!trackLoaded && !m_manifestPath.empty()) {
-                    const std::string lowerManifest = [&]() {
-                        std::string out = m_manifestPath;
-                        for (char& c : out) {
-                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        }
-                        return out;
-                    }();
-                    if (lowerManifest.size() >= 10 && lowerManifest.rfind("track.bin") == lowerManifest.size() - 9) {
-                        std::string localError;
-                        if (LoadCompactTrackBinaryFromFile(m_manifestPath, decodedTrack, &decodedMeta, localError)) {
-                            trackLoaded = true;
-                            resolvedTrackPath = m_manifestPath;
-                        } else if (!localError.empty()) {
-                            trackError = localError;
-                        }
-                    }
-                }
+                trackLoaded = LoadCompactTrackBinaryFromFile(
+                    "assets/track.bin", decodedTrack, &decodedMeta, trackError);
 
                 if (trackLoaded) {
-                    TinyTrace("Compact track load OK: " + resolvedTrackPath);
+                    TinyTrace("Compact track load OK: assets/track.bin");
                 } else if (!trackError.empty()) {
                     TinyTrace("Compact track load FAILED: " + trackError);
                 }
@@ -1386,7 +1449,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
 #endif
                     }
                 } else {
-                    std::cerr << "Packed build is missing project.json in the executable.\n";
+                    RuntimeErr("E206", "packed build missing project.json");
                 }
             } else {
                 std::cout << "No pack detected. Loading project from disk: " << m_manifestPath << std::endl;
@@ -1396,29 +1459,9 @@ void DemoPlayer::Update(double wallTime, float dt) {
                     DemoTrack decodedTrack;
                     std::string trackError;
 
-                    bool trackLoaded = false;
                     std::string resolvedTrackPath;
-                    trackLoaded = LoadCompactTrackBinaryFromPathCandidates(
-                        "assets/track.bin", m_manifestPath, decodedTrack, nullptr, resolvedTrackPath, trackError);
-
-                    if (!trackLoaded && !m_manifestPath.empty()) {
-                        const std::string lowerManifest = [&]() {
-                            std::string out = m_manifestPath;
-                            for (char& c : out) {
-                                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                            }
-                            return out;
-                        }();
-                        if (lowerManifest.size() >= 10 && lowerManifest.rfind("track.bin") == lowerManifest.size() - 9) {
-                            std::string localError;
-                            if (LoadCompactTrackBinaryFromFile(m_manifestPath, decodedTrack, nullptr, localError)) {
-                                trackLoaded = true;
-                                resolvedTrackPath = m_manifestPath;
-                            } else if (!localError.empty()) {
-                                trackError = localError;
-                            }
-                        }
-                    }
+                    const bool trackLoaded = LoadCompactTrackFromManifestOrFallback(
+                        m_manifestPath, decodedTrack, nullptr, resolvedTrackPath, trackError);
 
                     if (trackLoaded) {
                         m_project.track = std::move(decodedTrack);
@@ -1456,7 +1499,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
                         if (missingShaderPaths.size() > maxShown) {
                             m_loadingStatus += " - ... and " + std::to_string(missingShaderPaths.size() - maxShown) + " more\n";
                         }
-                        std::cerr << m_loadingStatus;
+                        RuntimeErr("E204", "packed shader validation failed");
                         return;
                     }
                 }
@@ -1471,13 +1514,9 @@ void DemoPlayer::Update(double wallTime, float dt) {
                     m_loadingStatus = "Project load failed";
                 }
                 TinyTrace("Project load FAILED");
-#if !SHADERLAB_TINY_PLAYER
                 {
-                    const std::string errorMessage = "Project load failed for manifest '" + m_manifestPath + "': " + m_loadingStatus;
-                    std::cerr << errorMessage << std::endl;
-                    AppendRuntimeErrorLogLine(errorMessage);
+                    RuntimeErr("E205", "project load failed");
                 }
-#endif
                 // Nothing to load
             }
             return;
@@ -1488,12 +1527,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
     #if !SHADERLAB_TINY_PLAYER
             bool packed = PackageManager::Get().IsPacked();
             for(auto& clip : m_project.audioLibrary) {
-            if (packed && PackageManager::Get().HasFile(clip.path)) {
-                auto d = PackageManager::Get().GetFile(clip.path);
-                m_audio->LoadAudioFromMemory(d.data(), d.size());
-            } else {
-                m_audio->LoadAudio(clip.path);
-            }
+                loadAudioClip(clip, packed);
             }
     #endif
             m_compilationIndex = 0;
@@ -1509,6 +1543,9 @@ void DemoPlayer::Update(double wallTime, float dt) {
                 const bool ok = CompileScene(m_compilationIndex);
                 if (!ok) {
                     TinyTrace("CompileScene failed at index " + std::to_string(m_compilationIndex));
+#if !SHADERLAB_TINY_PLAYER
+                    RuntimeErr("E200", "scene compile failed");
+#endif
                     m_loadingStatus = "Compile failed at scene " + std::to_string(m_compilationIndex);
                 }
                 m_compilationIndex++;
@@ -1549,7 +1586,6 @@ void DemoPlayer::Update(double wallTime, float dt) {
 
         // Track Logic
         float beatsPerSec = m_transport.bpm / 60.0f;
-        int prevBeat = m_project.track.currentBeat;
         float exactBeat = (float)(m_transport.timeSeconds * beatsPerSec);
         m_project.track.currentBeat = (int)std::floor(exactBeat);
 
@@ -1652,13 +1688,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
                          // Audio
                          if (row.musicIndex >= 0 && row.musicIndex < (int)m_project.audioLibrary.size() && m_audio) {
                              auto& clip = m_project.audioLibrary[row.musicIndex];
-
-                             if (PackageManager::Get().IsPacked() && PackageManager::Get().HasFile(clip.path)) {
-                                 auto d = PackageManager::Get().GetFile(clip.path);
-                                 m_audio->LoadAudioFromMemory(d.data(), d.size());
-                             } else {
-                                 m_audio->LoadAudio(clip.path);
-                             }
+                             loadAudioClip(clip, PackageManager::Get().IsPacked());
 
                              m_audio->Play();
                              if(clip.bpm > 0) m_transport.bpm = clip.bpm;
@@ -1709,7 +1739,7 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
     auto& scene = m_project.scenes[sceneIndex];
     if (!m_renderer || !m_rendererReady) {
 #if !SHADERLAB_TINY_PLAYER
-        std::cerr << "No renderer available to compile scene index " << sceneIndex << "\n";
+        RuntimeErr("E207", "renderer unavailable for scene compile");
 #endif
         return false;
     }
@@ -1741,8 +1771,7 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
             } else {
                 SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to create PSO from precompiled shader for scene " + scene.name);
 #if !SHADERLAB_TINY_PLAYER
-                std::cerr << "Failed to create PSO from precompiled scene shader: " << scene.precompiledPath
-                          << " (scene=" << scene.name << ")\n";
+                RuntimeErr("E208", "precompiled scene pso create failed");
 #endif
             }
         }
@@ -1939,6 +1968,11 @@ void DemoPlayer::EnsurePostFxHistory(Scene::PostFXEffect& effect) {
 
 bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex) {
     if (!m_renderer || !m_rendererReady) return false;
+
+#if !SHADERLAB_TINY_PLAYER
+    (void)sceneIndex;
+    (void)fxIndex;
+#endif
 
     if (!effect.precompiledPath.empty()) {
         std::vector<uint8_t> data;

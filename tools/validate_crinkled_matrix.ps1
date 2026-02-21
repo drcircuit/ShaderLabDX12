@@ -6,26 +6,70 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$cli = Join-Path $repo "build\bin\ShaderLabBuildCli.exe"
+$cliCandidates = @(
+    (Join-Path $repo "build_debug\bin\ShaderLabBuildCli.exe"),
+    (Join-Path $repo "build\bin\ShaderLabBuildCli.exe")
+)
+$cli = $cliCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+function Is-ExcludedProjectPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $true
+    }
+
+    $normalized = $Path.Replace('/', '\').ToLowerInvariant()
+    $excludedMarkers = @(
+        "\build\\",
+        "\build_debug\\",
+        "\build_release\\",
+        "\build_smoke_",
+        "\build_m6_",
+        "\build_tiny_",
+        "\build_micro_",
+        "\artifacts\\",
+        "\.git\\",
+        "\third_party\\"
+    )
+
+    foreach ($marker in $excludedMarkers) {
+        if ($normalized.Contains($marker)) {
+            return $true
+        }
+    }
+
+    return $false
+}
 
 if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
-    $candidates = @(
-        (Join-Path $repo "DEMO.json"),
-        (Join-Path (Split-Path $repo -Parent) "DEMO.json")
+    $searchRoots = @(
+        (Join-Path $repo "creative"),
+        $repo
     )
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            $ProjectPath = (Resolve-Path $candidate).Path
+
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path $root)) {
+            continue
+        }
+
+        $candidate = Get-ChildItem -Path $root -Recurse -File -Filter "project.json" -ErrorAction SilentlyContinue |
+            Where-Object { -not (Is-ExcludedProjectPath $_.FullName) } |
+            Sort-Object FullName |
+            Select-Object -First 1
+
+        if ($candidate) {
+            $ProjectPath = $candidate.FullName
             break
         }
     }
 }
 
-if (-not (Test-Path $cli)) {
-    throw "ShaderLabBuildCli missing: $cli"
+if ([string]::IsNullOrWhiteSpace($cli)) {
+    throw "ShaderLabBuildCli missing. Expected one of: $($cliCandidates -join ', ')"
 }
 if (-not (Test-Path $ProjectPath)) {
-    throw "Project JSON missing: $ProjectPath. Pass -ProjectPath or add DEMO.json in repo root/parent."
+    throw "Project JSON missing: $ProjectPath. Pass -ProjectPath or provide a source-controlled project.json."
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -50,6 +94,7 @@ function Invoke-Crinkled {
     $code = $LASTEXITCODE
     $exists = Test-Path $out
     $sizeBytes = if ($exists) { (Get-Item $out).Length } else { -1 }
+    $sizeText = if ($exists) { "{0:N0}" -f $sizeBytes } else { "n/a" }
 
     [PSCustomObject]@{
         Name = $Name
@@ -57,6 +102,7 @@ function Invoke-Crinkled {
         ExitCode = $code
         Exists = $exists
         SizeBytes = $sizeBytes
+        Size = $sizeText
         Output = $out
     }
 }

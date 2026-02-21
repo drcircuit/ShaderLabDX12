@@ -17,6 +17,9 @@ From VS Code, use the workspace tasks:
 - `Build ShaderLab (Release)`
 - `Reconfigure CMake`
 - `Run ShaderLabEditor (Dev Env)`
+- `Layering Check`
+- `Startup Relaunch Validation`
+- `M6 Prebuilt Packaging Spike`
 
 These tasks automatically load `tools/dev_env.ps1` before configuring/building/running.
 
@@ -68,6 +71,63 @@ ShaderLab supports two practical runtime paths:
   - Targets x64
 
 The build pipeline logs selected architecture and runtime path in build output.
+
+## Target Graph (Current)
+
+- `ShaderLabCoreApi`: shared runtime/engine APIs
+- `ShaderLabDevKit`: player runtime implementation
+- `ShaderLabDevKitBuildTools`: build/export orchestration
+- `ShaderLabEditorLib`: editor UI/orchestration
+
+Executable linkage:
+
+- `ShaderLabEditor` -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+- `ShaderLabBuildCli` -> `ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+- `ShaderLabPlayer`/`ShaderLabScreenSaver` -> entrypoint + `ShaderLabDevKit + ShaderLabCoreApi`
+
+Layering enforcement:
+
+- Configure-time CMake checks fail fast on forbidden source coupling (for example runtime targets pulling UI or build/export sources).
+- `tools/check.ps1` runs a dedicated configure pass to validate these checks locally.
+
+## Validation Gates (Local + CI)
+
+Primary validation entry point:
+
+- `tools/check.ps1`
+
+Current gates in `tools/check.ps1`:
+
+- documentation integrity (`tools/check_docs.ps1`)
+- CMake layering assertions (configure-time)
+- editor include-boundary guard (prevents editor/UI runtime-internal includes)
+- runtime fullscreen policy guard (blocks exclusive-fullscreen APIs in runtime sources)
+- micro packaging contract guard (`track.bin` compact payload generation signal)
+- M6 prebuilt packaging spike guard (restricted packaged zip layout + manifest contract validation)
+
+M6 validator details:
+
+- Script: `tools/validate_devkit_prebuilt_spike.ps1`
+- Produces a reference packaged artifact with compact sync payload:
+  - `--target packaged --restricted-compact-track`
+- Validates extracted package contract:
+  - runtime executable at package root
+  - `project.json`
+  - `assets/track.bin`
+  - precompiled shaders under `assets/shaders/*.cso`
+  - manifest path integrity and precompiled-path resolution
+- By default, also runs startup/relaunch matrix (`tools/validate_startup_relaunch_matrix.ps1`) as the M6 spike launch checkpoint.
+
+CI workflows:
+
+- `.github/workflows/validate.yml`
+  - runs on pull requests and pushes to `main`
+  - configures Debug, builds `ShaderLabBuildCli`, then runs `tools/check.ps1`
+  - includes a dedicated full M6 spike job (`tools/validate_devkit_prebuilt_spike.ps1`) for:
+    - nightly schedule (UTC 03:00)
+    - manual dispatch when `run_full_m6=true`
+- `.github/workflows/release.yml`
+  - runs `tools/check.ps1` as a release gate after Release build
 
 ## Size-Sensitive Logging Flags
 

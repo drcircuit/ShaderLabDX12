@@ -131,6 +131,11 @@ jobs:
         shell: pwsh
         run: cmake --build build --config Release
 
+      # ── Refactor guardrails (layering + micro packaging contract) ───────
+      - name: Run refactor guard checks
+        shell: pwsh
+        run: .\tools\check.ps1
+
       # ── Stage end-user docs ───────────────────────────────────────────────
       - name: Stage end-user docs
         shell: pwsh

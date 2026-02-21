@@ -292,9 +292,6 @@ LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case WM_NCHITTEST:
             if (m_useCustomTitlebar) {
                 POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                if (m_ui && m_ui->IsPointInTitlebarButtons(pt)) {
-                    return HTCLIENT;
-                }
                 RECT rect = {};
                 GetWindowRect(hwnd, &rect);
 
@@ -320,12 +317,6 @@ LRESULT EditorApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     POINT clientPt = pt;
                     ScreenToClient(hwnd, &clientPt);
                     if (clientPt.y >= 0 && clientPt.y < static_cast<LONG>(titlebarHeight)) {
-                        if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) {
-                            return HTCLIENT;
-                        }
-                        if (m_ui && m_ui->IsPointInTitlebarDrag(pt)) {
-                            return HTCAPTION;
-                        }
                         return HTCLIENT;
                     }
                 }

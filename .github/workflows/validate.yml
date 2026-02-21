@@ -1,0 +1,70 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_full_m6:
+        description: Run full M6 prebuilt spike validation (includes startup/relaunch matrix)
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Debug)
+        shell: pwsh
+        run: cmake -B build_debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build ShaderLabBuildCli (Debug)
+        shell: pwsh
+        run: cmake --build build_debug --target ShaderLabBuildCli
+
+      - name: Run validation checks
+        shell: pwsh
+        run: .\tools\check.ps1
+
+  validate-m6-full:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_full_m6 == 'true') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Debug)
+        shell: pwsh
+        run: cmake -B build_debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build ShaderLabBuildCli (Debug)
+        shell: pwsh
+        run: cmake --build build_debug --target ShaderLabBuildCli
+
+      - name: Run full M6 prebuilt spike validation
+        shell: pwsh
+        run: .\tools\validate_devkit_prebuilt_spike.ps1

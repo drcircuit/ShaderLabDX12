@@ -61,11 +61,14 @@ Design decisions:
 
 ### Core Module (`src/core/`)
 
-Project data and export services:
+Core data/runtime-facing services:
 
 - **Serializer**: Project load/save and package metadata
-- **BuildPipeline**: Self-contained build pipeline support
-- **RuntimeExporter**: Helpers for exporting runtime binaries
+- **PackageManager**: Runtime package metadata + asset path handling
+
+Note on ownership boundaries:
+- `BuildPipeline` and `RuntimeExporter` implementations remain in `src/core/` for now,
+  but are owned by the Dev Kit layer and exposed through `include/ShaderLab/DevKit/*`.
 
 ### UI Module (`src/ui/`)
 
@@ -108,11 +111,35 @@ Audio File → AudioSystem → playback time
 
 ## Build System
 
-CMake-based build with these targets:
+CMake-based build with split ownership targets:
 
-- **ShaderLabCore**: Static library with all core systems
-- **ShaderLabEditor**: Editor executable
-- **ShaderLabRuntime**: Standalone runtime (optional)
+- **ShaderLabCoreApi**: Shared runtime/engine API (graphics/audio/shader/serializer/package)
+- **ShaderLabDevKit**: Player runtime layer (`PlayerApp`, `DemoPlayer`, runtime policies)
+- **ShaderLabDevKitBuildTools**: Build/export orchestration (`BuildPipeline`, `RuntimeExporter`)
+- **ShaderLabEditorLib**: Editor UI + editor-facing orchestration
+- Executables:
+     - **ShaderLabEditor** -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+     - **ShaderLabBuildCli** -> `ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+     - **ShaderLabPlayer/ShaderLabScreenSaver** -> entrypoint-only + `ShaderLabDevKit + ShaderLabCoreApi`
+
+### Editor API Boundary
+
+Editor-facing code (`src/app/editor/*`, `src/ui/*`, `include/ShaderLab/UI/*`) must consume runtime and build functionality through stable API surfaces only:
+
+- Allowed runtime/build headers:
+     - `ShaderLab/DevKit/*`
+     - `ShaderLab/Core/*` (core runtime/engine APIs)
+     - `ShaderLab/Graphics/*`, `ShaderLab/Audio/*`, `ShaderLab/Shader/*`
+- Disallowed internal runtime includes from editor/UI code:
+     - `ShaderLab/App/PlayerApp.h`
+     - `ShaderLab/App/DemoPlayer.h`
+     - `ShaderLab/App/Runtime*`
+     - `ShaderLab/Runtime/*`
+     - direct includes under `src/app/runtime/*`
+
+Enforcement:
+- CMake layering assertions prevent source leakage between runtime/editor/build-tool targets.
+- `tools/check.ps1` includes an "Editor Include Boundary" gate that scans editor/UI sources for forbidden include patterns.
 
 Third-party dependencies:
 - Dear ImGui (UI framework)
@@ -142,7 +169,7 @@ For final demos, the runtime can be optimized further by:
 - Pre-compiling all shaders in Build mode
 - Removing debug/validation layers
 - Frame pipelining for higher throughput
-- Stripping editor UI code
+- Stripping editor UI/build-tool code paths from runtime deliverables
 
 ## Code Style
 

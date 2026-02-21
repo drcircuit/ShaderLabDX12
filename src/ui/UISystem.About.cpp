@@ -50,7 +50,7 @@ void UISystem::ShowAboutWindow() {
     const char* heading = "SHADERLAB v. 1.0";
     ImVec2 headingSize = ImGui::CalcTextSize(heading);
     ImGui::SetCursorPosX((std::max)(0.0f, (avail.x - headingSize.x) * 0.5f));
-    ImGui::TextColored(ImVec4(0.45f, 0.95f, 1.0f, 1.0f), "%s", heading);
+    ImGui::TextColored(m_uiThemeColors.LogoFontColor, "%s", heading);
     ImGui::SetWindowFontScale(1.0f);
 
     const char* line1 = "by Espen Sande-Larsen";

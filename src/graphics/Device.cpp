@@ -1,7 +1,19 @@
 #include "ShaderLab/Graphics/Device.h"
 #include <stdexcept>
+#include <cstdio>
+
+#ifndef SHADERLAB_TINY_PLAYER
+#define SHADERLAB_TINY_PLAYER 0
+#endif
 
 namespace ShaderLab {
+
+#if SHADERLAB_TINY_PLAYER
+static inline void TinyErrCode(const char* code) {
+    std::fputs(code, stderr);
+    std::fputc('\n', stderr);
+}
+#endif
 
 Device::Device() = default;
 Device::~Device() = default;
@@ -30,6 +42,7 @@ std::vector<Device::AdapterInfo> Device::GetAvailableAdapters() {
 
 bool Device::Initialize(bool enableValidation, int adapterIndex) {
     m_validationEnabled = enableValidation;
+    m_lastInitFailureCode = InitFailureCode::None;
 
     // Enable debug layer in debug builds
 #ifdef SHADERLAB_DEBUG
@@ -50,6 +63,10 @@ bool Device::Initialize(bool enableValidation, int adapterIndex) {
 
     HRESULT hr = CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&m_factory));
     if (FAILED(hr)) {
+        m_lastInitFailureCode = InitFailureCode::FactoryCreateFailed;
+#if SHADERLAB_TINY_PLAYER
+        TinyErrCode("E100");
+#endif
         return false;
     }
 
@@ -59,6 +76,10 @@ bool Device::Initialize(bool enableValidation, int adapterIndex) {
     if (adapterIndex >= 0) {
         // Use specific adapter
         if (FAILED(m_factory->EnumAdapters1((UINT)adapterIndex, &adapter))) {
+            m_lastInitFailureCode = InitFailureCode::AdapterSelectionFailed;
+#if SHADERLAB_TINY_PLAYER
+            TinyErrCode("E101");
+#endif
             return false;
         }
         
@@ -92,6 +113,10 @@ bool Device::Initialize(bool enableValidation, int adapterIndex) {
     }
 
     if (!m_adapter) {
+        m_lastInitFailureCode = InitFailureCode::AdapterSelectionFailed;
+#if SHADERLAB_TINY_PLAYER
+        TinyErrCode("E101");
+#endif
         return false;
     }
 
@@ -104,6 +129,10 @@ bool Device::Initialize(bool enableValidation, int adapterIndex) {
     hr = D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_12_0, 
                            IID_PPV_ARGS(&m_device));
     if (FAILED(hr)) {
+        m_lastInitFailureCode = InitFailureCode::DeviceCreateFailed;
+#if SHADERLAB_TINY_PLAYER
+        TinyErrCode("E102");
+#endif
         return false;
     }
 

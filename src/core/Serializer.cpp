@@ -3,6 +3,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -64,6 +65,152 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
             resolveShader(fx.shaderCode, fx.shaderCodePath);
         }
     }
+}
+
+std::vector<uint8_t> ReadStreamBytes(std::istream& stream) {
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+struct PackedEntryInfo {
+    std::string path;
+    uint64_t offset;
+    uint64_t size;
+};
+
+template <typename Visitor>
+void ForEachProjectAssetPath(const ProjectData& project, Visitor&& visitor) {
+    for (const auto& clip : project.audioLibrary) {
+        visitor(clip.path);
+    }
+
+    for (const auto& scene : project.scenes) {
+        for (const auto& bind : scene.bindings) {
+            if (bind.bindingType == BindingType::File && !bind.filePath.empty()) {
+                visitor(bind.filePath);
+            }
+        }
+
+        visitor(scene.precompiledPath);
+
+        for (const auto& fx : scene.postFxChain) {
+            visitor(fx.precompiledPath);
+        }
+    }
+}
+
+struct ExecutablePackAccumulator {
+    std::vector<uint8_t> packBlob;
+    std::vector<PackedEntryInfo> entries;
+    std::unordered_set<std::string> packedPathIndex;
+
+    bool HasPackedPath(const std::string& packedPath) const {
+        return packedPathIndex.find(packedPath) != packedPathIndex.end();
+    }
+
+    void AddEntryFromData(const std::string& packedPath, const std::vector<uint8_t>& data) {
+        PackedEntryInfo info;
+        info.path = packedPath;
+        info.offset = packBlob.size();
+        info.size = data.size();
+        entries.push_back(info);
+        packedPathIndex.insert(packedPath);
+        packBlob.insert(packBlob.end(), data.begin(), data.end());
+    }
+
+    void TryAddEntryFromDisk(const fs::path& diskPath, const std::string& packedPathRaw) {
+        const std::string packedPath = NormalizePathSlashes(packedPathRaw);
+        if (HasPackedPath(packedPath) || !fs::exists(diskPath)) {
+            return;
+        }
+
+        std::ifstream file(diskPath, std::ios::binary);
+        std::vector<uint8_t> data = ReadStreamBytes(file);
+        AddEntryFromData(packedPath, data);
+    }
+
+    void TryAddProjectManifest(const std::string& projectJsonPath,
+                               bool includeProjectManifest,
+                               bool hasProjectJsonPath) {
+        if (!includeProjectManifest || !hasProjectJsonPath) {
+            return;
+        }
+
+        std::ifstream file(projectJsonPath, std::ios::binary);
+        std::vector<uint8_t> data = ReadStreamBytes(file);
+        AddEntryFromData("project.json", data);
+    }
+
+    void AddProjectAssets(const ProjectData& project, const fs::path& projectRoot) {
+        ForEachProjectAssetPath(project, [&](const std::string& relativePath) {
+            if (relativePath.empty()) {
+                return;
+            }
+            TryAddEntryFromDisk(projectRoot / relativePath, relativePath);
+        });
+    }
+
+    void AddExtraFiles(const std::vector<Serializer::PackedExtraFile>& extraFiles) {
+        for (const auto& extra : extraFiles) {
+            TryAddEntryFromDisk(extra.sourcePath, extra.packedPath);
+        }
+    }
+};
+
+std::vector<uint8_t> BuildDirectoryBlob(const std::vector<PackedEntryInfo>& packEntries,
+                                        uint64_t exeSize) {
+    std::vector<uint8_t> blob;
+    uint32_t count = (uint32_t)packEntries.size();
+    auto append = [&](const void* data, size_t size) {
+        const uint8_t* bytes = static_cast<const uint8_t*>(data);
+        blob.insert(blob.end(), bytes, bytes + size);
+    };
+
+    append(&count, sizeof(uint32_t));
+    for (const auto& entry : packEntries) {
+        uint32_t len = (uint32_t)entry.path.length();
+        append(&len, sizeof(uint32_t));
+        append(entry.path.data(), len);
+        uint64_t absOffset = exeSize + entry.offset;
+        append(&absOffset, sizeof(uint64_t));
+        append(&entry.size, sizeof(uint64_t));
+    }
+
+    return blob;
+}
+
+bool EnsureOutputDirectory(const std::string& outputPathText) {
+    std::error_code ec;
+    fs::path outputPath(outputPathText);
+    if (!outputPath.parent_path().empty()) {
+        fs::create_directories(outputPath.parent_path(), ec);
+        if (ec) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool WritePackedExecutable(const std::string& outputPathText,
+                           const std::vector<uint8_t>& executableData,
+                           const std::vector<uint8_t>& packedData,
+                           const std::vector<uint8_t>& directoryData) {
+    std::ofstream out(outputPathText, std::ios::binary);
+    if (!out.is_open()) {
+        return false;
+    }
+
+    out.write((const char*)executableData.data(), executableData.size());
+    out.write((const char*)packedData.data(), packedData.size());
+
+    uint64_t dirStartOffset = executableData.size() + packedData.size();
+    out.write((const char*)directoryData.data(), directoryData.size());
+
+    out.write((const char*)&dirStartOffset, sizeof(uint64_t));
+    const char MAGIC[] = "SHADERLAB_PACK";
+    out.write(MAGIC, 14);
+
+    out.flush();
+    return out.good();
 }
 
 } // namespace
@@ -156,6 +303,7 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
             {"bindings", s.bindings},
             {"outputType", s.outputType}
         };
+        if (!s.description.empty()) j["description"] = s.description;
         if (!s.shaderCodePath.empty()) j["codePath"] = s.shaderCodePath;
         if (!s.postFxChain.empty()) j["postfx"] = s.postFxChain;
         if (!s.precompiledPath.empty()) j["precompiled"] = s.precompiledPath;
@@ -163,6 +311,7 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
 
     void from_json(const json& j, Scene& s) {
         j.at("name").get_to(s.name);
+        if (j.contains("description")) j.at("description").get_to(s.description);
         if (j.contains("code")) j.at("code").get_to(s.shaderCode);
         if (j.contains("codePath")) j.at("codePath").get_to(s.shaderCodePath);
         j.at("bindings").get_to(s.bindings);
@@ -234,6 +383,9 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
             {"track", p.track},
             {"bpm", p.transport.bpm}
         };
+        if (!p.demoTitle.empty()) j["demoTitle"] = p.demoTitle;
+        if (!p.demoAuthor.empty()) j["demoAuthor"] = p.demoAuthor;
+        if (!p.demoDescription.empty()) j["demoDescription"] = p.demoDescription;
     }
     
     void from_json(const json& j, ProjectData& p) {
@@ -241,6 +393,9 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
         j.at("audio").get_to(p.audioLibrary);
         j.at("track").get_to(p.track);
         if(j.contains("bpm")) j.at("bpm").get_to(p.transport.bpm);
+        if(j.contains("demoTitle")) j.at("demoTitle").get_to(p.demoTitle);
+        if(j.contains("demoAuthor")) j.at("demoAuthor").get_to(p.demoAuthor);
+        if(j.contains("demoDescription")) j.at("demoDescription").get_to(p.demoDescription);
     }
 
 namespace Serializer {
@@ -471,12 +626,6 @@ namespace Serializer {
         return true;
     }
     
-    struct PackedEntryInfo {
-        std::string path;
-        uint64_t offset;
-        uint64_t size;
-    };
-
     bool PackExecutable(const std::string& sourceExe,
                         const std::string& outputExe,
                         const std::string& projectJsonPath,
@@ -485,8 +634,8 @@ namespace Serializer {
         // 1. Read Source EXE
         std::ifstream src(sourceExe, std::ios::binary);
         if (!src.is_open()) return false;
-        std::vector<uint8_t> exeData((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
-        src.close();
+
+        std::vector<uint8_t> exeData = ReadStreamBytes(src);
 
         // 2. Load Project to find assets
         ProjectData project;
@@ -495,186 +644,26 @@ namespace Serializer {
         if (loadProjectAssets && !LoadProject(projectJsonPath, project)) return false;
 
         // 3. Prepare Pack Data
-        std::vector<uint8_t> packBlob;
-        std::vector<PackedEntryInfo> entries;
-        
-        // Add project.json
-        if (includeProjectManifest && hasProjectJsonPath) {
-            std::ifstream f(projectJsonPath, std::ios::binary);
-            std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            PackedEntryInfo info;
-            info.path = "project.json";
-            info.offset = packBlob.size(); // Relative to start of PACK section
-            info.size = data.size();
-            entries.push_back(info);
-            packBlob.insert(packBlob.end(), data.begin(), data.end());
-        }
+        ExecutablePackAccumulator packAccumulator;
+        packAccumulator.TryAddProjectManifest(projectJsonPath, includeProjectManifest, hasProjectJsonPath);
 
-        // Add Assets (Audio)
+        const fs::path projectRoot = hasProjectJsonPath ? fs::path(projectJsonPath).parent_path() : fs::path();
+
         if (loadProjectAssets) {
-            for(const auto& clip : project.audioLibrary) {
-                fs::path p = fs::path(projectJsonPath).parent_path() / clip.path;
-                if (fs::exists(p)) {
-                     std::ifstream f(p, std::ios::binary);
-                     std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                     PackedEntryInfo info;
-                     info.path = clip.path; // Store relative path as used in JSON
-                     std::replace(info.path.begin(), info.path.end(), '\\', '/');
-                     info.offset = packBlob.size();
-                     info.size = data.size();
-                     entries.push_back(info);
-                     packBlob.insert(packBlob.end(), data.begin(), data.end());
-                }
-            }
+            packAccumulator.AddProjectAssets(project, projectRoot);
         }
-        
-        // Add Assets (Texture Bindings & Precompiled Shaders)
-        if (loadProjectAssets) {
-        for(const auto& scene : project.scenes) {
-            // Textures
-            for(const auto& bind : scene.bindings) {
-                if(bind.bindingType == BindingType::File && !bind.filePath.empty()) {
-                     fs::path p = fs::path(projectJsonPath).parent_path() / bind.filePath;
-                     // Simple duplicate check:
-                     bool found = false;
-                     std::string normPath = bind.filePath;
-                     std::replace(normPath.begin(), normPath.end(), '\\', '/');
-                     for(const auto& e : entries) if(e.path == normPath) found = true;
-                     
-                     if (!found && fs::exists(p)) {
-                         std::ifstream f(p, std::ios::binary);
-                         std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                         PackedEntryInfo info;
-                         info.path = normPath;
-                         info.offset = packBlob.size();
-                         info.size = data.size();
-                         entries.push_back(info);
-                         packBlob.insert(packBlob.end(), data.begin(), data.end());
-                     }
-                }
-            }
-            // Precompiled Shader
-            if (!scene.precompiledPath.empty()) {
-                fs::path p = fs::path(projectJsonPath).parent_path() / scene.precompiledPath;
-                bool found = false;
-                std::string normPath = scene.precompiledPath;
-                std::replace(normPath.begin(), normPath.end(), '\\', '/');
-                for(const auto& e : entries) if(e.path == normPath) found = true;
-
-                if (!found && fs::exists(p)) {
-                    std::ifstream f(p, std::ios::binary);
-                    std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                    PackedEntryInfo info;
-                    info.path = normPath;
-                    info.offset = packBlob.size();
-                    info.size = data.size();
-                    entries.push_back(info);
-                    packBlob.insert(packBlob.end(), data.begin(), data.end());
-                }
-            }
-
-            for (const auto& fx : scene.postFxChain) {
-                if (!fx.precompiledPath.empty()) {
-                    fs::path p = fs::path(projectJsonPath).parent_path() / fx.precompiledPath;
-                    bool found = false;
-                    std::string normPath = fx.precompiledPath;
-                    std::replace(normPath.begin(), normPath.end(), '\\', '/');
-                    for (const auto& e : entries) if (e.path == normPath) found = true;
-
-                    if (!found && fs::exists(p)) {
-                        std::ifstream f(p, std::ios::binary);
-                        std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                        PackedEntryInfo info;
-                        info.path = normPath;
-                        info.offset = packBlob.size();
-                        info.size = data.size();
-                        entries.push_back(info);
-                        packBlob.insert(packBlob.end(), data.begin(), data.end());
-                    }
-                }
-            }
-        }
-        }
-
-        for (const auto& extra : extraFiles) {
-            fs::path p = extra.sourcePath;
-            if (!fs::exists(p)) continue;
-
-            bool found = false;
-            std::string normPath = extra.packedPath;
-            std::replace(normPath.begin(), normPath.end(), '\\', '/');
-            for (const auto& e : entries) if (e.path == normPath) found = true;
-
-            if (!found) {
-                std::ifstream f(p, std::ios::binary);
-                std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                PackedEntryInfo info;
-                info.path = normPath;
-                info.offset = packBlob.size();
-                info.size = data.size();
-                entries.push_back(info);
-                packBlob.insert(packBlob.end(), data.begin(), data.end());
-            }
-        }
+        packAccumulator.AddExtraFiles(extraFiles);
 
         // 4. Create Directory Blob
-        // Format: Count(uint32) + [Len(u32)+Path+Offset(u64)+Size(u64)]...
-        std::vector<uint8_t> dirBlob;
-        uint32_t count = (uint32_t)entries.size();
-        auto append = [&](const void* d, size_t s) { 
-            const uint8_t* p = (const uint8_t*)d;
-            dirBlob.insert(dirBlob.end(), p, p+s); 
-        };
-        append(&count, sizeof(uint32_t));
-        
-        for(const auto& e : entries) {
-            uint32_t len = (uint32_t)e.path.length();
-            append(&len, sizeof(uint32_t));
-            append(e.path.data(), len);
-            // Offset stored in EXE will be: exeSize + blobOffset + packedOffset
-            // But wait, the Reader reads 'dirOffset' to find the directory table.
-            // The directory table entries contain offsets into the file.
-            // So we need absolute file offsets here!
-            
-            // packBlob stores the file content.
-            // packBlob starts at 'exeData.size()'.
-            // e.offset is relative to packBlob start.
-            // So absolute offset = exeData.size() + e.offset.
-            uint64_t absOffset = exeData.size() + e.offset;
-            append(&absOffset, sizeof(uint64_t));
-            append(&e.size, sizeof(uint64_t));
-        }
+        std::vector<uint8_t> dirBlob = BuildDirectoryBlob(packAccumulator.entries, exeData.size());
 
         // 5. Write Output EXE
         // Layout: [EXE][PACK_DATA][DIRECTORY_BLOB][DIR_OFFSET_U64][MAGIC]
-        {
-            std::error_code ec;
-            fs::path outputPath(outputExe);
-            if (!outputPath.parent_path().empty()) {
-                fs::create_directories(outputPath.parent_path(), ec);
-                if (ec) {
-                    return false;
-                }
-            }
+        if (!EnsureOutputDirectory(outputExe)) {
+            return false;
         }
 
-        std::ofstream out(outputExe, std::ios::binary);
-        if (!out.is_open()) return false;
-        
-        out.write((const char*)exeData.data(), exeData.size());
-        out.write((const char*)packBlob.data(), packBlob.size());
-        
-        // Directory location
-        uint64_t dirStartOffset = exeData.size() + packBlob.size(); 
-        out.write((const char*)dirBlob.data(), dirBlob.size());
-        
-        // Footer: DirOffset(u64) + Magic
-        out.write((const char*)&dirStartOffset, sizeof(uint64_t));
-        const char MAGIC[] = "SHADERLAB_PACK";
-        out.write(MAGIC, 14); // 14 bytes
-
-        out.flush();
-        return out.good();
+        return WritePackedExecutable(outputExe, exeData, packAccumulator.packBlob, dirBlob);
     }
 
     bool PackExecutable(const std::string& sourceExe, const std::string& outputExe, const std::string& projectJsonPath, const std::vector<PackedExtraFile>& extraFiles) {

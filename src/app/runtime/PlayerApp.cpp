@@ -1,4 +1,6 @@
 #include "ShaderLab/App/PlayerApp.h"
+#include "ShaderLab/Runtime/RuntimeStartupPolicy.h"
+#include "ShaderLab/Runtime/RuntimeWindowPolicy.h"
 
 #include "ShaderLab/App/DemoPlayer.h"
 #include "ShaderLab/Graphics/CommandQueue.h"
@@ -7,9 +9,6 @@
 
 #include <algorithm>
 #include <conio.h>
-#include <cstdio>
-#include <fstream>
-#include <functional>
 #include <memory>
 #include <string>
 #ifndef SHADERLAB_TINY_PLAYER
@@ -51,82 +50,53 @@ std::string WideToUtf8(const std::wstring& value) {
     return utf8;
 }
 
-std::string BuildSingleInstanceMutexName() {
-    char exePath[MAX_PATH] = {};
-    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) == 0) {
-        return "Local\\ShaderLabPlayerSingleInstance";
-    }
+struct RuntimeResources {
+    Device* device = nullptr;
+    Swapchain* swapchain = nullptr;
+    CommandQueue* commandQueue = nullptr;
+    DemoPlayer* player = nullptr;
+};
 
-    std::string path(exePath);
-    std::replace(path.begin(), path.end(), '\\', '/');
-    const size_t hashValue = std::hash<std::string>{}(path);
-    return "Local\\ShaderLabPlayerSingleInstance_" + std::to_string(hashValue);
-}
+RuntimeResources g_Resources;
 
-void AppendPlayerErrorLogLine(const std::string& message) {
-    char exePath[MAX_PATH] = {};
-    std::string logPath = "runtime_error.log";
-    const DWORD length = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-    if (length > 0 && length < MAX_PATH) {
-        std::string exe(exePath, length);
-        const size_t slash = exe.find_last_of("\\/");
-        if (slash != std::string::npos) {
-            logPath = exe.substr(0, slash + 1) + "runtime_error.log";
-        }
-    }
+struct RuntimeAppState {
+    bool debugConsole = false;
+    bool windowed = false;
+    bool screenSaverMode = false;
+    bool vsyncEnabled = true;
+    bool startFullscreen = true;
+    float lastMeasuredFps = 0.0f;
+    double fpsAccumSeconds = 0.0;
+    int fpsAccumFrames = 0;
+    std::string baseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo";
+    RECT windowedRect = { 0, 0, 1280, 720 };
+    POINT lastMousePos = { 0, 0 };
+    bool runtimeCursorHidden = false;
+};
 
-    std::ofstream logFile(logPath, std::ios::out | std::ios::app);
-    if (!logFile.is_open()) {
-        return;
-    }
-    logFile << message << "\n";
-}
+RuntimeAppState g_Runtime;
 
-Device* g_Device = nullptr;
-Swapchain* g_Swapchain = nullptr;
-CommandQueue* g_CommandQueue = nullptr;
-DemoPlayer* g_Player = nullptr;
-bool g_DebugConsole = false;
-bool g_Windowed = false;
-bool g_ScreenSaverMode = false;
-bool g_VsyncEnabled = true;
-bool g_StartFullscreen = true;
-float g_LastMeasuredFps = 0.0f;
-double g_FpsAccumSeconds = 0.0;
-int g_FpsAccumFrames = 0;
-std::string g_BaseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo";
-RECT g_WindowedRect = { 0, 0, 1280, 720 };
-POINT g_LastMousePos = { 0, 0 };
-bool g_RuntimeCursorHidden = false;
-
-void HideRuntimeCursor() {
-    if (g_RuntimeCursorHidden) {
-        return;
+void ShutdownRuntimeResources() {
+    if (g_Resources.commandQueue) {
+        g_Resources.commandQueue->WaitForGPU();
     }
-    while (ShowCursor(FALSE) >= 0) {
+    if (g_Resources.player) {
+        g_Resources.player->Shutdown();
+        delete g_Resources.player;
+        g_Resources.player = nullptr;
     }
-    g_RuntimeCursorHidden = true;
-}
-
-void RestoreRuntimeCursor() {
-    if (!g_RuntimeCursorHidden) {
-        return;
+    if (g_Resources.swapchain) {
+        delete g_Resources.swapchain;
+        g_Resources.swapchain = nullptr;
     }
-    while (ShowCursor(TRUE) < 0) {
+    if (g_Resources.commandQueue) {
+        delete g_Resources.commandQueue;
+        g_Resources.commandQueue = nullptr;
     }
-    g_RuntimeCursorHidden = false;
-}
-
-void EnableConsoleLogging() {
-#if !SHADERLAB_TINY_PLAYER
-    if (!AllocConsole()) return;
-    FILE* ignored = nullptr;
-    freopen_s(&ignored, "CONOUT$", "w", stdout);
-    freopen_s(&ignored, "CONOUT$", "w", stderr);
-    std::ios::sync_with_stdio(true);
-    std::cout.clear();
-    std::cerr.clear();
-#endif
+    if (g_Resources.device) {
+        delete g_Resources.device;
+        g_Resources.device = nullptr;
+    }
 }
 
 void ToggleWindowVisibility(HWND hwnd) {
@@ -136,102 +106,6 @@ void ToggleWindowVisibility(HWND hwnd) {
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
     }
-}
-
-void UpdateWindowTitleWithStats(HWND hwnd) {
-    if (!hwnd || g_ScreenSaverMode) {
-        return;
-    }
-
-    char title[512] = {};
-    std::snprintf(
-        title,
-        sizeof(title),
-        "%s | FPS: %.1f | VSync: %s | Fullscreen: %s",
-        g_BaseWindowTitle.c_str(),
-        g_LastMeasuredFps,
-        g_VsyncEnabled ? "On" : "Off",
-        g_Windowed ? "Windowed" : "Borderless");
-    SetWindowTextA(hwnd, title);
-}
-
-bool PresentInitialBlackFrame() {
-    if (!g_CommandQueue || !g_Swapchain) {
-        return false;
-    }
-
-    g_CommandQueue->ResetCommandList();
-    auto* cmdList = g_CommandQueue->GetCommandList();
-    if (!cmdList) {
-        return false;
-    }
-
-    auto* backBuffer = g_Swapchain->GetCurrentBackBuffer();
-    if (!backBuffer) {
-        return false;
-    }
-
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = backBuffer;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    cmdList->ResourceBarrier(1, &barrier);
-
-    auto rtv = g_Swapchain->GetCurrentRTV();
-    float clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
-    cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-    cmdList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    cmdList->ResourceBarrier(1, &barrier);
-
-    g_CommandQueue->ExecuteCommandList();
-    g_Swapchain->Present(true);
-    return true;
-}
-
-void SetFullscreen(HWND hwnd) {
-    if (!hwnd) {
-        return;
-    }
-
-    if (g_Windowed) {
-        GetWindowRect(hwnd, &g_WindowedRect);
-    }
-
-    g_Windowed = false;
-    DWORD style = WS_POPUP | WS_VISIBLE;
-    SetWindowLongPtr(hwnd, GWL_STYLE, style);
-    int screenW = GetSystemMetrics(SM_CXSCREEN);
-    int screenH = GetSystemMetrics(SM_CYSCREEN);
-    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, screenW, screenH, SWP_FRAMECHANGED);
-
-    UpdateWindowTitleWithStats(hwnd);
-}
-
-void SetWindowed(HWND hwnd) {
-    if (!hwnd) {
-        return;
-    }
-
-    g_Windowed = true;
-    DWORD style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-    SetWindowLongPtr(hwnd, GWL_STYLE, style);
-
-    int width = g_WindowedRect.right - g_WindowedRect.left;
-    int height = g_WindowedRect.bottom - g_WindowedRect.top;
-    if (width <= 0 || height <= 0) {
-        width = 1280;
-        height = 720;
-    }
-    int screenW = GetSystemMetrics(SM_CXSCREEN);
-    int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int x = (screenW - width) / 2;
-    int y = (screenH - height) / 2;
-    SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-
-    UpdateWindowTitleWithStats(hwnd);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -266,18 +140,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         return TRUE;
     }
 
-    if (g_ScreenSaverMode) {
+    if (g_Runtime.screenSaverMode) {
         switch (uMsg) {
             case WM_MOUSEMOVE: {
                 POINT p;
                 p.x = GET_X_LPARAM(lParam);
                 p.y = GET_Y_LPARAM(lParam);
-                const int dx = p.x - g_LastMousePos.x;
-                const int dy = p.y - g_LastMousePos.y;
+                const int dx = p.x - g_Runtime.lastMousePos.x;
+                const int dy = p.y - g_Runtime.lastMousePos.y;
                 if (dx > 2 || dx < -2 || dy > 2 || dy < -2) {
                     PostQuitMessage(0);
                 }
-                g_LastMousePos = p;
+                g_Runtime.lastMousePos = p;
                 break;
             }
             case WM_LBUTTONDOWN:
@@ -297,23 +171,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             PostQuitMessage(0);
             return 0;
         case WM_SYSKEYDOWN:
-            if (!g_ScreenSaverMode && wParam == VK_RETURN && (lParam & (1 << 29))) {
-                if (g_Windowed) {
-                    SetFullscreen(hwnd);
+            if (!g_Runtime.screenSaverMode && wParam == VK_RETURN && (lParam & (1 << 29))) {
+                if (g_Runtime.windowed) {
+                    RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                 } else {
-                    SetWindowed(hwnd);
+                    RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                 }
                 return 0;
             }
             break;
         case WM_SIZE:
-            if (g_Swapchain) {
+            if (g_Resources.swapchain) {
                 int w = LOWORD(lParam);
                 int h = HIWORD(lParam);
                 if (w > 0 && h > 0) {
-                    g_Swapchain->Resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-                    if (g_Player) {
-                        g_Player->OnResize(w, h);
+                    g_Resources.swapchain->Resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+                    if (g_Resources.player) {
+                        g_Resources.player->OnResize(w, h);
                     }
                 }
             }
@@ -325,34 +199,43 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 } // namespace
 
 int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
-    g_DebugConsole = options.debugConsole;
-    g_ScreenSaverMode = options.screenSaverMode;
-    g_VsyncEnabled = options.vsyncEnabled;
-    g_StartFullscreen = options.startFullscreen;
+    g_Runtime = RuntimeAppState{};
+    g_Runtime.debugConsole = options.debugConsole;
+    g_Runtime.screenSaverMode = options.screenSaverMode;
+    g_Runtime.vsyncEnabled = options.vsyncEnabled;
+    g_Runtime.startFullscreen = options.startFullscreen;
+    bool startupCompleted = false;
 
-    struct HandleCloser {
-        void operator()(void* handle) const {
-            if (handle) {
-                CloseHandle(static_cast<HANDLE>(handle));
+    struct StartupFailureGuard {
+        bool* completed = nullptr;
+
+        ~StartupFailureGuard() {
+            if (!completed || *completed) {
+                return;
             }
-        }
-    };
 
-    const std::string mutexName = BuildSingleInstanceMutexName();
-    std::unique_ptr<void, HandleCloser> singleInstanceMutex(
-        CreateMutexA(nullptr, FALSE, mutexName.c_str()));
+            ShutdownRuntimeResources();
+
+            RuntimeStartupPolicy::RestoreRuntimeCursor(g_Runtime.runtimeCursorHidden);
+        }
+    } startupFailureGuard{&startupCompleted};
+
+    bool singleInstanceAlreadyExists = false;
+    RuntimeStartupPolicy::UniqueHandle singleInstanceMutex = RuntimeStartupPolicy::CreateSingleInstanceMutex(singleInstanceAlreadyExists);
     if (!singleInstanceMutex) {
-        AppendPlayerErrorLogLine("Startup failed: CreateMutexA returned null.");
+#if !SHADERLAB_TINY_PLAYER
+        RuntimeStartupPolicy::EmitRuntimeError("E300", "startup mutex create failed");
+#endif
         return -1;
     }
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        AppendPlayerErrorLogLine("Startup skipped: single-instance mutex already exists.");
+    if (singleInstanceAlreadyExists) {
+        RuntimeStartupPolicy::AppendPlayerErrorLogLine("Startup skipped: single-instance mutex already exists.");
         return 0;
     }
 
-    if (g_DebugConsole) {
+    if (g_Runtime.debugConsole) {
         SetEnvironmentVariableA("SHADERLAB_DEBUG_CONSOLE", "1");
-        EnableConsoleLogging();
+        RuntimeStartupPolicy::EnableConsoleLogging();
     }
 
     const char CLASS_NAME[] = "ShaderLabPlayerWindow";
@@ -366,15 +249,15 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    const bool launchFullscreen = (!g_ScreenSaverMode && g_StartFullscreen);
+    const bool launchFullscreen = (!g_Runtime.screenSaverMode && g_Runtime.startFullscreen);
 
-    DWORD windowStyle = (g_ScreenSaverMode || launchFullscreen) ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-    int windowW = (g_ScreenSaverMode || launchFullscreen) ? screenW : 1280;
-    int windowH = (g_ScreenSaverMode || launchFullscreen) ? screenH : 720;
-    int windowX = (g_ScreenSaverMode || launchFullscreen) ? 0 : (screenW - windowW) / 2;
-    int windowY = (g_ScreenSaverMode || launchFullscreen) ? 0 : (screenH - windowH) / 2;
+    DWORD windowStyle = (g_Runtime.screenSaverMode || launchFullscreen) ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    int windowW = (g_Runtime.screenSaverMode || launchFullscreen) ? screenW : 1280;
+    int windowH = (g_Runtime.screenSaverMode || launchFullscreen) ? screenH : 720;
+    int windowX = (g_Runtime.screenSaverMode || launchFullscreen) ? 0 : (screenW - windowW) / 2;
+    int windowY = (g_Runtime.screenSaverMode || launchFullscreen) ? 0 : (screenH - windowH) / 2;
 
-    const DWORD exStyle = (g_ScreenSaverMode || launchFullscreen) ? WS_EX_TOPMOST : 0;
+    const DWORD exStyle = (g_Runtime.screenSaverMode || launchFullscreen) ? WS_EX_TOPMOST : 0;
 
     HWND hwnd = CreateWindowEx(
         exStyle,
@@ -391,7 +274,9 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
         nullptr);
 
     if (hwnd == nullptr) {
-        AppendPlayerErrorLogLine("Startup failed: CreateWindowEx returned null.");
+#if !SHADERLAB_TINY_PLAYER
+        RuntimeStartupPolicy::EmitRuntimeError("E301", "startup window create failed");
+#endif
         return 0;
     }
 
@@ -402,72 +287,99 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
         SetForegroundWindow(hwnd);
     }
 
-    HideRuntimeCursor();
+    RuntimeStartupPolicy::HideRuntimeCursor(g_Runtime.runtimeCursorHidden);
 
-    if (g_ScreenSaverMode) {
-        GetCursorPos(&g_LastMousePos);
-        ScreenToClient(hwnd, &g_LastMousePos);
+    if (g_Runtime.screenSaverMode) {
+        GetCursorPos(&g_Runtime.lastMousePos);
+        ScreenToClient(hwnd, &g_Runtime.lastMousePos);
     }
 
-    g_Device = new Device();
-    if (!g_Device->Initialize()) {
-        AppendPlayerErrorLogLine("Startup failed: Device initialization failed.");
-        RestoreRuntimeCursor();
+    g_Resources.device = new Device();
+    if (!g_Resources.device->Initialize()) {
+#if !SHADERLAB_TINY_PLAYER
+        const char* code = "E102";
+        const char* text = "device init failed";
+        switch (g_Resources.device->GetLastInitFailureCode()) {
+            case Device::InitFailureCode::FactoryCreateFailed:
+                code = "E100";
+                text = "dxgi factory create failed";
+                break;
+            case Device::InitFailureCode::AdapterSelectionFailed:
+                code = "E101";
+                text = "adapter selection failed";
+                break;
+            case Device::InitFailureCode::DeviceCreateFailed:
+                code = "E102";
+                text = "d3d12 device create failed";
+                break;
+            case Device::InitFailureCode::None:
+            default:
+                code = "E102";
+                text = "device init failed";
+                break;
+        }
+        RuntimeStartupPolicy::EmitRuntimeError(code, text);
+#endif
         return -1;
     }
 
 #if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
     {
-        const auto mem = g_Device->GetVideoMemoryInfo();
-        std::cout << "Video device: index=" << g_Device->GetAdapterIndex()
-                  << " name=\"" << WideToUtf8(g_Device->GetAdapterName()) << "\""
+        const auto mem = g_Resources.device->GetVideoMemoryInfo();
+        std::cout << "Video device: index=" << g_Resources.device->GetAdapterIndex()
+                  << " name=\"" << WideToUtf8(g_Resources.device->GetAdapterName()) << "\""
                   << " localMemUsage=" << mem.usage
                   << " budget=" << mem.budget
                   << std::endl;
     }
 #endif
 
-    g_CommandQueue = new CommandQueue();
-    if (!g_CommandQueue->Initialize(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT)) {
-        AppendPlayerErrorLogLine("Startup failed: CommandQueue initialization failed.");
-        RestoreRuntimeCursor();
+    g_Resources.commandQueue = new CommandQueue();
+    if (!g_Resources.commandQueue->Initialize(g_Resources.device, D3D12_COMMAND_LIST_TYPE_DIRECT)) {
+#if !SHADERLAB_TINY_PLAYER
+        RuntimeStartupPolicy::EmitRuntimeError("E103", "command queue init failed");
+#endif
         return -1;
     }
 
-    g_Swapchain = new Swapchain();
-    if (!g_Swapchain->Initialize(g_Device, g_CommandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) {
-        AppendPlayerErrorLogLine("Startup failed: Swapchain initialization failed.");
-        RestoreRuntimeCursor();
+    g_Resources.swapchain = new Swapchain();
+    if (!g_Resources.swapchain->Initialize(g_Resources.device, g_Resources.commandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) {
+#if !SHADERLAB_TINY_PLAYER
+        RuntimeStartupPolicy::EmitRuntimeError("E104", "swapchain init failed");
+#endif
         return -1;
     }
 
-    if (!g_ScreenSaverMode) {
-        if (g_StartFullscreen) {
-            SetFullscreen(hwnd);
+    if (!g_Runtime.screenSaverMode) {
+        if (g_Runtime.startFullscreen) {
+            RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
         } else {
-            SetWindowed(hwnd);
+            RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
         }
     }
 
     if (deferShowUntilFirstPresent) {
-        if (!PresentInitialBlackFrame()) {
-            AppendPlayerErrorLogLine("Startup warning: Initial black frame present failed; continuing.");
+        if (!RuntimeWindowPolicy::PresentInitialBlackFrame(g_Resources.commandQueue, g_Resources.swapchain)) {
+#if !SHADERLAB_TINY_PLAYER
+            RuntimeStartupPolicy::EmitRuntimeError("E105", "initial black frame present failed");
+#endif
         }
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         SetForegroundWindow(hwnd);
     }
 
-    const int runtimeWidth = static_cast<int>(g_Swapchain->GetWidth());
-    const int runtimeHeight = static_cast<int>(g_Swapchain->GetHeight());
-    g_Player = new DemoPlayer();
-    if (!g_Player->Initialize(hwnd, g_Device, g_Swapchain, runtimeWidth, runtimeHeight)) {
-        AppendPlayerErrorLogLine("Startup failed: DemoPlayer initialization failed.");
-        RestoreRuntimeCursor();
+    const int runtimeWidth = static_cast<int>(g_Resources.swapchain->GetWidth());
+    const int runtimeHeight = static_cast<int>(g_Resources.swapchain->GetHeight());
+    g_Resources.player = new DemoPlayer();
+    if (!g_Resources.player->Initialize(hwnd, g_Resources.device, g_Resources.swapchain, runtimeWidth, runtimeHeight)) {
+#if !SHADERLAB_TINY_PLAYER
+        RuntimeStartupPolicy::EmitRuntimeError("E106", "demo player init failed");
+#endif
         return -1;
     }
-    g_Player->SetLooping(options.loopPlayback);
-    g_Player->SetVsyncEnabled(g_VsyncEnabled);
+    g_Resources.player->SetLooping(options.loopPlayback);
+    g_Resources.player->SetVsyncEnabled(g_Runtime.vsyncEnabled);
 
 #if SHADERLAB_TINY_PLAYER
     const std::string projectPath = "assets/track.bin";
@@ -489,15 +401,15 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     }
 #endif
 
-    if (!g_ScreenSaverMode) {
-        g_BaseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
-        UpdateWindowTitleWithStats(hwnd);
+    if (!g_Runtime.screenSaverMode) {
+        g_Runtime.baseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
+        RuntimeWindowPolicy::UpdateWindowTitleWithStats(hwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
     }
 
     #if !SHADERLAB_TINY_PLAYER
     std::cout << "Loading project: " << projectPath << std::endl;
     #endif
-    g_Player->LoadProject(projectPath);
+    g_Resources.player->LoadProject(projectPath);
 
     MSG msg = {};
     LARGE_INTEGER freq, lastTime, currTime;
@@ -513,15 +425,15 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
                 PostQuitMessage(0);
             }
 
-            if (msg.message == WM_KEYDOWN && g_DebugConsole && !g_ScreenSaverMode) {
+            if (msg.message == WM_KEYDOWN && g_Runtime.debugConsole && !g_Runtime.screenSaverMode) {
                 bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
                 if (alt && msg.wParam == 'H') {
                     ToggleWindowVisibility(hwnd);
                 } else if (alt && msg.wParam == 'W') {
-                    if (!g_Windowed) {
-                        SetWindowed(hwnd);
+                    if (!g_Runtime.windowed) {
+                        RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                     } else {
-                        SetFullscreen(hwnd);
+                        RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                     }
                 }
             }
@@ -530,12 +442,12 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
             double dt = static_cast<double>(currTime.QuadPart - lastTime.QuadPart) / static_cast<double>(freq.QuadPart);
             lastTime = currTime;
 
-            g_Player->Update(0.0, static_cast<float>(dt));
+            g_Resources.player->Update(0.0, static_cast<float>(dt));
 
-            g_CommandQueue->ResetCommandList();
-            auto cmdList = g_CommandQueue->GetCommandList();
+            g_Resources.commandQueue->ResetCommandList();
+            auto cmdList = g_Resources.commandQueue->GetCommandList();
 
-            auto* backBuffer = g_Swapchain->GetCurrentBackBuffer();
+            auto* backBuffer = g_Resources.swapchain->GetCurrentBackBuffer();
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barrier.Transition.pResource = backBuffer;
@@ -543,52 +455,44 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
             cmdList->ResourceBarrier(1, &barrier);
 
-            auto rtv = g_Swapchain->GetCurrentRTV();
+            auto rtv = g_Resources.swapchain->GetCurrentRTV();
             float clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
             cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
             cmdList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 
-            g_Player->Render(cmdList, backBuffer, rtv);
+            g_Resources.player->Render(cmdList, backBuffer, rtv);
 
-            g_VsyncEnabled = g_Player->IsVsyncEnabled();
+            g_Runtime.vsyncEnabled = g_Resources.player->IsVsyncEnabled();
 
             std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
             cmdList->ResourceBarrier(1, &barrier);
 
-            g_CommandQueue->ExecuteCommandList();
-            g_Swapchain->Present(g_VsyncEnabled);
-            g_CommandQueue->WaitForGPU();
+            g_Resources.commandQueue->ExecuteCommandList();
+            g_Resources.swapchain->Present(g_Runtime.vsyncEnabled);
+            g_Resources.commandQueue->WaitForGPU();
 
-            g_FpsAccumSeconds += dt;
-            g_FpsAccumFrames += 1;
-            if (g_FpsAccumSeconds >= 0.25) {
-                g_LastMeasuredFps = static_cast<float>(g_FpsAccumFrames / g_FpsAccumSeconds);
-                g_FpsAccumSeconds = 0.0;
-                g_FpsAccumFrames = 0;
-                UpdateWindowTitleWithStats(hwnd);
+            g_Runtime.fpsAccumSeconds += dt;
+            g_Runtime.fpsAccumFrames += 1;
+            if (g_Runtime.fpsAccumSeconds >= 0.25) {
+                g_Runtime.lastMeasuredFps = static_cast<float>(g_Runtime.fpsAccumFrames / g_Runtime.fpsAccumSeconds);
+                g_Runtime.fpsAccumSeconds = 0.0;
+                g_Runtime.fpsAccumFrames = 0;
+                RuntimeWindowPolicy::UpdateWindowTitleWithStats(hwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
             }
         }
     }
 
-    g_CommandQueue->WaitForGPU();
-    g_Player->Shutdown();
-    delete g_Player;
-    delete g_Swapchain;
-    delete g_CommandQueue;
-    delete g_Device;
-    g_Player = nullptr;
-    g_Swapchain = nullptr;
-    g_CommandQueue = nullptr;
-    g_Device = nullptr;
+    ShutdownRuntimeResources();
 
-    RestoreRuntimeCursor();
+    RuntimeStartupPolicy::RestoreRuntimeCursor(g_Runtime.runtimeCursorHidden);
 
-    if (g_DebugConsole) {
+    if (g_Runtime.debugConsole) {
 #if !SHADERLAB_TINY_PLAYER
         std::cout << "Press any key to exit..." << std::endl;
         _getch();
 #endif
     }
+    startupCompleted = true;
     return 0;
 }
 

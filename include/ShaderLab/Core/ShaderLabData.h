@@ -67,6 +67,7 @@ struct Transport { // Renamed from PreviewTransport for genera use
 
 struct Scene {
     std::string name;
+    std::string description;
     std::string shaderCode;
     std::string shaderCodePath;
     std::vector<TextureBinding> bindings;
@@ -121,6 +122,9 @@ struct ProjectData {
     std::vector<AudioClip> audioLibrary;
     DemoTrack track;
     Transport transport;
+    std::string demoTitle;
+    std::string demoAuthor;
+    std::string demoDescription;
 };
 
 }

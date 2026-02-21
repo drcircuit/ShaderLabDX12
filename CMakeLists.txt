@@ -38,75 +38,6 @@ if(NOT WIN32)
     message(FATAL_ERROR "ShaderLab currently supports Windows only")
 endif()
 
-if(SHADERLAB_BUILD_MICRO_PLAYER)
-    add_executable(ShaderLabMicroPlayer WIN32
-        src/app/runtime/main_player.cpp
-        src/app/runtime/PlayerApp.cpp
-        src/app/runtime/DemoPlayer.cpp
-        include/ShaderLab/App/DemoPlayer.h
-        include/ShaderLab/App/PlayerApp.h
-    )
-
-    target_link_libraries(ShaderLabMicroPlayer PRIVATE ShaderLabCore)
-
-    target_include_directories(ShaderLabMicroPlayer PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-
-    if(MSVC)
-        target_compile_options(ShaderLabMicroPlayer PRIVATE
-            /W4
-            /WX-
-            /Os
-            /Oy
-            /Oi
-            /GS-
-            /GR-
-            /Gy
-            /Gw
-            /GF
-            /Zc:threadSafeInit-
-        )
-
-        if(SHADERLAB_USE_CRINKLER)
-            target_link_options(ShaderLabMicroPlayer PRIVATE
-                /ENTRY:WinMain
-                /INCREMENTAL:NO
-                /MANIFEST:NO
-                /RELEASE
-                /COMPMODE:FAST
-                /HASHSIZE:${SHADERLAB_CRINKLER_HASH_SIZE_MB}
-                /HASHTRIES:${SHADERLAB_CRINKLER_HASH_TRIES}
-                /ORDERTRIES:${SHADERLAB_CRINKLER_ORDER_TRIES}
-                /UNALIGNCODE
-            )
-            if(NOT SHADERLAB_STATIC_RUNTIME)
-                target_link_libraries(ShaderLabMicroPlayer PRIVATE
-                    msvcprt
-                    msvcrt
-                    vcruntime
-                    ucrt
-                    legacy_stdio_definitions
-                    oldnames
-                )
-            endif()
-            if(SHADERLAB_CRINKLER_TINYIMPORT)
-                target_link_options(ShaderLabMicroPlayer PRIVATE /TINYIMPORT)
-            endif()
-        else()
-            target_link_options(ShaderLabMicroPlayer PRIVATE
-                /INCREMENTAL:NO
-                /OPT:REF
-                /OPT:ICF
-                /LTCG
-                /MANIFEST:NO
-                /RELEASE
-            )
-        endif()
-
-    endif()
-endif()
-
 if(MSVC AND SHADERLAB_STATIC_RUNTIME)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -121,6 +52,28 @@ if(MSVC AND SHADERLAB_USE_CRINKLER)
     endif()
 endif()
 
+function(shaderlab_assert_target_has_no_sources target)
+    if(NOT TARGET ${target})
+        return()
+    endif()
+
+    get_target_property(_sources ${target} SOURCES)
+    if(NOT _sources)
+        return()
+    endif()
+
+    foreach(_source IN LISTS _sources)
+        file(TO_CMAKE_PATH "${_source}" _source_norm)
+        foreach(_forbidden IN LISTS ARGN)
+            string(FIND "${_source_norm}" "${_forbidden}" _match)
+            if(NOT _match EQUAL -1)
+                message(FATAL_ERROR
+                    "Layering violation: target '${target}' contains forbidden source '${_source_norm}' (matched '${_forbidden}').")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
 # Third-party dependencies
 add_subdirectory(third_party)
 
@@ -134,28 +87,11 @@ set(SHADERLAB_CORE_RUNTIME_SOURCES
     src/audio/BeatClock.cpp
     src/core/Serializer.cpp
     src/core/PackageManager.cpp
+    src/audio/AudioSystem.cpp
 )
 
-if(NOT SHADERLAB_TINY_PLAYER OR SHADERLAB_BUILD_EDITOR)
-    list(APPEND SHADERLAB_CORE_RUNTIME_SOURCES
-        src/audio/AudioSystem.cpp
-    )
-endif()
 
-set(SHADERLAB_CORE_EDITOR_SOURCES
-    src/ui/UISystem.cpp
-    src/ui/UISystem.Project.cpp
-    src/ui/UISystem.Demo.cpp
-    src/ui/UISystem.Render.cpp
-    src/ui/UISystem.Editor.cpp
-    src/ui/UISystemAssets.cpp
-    src/ui/UISystem.About.cpp
-    src/core/BuildPipeline.cpp
-    src/core/RuntimeExporter.cpp
-    third_party/ImGuiColorTextEdit/TextEditor.cpp
-)
-
-set(SHADERLAB_CORE_HEADER_SOURCES
+set(SHADERLAB_COREAPI_HEADER_SOURCES
     include/ShaderLab/Graphics/Device.h
     include/ShaderLab/Graphics/Swapchain.h
     include/ShaderLab/Graphics/CommandQueue.h
@@ -163,32 +99,43 @@ set(SHADERLAB_CORE_HEADER_SOURCES
     include/ShaderLab/Shader/ShaderCompiler.h
     include/ShaderLab/Audio/AudioSystem.h
     include/ShaderLab/Audio/BeatClock.h
-    include/ShaderLab/UI/UISystem.h
     include/ShaderLab/Core/Serializer.h
-    include/ShaderLab/Core/BuildPipeline.h
-    include/ShaderLab/Core/RuntimeExporter.h
     include/ShaderLab/Core/PackageManager.h
     include/ShaderLab/Core/ShaderLabData.h
+)
+
+set(SHADERLAB_PLAYER_RUNTIME_SOURCES
+    src/app/runtime/DemoPlayer.cpp
+    src/app/runtime/PlayerApp.cpp
+    src/app/runtime/RuntimeStartupPolicy.cpp
+    src/app/runtime/RuntimeWindowPolicy.cpp
+    include/ShaderLab/App/DemoPlayer.h
     include/ShaderLab/App/PlayerApp.h
+    include/ShaderLab/Runtime/RuntimeStartupPolicy.h
+    include/ShaderLab/Runtime/RuntimeWindowPolicy.h
+)
+
+set(SHADERLAB_DEVKIT_BUILDTOOLS_SOURCES
+    src/core/BuildPipeline.cpp
+    src/core/RuntimeExporter.cpp
+    include/ShaderLab/DevKit/BuildPipeline.h
+    include/ShaderLab/DevKit/RuntimeExporter.h
+)
+
+set(SHADERLAB_EDITORLIB_SOURCES
+    src/ui/UISystem.cpp
+    src/ui/UISystem.Project.cpp
+    src/ui/UISystem.Demo.cpp
+    src/ui/UISystem.Render.cpp
+    src/ui/UISystem.Editor.cpp
+    src/ui/UISystemAssets.cpp
+    src/ui/UISystem.About.cpp
+    third_party/ImGuiColorTextEdit/TextEditor.cpp
+    include/ShaderLab/UI/UISystem.h
     third_party/ImGuiColorTextEdit/TextEditor.h
 )
 
-set(SHADERLAB_CORE_SOURCES ${SHADERLAB_CORE_RUNTIME_SOURCES} ${SHADERLAB_CORE_HEADER_SOURCES})
-if(SHADERLAB_BUILD_EDITOR)
-    list(APPEND SHADERLAB_CORE_SOURCES ${SHADERLAB_CORE_EDITOR_SOURCES})
-endif()
-
-add_library(ShaderLabCore STATIC ${SHADERLAB_CORE_SOURCES})
-
-if(MSVC)
-    set_source_files_properties(
-        third_party/ImGuiColorTextEdit/TextEditor.cpp
-        PROPERTIES
-        COMPILE_OPTIONS "/wd4101;/wd4244"
-    )
-endif()
-
-target_include_directories(ShaderLabCore PUBLIC
+set(SHADERLAB_COMMON_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include
@@ -196,107 +143,137 @@ target_include_directories(ShaderLabCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ImGuiColorTextEdit
 )
 
-if(NOT SHADERLAB_TINY_PLAYER OR SHADERLAB_BUILD_EDITOR)
-    target_include_directories(ShaderLabCore PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
-    )
-endif()
+add_library(ShaderLabCoreApi STATIC
+    ${SHADERLAB_CORE_RUNTIME_SOURCES}
+    ${SHADERLAB_COREAPI_HEADER_SOURCES}
+)
 
-# Link D3D12 and related Windows libraries
-target_link_libraries(ShaderLabCore PUBLIC
+target_include_directories(ShaderLabCoreApi PUBLIC
+    ${SHADERLAB_COMMON_INCLUDE_DIRS}
+)
+
+target_include_directories(ShaderLabCoreApi PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+)
+
+target_link_libraries(ShaderLabCoreApi PUBLIC
     d3d12.lib
     dxgi.lib
     dxguid.lib
     d3dcompiler.lib
 )
 
-# ImGui integration
 if(SHADERLAB_BUILD_EDITOR OR (SHADERLAB_BUILD_RUNTIME AND SHADERLAB_RUNTIME_IMGUI))
-    target_link_libraries(ShaderLabCore PUBLIC imgui)
+    target_link_libraries(ShaderLabCoreApi PUBLIC imgui)
+endif()
+
+add_library(ShaderLabDevKit STATIC ${SHADERLAB_PLAYER_RUNTIME_SOURCES})
+
+target_include_directories(ShaderLabDevKit PUBLIC
+    ${SHADERLAB_COMMON_INCLUDE_DIRS}
+)
+
+target_include_directories(ShaderLabDevKit PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+)
+
+target_link_libraries(ShaderLabDevKit PUBLIC
+    d3d12.lib
+    dxgi.lib
+    dxguid.lib
+    d3dcompiler.lib
+)
+
+if(SHADERLAB_BUILD_EDITOR OR (SHADERLAB_BUILD_RUNTIME AND SHADERLAB_RUNTIME_IMGUI))
+    target_link_libraries(ShaderLabDevKit PUBLIC imgui)
 endif()
 
 if(SHADERLAB_RUNTIME_IMGUI)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_RUNTIME_IMGUI=1)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_RUNTIME_IMGUI=1)
 else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_RUNTIME_IMGUI=0)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_RUNTIME_IMGUI=0)
 endif()
 
 if(SHADERLAB_COMPACT_TRACK_DEBUG)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_COMPACT_TRACK_DEBUG=1)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_COMPACT_TRACK_DEBUG=1)
 else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_COMPACT_TRACK_DEBUG=0)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_COMPACT_TRACK_DEBUG=0)
 endif()
 
 if(SHADERLAB_RUNTIME_DEBUG_LOG)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_RUNTIME_DEBUG_LOG=1)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_RUNTIME_DEBUG_LOG=1)
 else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_RUNTIME_DEBUG_LOG=0)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_RUNTIME_DEBUG_LOG=0)
 endif()
 
-if(SHADERLAB_TINY_PLAYER)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_PLAYER=1)
+target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_TINY_PLAYER=0)
+
+target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_TINY_RUNTIME_COMPILE=0)
+
+target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_TINY_TRACE=0)
+
+target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_TINY_DEV_OVERLAY=0)
+
+if(SHADERLAB_ENABLE_DXC)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_ENABLE_DXC=1)
 else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_PLAYER=0)
+    target_compile_definitions(ShaderLabDevKit PUBLIC SHADERLAB_ENABLE_DXC=0)
 endif()
 
-if(SHADERLAB_TINY_RUNTIME_COMPILE)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_RUNTIME_COMPILE=1)
-else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_RUNTIME_COMPILE=0)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(ShaderLabDevKit PUBLIC
+        SHADERLAB_DEBUG=1
+        SHADERLAB_VALIDATION=1
+    )
 endif()
 
-if(SHADERLAB_TINY_TRACE)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_TRACE=1)
-else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_TRACE=0)
-endif()
-
-if(SHADERLAB_TINY_DEV_OVERLAY)
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_DEV_OVERLAY=1)
-else()
-    target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_TINY_DEV_OVERLAY=0)
-endif()
-
-# Compiler flags
 if(MSVC)
-    target_compile_options(ShaderLabCore PRIVATE
-        /W4           # Warning level 4
-        /WX-          # Don't treat warnings as errors (for now)
-        /permissive-  # Standards conformance
+    target_compile_options(ShaderLabDevKit PRIVATE
+        /W4
+        /WX-
+        /permissive-
         /Zc:__cplusplus
     )
+endif()
 
-    if(SHADERLAB_ENABLE_DXC)
-        target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_ENABLE_DXC=1)
-    else()
-        target_compile_definitions(ShaderLabCore PUBLIC SHADERLAB_ENABLE_DXC=0)
-    endif()
-    
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_definitions(ShaderLabCore PUBLIC
-            SHADERLAB_DEBUG=1
-            SHADERLAB_VALIDATION=1
-        )
-    else()
-        target_compile_options(ShaderLabCore PRIVATE /O2)
-        if(NOT SHADERLAB_USE_CRINKLER)
-            target_compile_options(ShaderLabCore PRIVATE /GL) # Whole program optimization
-        endif()
-    endif()
+add_library(ShaderLabDevKitBuildTools STATIC ${SHADERLAB_DEVKIT_BUILDTOOLS_SOURCES})
 
-    if(SHADERLAB_TINY_PLAYER)
-        target_compile_options(ShaderLabCore PRIVATE
-            /Os
-            /Oy
-            /Oi
-            /GS-
-            /GR-
-            /Gy
-            /Gw
-            /GF
-            /Zc:threadSafeInit-
-        )
-    endif()
+target_include_directories(ShaderLabDevKitBuildTools PUBLIC
+    ${SHADERLAB_COMMON_INCLUDE_DIRS}
+)
+
+target_include_directories(ShaderLabDevKitBuildTools PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+)
+
+target_link_libraries(ShaderLabDevKitBuildTools PUBLIC ShaderLabCoreApi)
+
+if(SHADERLAB_BUILD_EDITOR)
+    add_library(ShaderLabEditorLib STATIC ${SHADERLAB_EDITORLIB_SOURCES})
+
+    target_include_directories(ShaderLabEditorLib PUBLIC
+        ${SHADERLAB_COMMON_INCLUDE_DIRS}
+    )
+
+    target_include_directories(ShaderLabEditorLib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+    )
+
+    target_link_libraries(ShaderLabEditorLib PUBLIC
+        d3d12.lib
+        dxgi.lib
+        dxguid.lib
+        d3dcompiler.lib
+        imgui
+    )
+endif()
+
+if(MSVC)
+    set_source_files_properties(
+        third_party/ImGuiColorTextEdit/TextEditor.cpp
+        PROPERTIES
+        COMPILE_OPTIONS "/wd4101;/wd4244"
+    )
 endif()
 
 # Editor executable
@@ -308,7 +285,7 @@ if(SHADERLAB_BUILD_EDITOR)
         include/ShaderLab/App/EditorApp.h
     )
     
-    target_link_libraries(ShaderLabEditor PRIVATE ShaderLabCore)
+    target_link_libraries(ShaderLabEditor PRIVATE ShaderLabEditorLib ShaderLabDevKitBuildTools ShaderLabCoreApi)
     
     target_include_directories(ShaderLabEditor PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -324,9 +301,32 @@ if(SHADERLAB_BUILD_EDITOR)
         COMMAND ${CMAKE_COMMAND} -E remove_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/editor_assets $<TARGET_FILE_DIR:ShaderLabEditor>/editor_assets
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party
+
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/App $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/App
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Audio $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/Audio
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Core $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/Core
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/DevKit $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/DevKit
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Graphics $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/Graphics
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Runtime $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/Runtime
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Shader $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/include/ShaderLab/Shader
+
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/app/runtime $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/app/runtime
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/app/tiny $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/app/tiny
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/audio $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/audio
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/core $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/core
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/graphics $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/graphics
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/shader $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/src/shader
+
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/third_party/CMakeLists.txt $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/CMakeLists.txt
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/imgui
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/json
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/miniaudio
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/stb
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Crinkler.exe $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/third_party/Crinkler.exe
+
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/templates/Standalone_CMakeLists.txt $<TARGET_FILE_DIR:ShaderLabEditor>/dev_kit/CMakeLists.txt
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderLabEditor>/editor_assets/fonts
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -370,7 +370,7 @@ if(SHADERLAB_BUILD_EDITOR)
         src/app/tools/build_cli.cpp
     )
 
-    target_link_libraries(ShaderLabBuildCli PRIVATE ShaderLabCore)
+    target_link_libraries(ShaderLabBuildCli PRIVATE ShaderLabDevKitBuildTools ShaderLabCoreApi)
 
     target_include_directories(ShaderLabBuildCli PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -381,13 +381,10 @@ endif()
 if(SHADERLAB_BUILD_RUNTIME)
     add_executable(ShaderLabPlayer WIN32
         src/app/runtime/main_player.cpp
-        src/app/runtime/PlayerApp.cpp
-        src/app/runtime/DemoPlayer.cpp
-        include/ShaderLab/App/DemoPlayer.h
         include/ShaderLab/App/PlayerApp.h
     )
     
-    target_link_libraries(ShaderLabPlayer PRIVATE ShaderLabCore)
+    target_link_libraries(ShaderLabPlayer PRIVATE ShaderLabDevKit ShaderLabCoreApi)
     
     target_include_directories(ShaderLabPlayer PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -417,13 +414,10 @@ if(SHADERLAB_BUILD_RUNTIME)
 
     add_executable(ShaderLabScreenSaver WIN32
         src/app/runtime/main_screensaver.cpp
-        src/app/runtime/PlayerApp.cpp
-        src/app/runtime/DemoPlayer.cpp
-        include/ShaderLab/App/DemoPlayer.h
         include/ShaderLab/App/PlayerApp.h
     )
 
-    target_link_libraries(ShaderLabScreenSaver PRIVATE ShaderLabCore)
+    target_link_libraries(ShaderLabScreenSaver PRIVATE ShaderLabDevKit ShaderLabCoreApi)
 
     target_include_directories(ShaderLabScreenSaver PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -453,3 +447,41 @@ if(SHADERLAB_BUILD_RUNTIME)
         endif()
     endif()
 endif()
+
+if(SHADERLAB_BUILD_MICRO_PLAYER)
+    add_subdirectory(src/app/tiny)
+endif()
+
+shaderlab_assert_target_has_no_sources(ShaderLabDevKit
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp"
+    "src/ui/")
+
+shaderlab_assert_target_has_no_sources(ShaderLabDevKitBuildTools
+    "src/app/runtime/"
+    "src/ui/")
+
+shaderlab_assert_target_has_no_sources(ShaderLabEditorLib
+    "src/app/runtime/"
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp")
+
+shaderlab_assert_target_has_no_sources(ShaderLabEditor
+    "src/app/runtime/"
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp")
+
+shaderlab_assert_target_has_no_sources(ShaderLabPlayer
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp"
+    "src/ui/")
+
+shaderlab_assert_target_has_no_sources(ShaderLabScreenSaver
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp"
+    "src/ui/")
+
+shaderlab_assert_target_has_no_sources(ShaderLabMicroPlayer
+    "src/core/BuildPipeline.cpp"
+    "src/core/RuntimeExporter.cpp"
+    "src/ui/")

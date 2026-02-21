@@ -13,6 +13,13 @@ namespace ShaderLab {
 
 class Device {
 public:
+    enum class InitFailureCode {
+        None = 0,
+        FactoryCreateFailed,
+        AdapterSelectionFailed,
+        DeviceCreateFailed
+    };
+
     Device();
     ~Device();
 
@@ -43,6 +50,7 @@ public:
 
     std::wstring GetAdapterName() const { return m_adapterName; }
     int GetAdapterIndex() const { return m_adapterIndex; }
+    InitFailureCode GetLastInitFailureCode() const { return m_lastInitFailureCode; }
 
 private:
     ComPtr<IDXGIFactory4> m_factory;
@@ -52,6 +60,7 @@ private:
 
     std::wstring m_adapterName;
     int m_adapterIndex = -1;
+    InitFailureCode m_lastInitFailureCode = InitFailureCode::None;
 
     bool m_validationEnabled = false;
 };

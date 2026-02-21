@@ -78,6 +78,25 @@ When changing build/export behavior, preserve and document:
 - open/free preset: full runtime + x64,
 - runtime/compact debug flags default OFF for size-sensitive outputs.
 
+## Boundary Rules (Required)
+
+When contributing to editor/UI code (`src/app/editor/*`, `src/ui/*`, `include/ShaderLab/UI/*`):
+
+- Use stable API surfaces only:
+	- `ShaderLab/DevKit/*`
+	- `ShaderLab/Core/*`
+	- `ShaderLab/Graphics/*`, `ShaderLab/Audio/*`, `ShaderLab/Shader/*`
+- Do not include runtime-internal app/runtime headers:
+	- `ShaderLab/App/PlayerApp.h`
+	- `ShaderLab/App/DemoPlayer.h`
+	- `ShaderLab/App/Runtime*`
+	- `ShaderLab/Runtime/*`
+	- direct `src/app/runtime/*` includes
+
+Enforcement:
+- Local: `tools/check.ps1` includes an **Editor Include Boundary** gate.
+- CI: `.github/workflows/validate.yml` runs the same checks on PRs and pushes.
+
 ## Code Guidelines
 
 - Use C++20 and existing project style.

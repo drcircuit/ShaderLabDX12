@@ -57,6 +57,7 @@ third_party/*
 !third_party/README.md
 !third_party/CMakeLists.txt
 !third_party/ImGuiColorTextEdit/
+!third_party/Crinkler.exe
 
 # Temporary files
 *.tmp
