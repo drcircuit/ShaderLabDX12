@@ -122,6 +122,16 @@ jobs:
               -OutFile $stb -UseBasicParsing
           }
 
+          # ---- OpenFontIcons ----------------------------------------------
+          $openFontIconsTtf = "$tp\OpenFontIcons\OpenFontIcons.ttf"
+          if (-not (Test-Path $openFontIconsTtf)) {
+            Write-Host "Downloading OpenFontIcons..."
+            New-Item -ItemType Directory -Force -Path "$tp\OpenFontIcons" | Out-Null
+            Invoke-WebRequest `
+              -Uri "https://github.com/traverseda/OpenFontIcons/raw/master/OpenFontIcons.ttf" `
+              -OutFile $openFontIconsTtf -UseBasicParsing
+          }
+
       # ── Configure & build ─────────────────────────────────────────────────
       - name: Configure (Release)
         shell: pwsh

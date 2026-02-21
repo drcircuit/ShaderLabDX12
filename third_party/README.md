@@ -37,7 +37,7 @@ This directory contains third-party libraries used by ShaderLab.
 
 ### OpenFontIcons
 - **License**: MIT (see `third_party/OpenFontIcons/LICENSE`)
-- **Source**: https://github.com/AlexisDH/OpenFontIcons
+- **Source**: https://github.com/traverseda/OpenFontIcons
 - **Usage**: Icon glyph font for editor UI symbols
 - **Integration**: Vendored under `third_party/OpenFontIcons/`
 
