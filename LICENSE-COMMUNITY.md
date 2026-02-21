@@ -6,7 +6,7 @@ Copyright (c) 2026 ShaderLab Contributors
 
 ## Terms and Conditions
 
-This Community License applies to the ShaderLab engine and editor source code (the "Software").
+This Community License applies to the ShaderLab engine and editor source code (the "Software"). It is intended to be a mix of the MIT and CC licenses. 
 
 ### Permitted Uses
 As long as you give ShaderLab and me (DrCiRCUiT) credit - can be in an NFO file, onstage shoutout, or if you are feeling generous, a credit in your demo! 
