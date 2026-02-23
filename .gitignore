@@ -76,3 +76,5 @@ preprocessed.txt
 _codeql_detected_source_root
 .tmp_*.bat
 *.shaderlab.user.json
+imgui.ini
+.shaderlab/

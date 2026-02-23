@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <unordered_map>
 
 using Microsoft::WRL::ComPtr;
 
@@ -39,18 +40,25 @@ private:
     bool CompileScene(int sceneIndex);
     void EnsureSceneTexture(int sceneIndex);
     void RenderScene(ID3D12GraphicsCommandList* commandList, int sceneIndex, double time);
-    std::string GetTransitionShader(TransitionType type);
+    std::string GetTransitionShader(const std::string& transitionPresetStem);
     void EnsurePostFxResources(Scene& scene);
     void EnsurePostFxHistory(Scene::PostFXEffect& effect);
     bool CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex);
+    bool CompileComputeEffect(Scene::ComputeEffect& effect, int sceneIndex, int computeIndex);
     ID3D12Resource* ApplyPostFxChain(ID3D12GraphicsCommandList* commandList,
                                     Scene& scene,
                                     ID3D12Resource* inputTexture,
                                     double timeSeconds);
+    void EnsureComputeHistory(Scene::ComputeEffect& effect);
+    ID3D12Resource* ApplyComputeChain(ID3D12GraphicsCommandList* commandList,
+                                     int sceneIndex,
+                                     std::vector<Scene::ComputeEffect>& chain,
+                                     ID3D12Resource* inputTexture,
+                                     double timeSeconds);
     ID3D12Resource* GetSceneFinalTexture(ID3D12GraphicsCommandList* commandList,
                                         int sceneIndex,
                                         double timeSeconds);
-    bool EnsureTransitionPipeline(TransitionType type);
+    bool EnsureTransitionPipeline(const std::string& transitionPresetStem);
     void PrimeRuntimeResources();
     
     // Core Refs
@@ -114,22 +122,22 @@ private:
     double m_transitionToStartBeat = 0.0;
     float m_transitionFromOffset = 0.0f;
     float m_transitionToOffset = 0.0f;
-    TransitionType m_currentTransitionType = TransitionType::None;
+    std::string m_currentTransitionStem;
     int m_pendingActiveScene = -2;
     int m_transitionJustCompletedBeat = -1;
     
     ComPtr<ID3D12PipelineState> m_transitionPSO;
     ComPtr<ID3D12DescriptorHeap> m_transitionSrvHeap;
-    TransitionType m_compiledTransitionType = TransitionType::None;
-    std::array<ComPtr<ID3D12PipelineState>, 7> m_transitionPsoCache;
+    std::string m_compiledTransitionStem;
+    std::unordered_map<std::string, ComPtr<ID3D12PipelineState>> m_transitionPsoCache;
 
     std::vector<int> m_renderStack;
     std::vector<uint8_t> m_precompiledVertexShader;
-    std::array<std::vector<uint8_t>, 7> m_transitionBytecode;
+    std::unordered_map<std::string, std::vector<uint8_t>> m_transitionBytecode;
     std::vector<std::vector<uint8_t>> m_microModuleBytecode;
     std::vector<int16_t> m_microSceneModuleIds;
     std::vector<std::vector<int16_t>> m_microPostFxModuleIds;
-    std::array<int16_t, 7> m_microTransitionModuleIds = { -1, -1, -1, -1, -1, -1, -1 };
+    std::array<int16_t, 6> m_microTransitionModuleIds = { -1, -1, -1, -1, -1, -1 };
     bool m_loopPlayback = true;
     bool m_vsyncEnabled = true;
 };

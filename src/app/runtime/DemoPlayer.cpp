@@ -4,6 +4,7 @@
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
 #include "ShaderLab/Runtime/RuntimeStartupPolicy.h"
+#include <d3dcompiler.h>
 
 #if SHADERLAB_TINY_PLAYER && !defined(SHADERLAB_TINY_DEMOPLAYER_BRIDGE)
 #error Shared runtime DemoPlayer.cpp is non-tiny only. Use src/app/tiny/TinyDemoPlayer.cpp for tiny builds.
@@ -22,9 +23,11 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <cctype>
 #include <array>
 #include <cstdlib>
 #include <sstream>
+#include <algorithm>
 #if !SHADERLAB_TINY_PLAYER
 #include <iostream>
 #endif
@@ -72,18 +75,201 @@ namespace fs = std::filesystem;
 static const int kPostFxHistoryCount = 4;
 static const int kMaxPostFxChain = 32;
 static const char* kPackedVertexShaderPath = "assets/shaders/vertex.cso";
-static const char* kPackedMicroUbershaderPath = "assets/shaders/ubershader.hlsl";
 static const char* kPackedMicroUbershaderBytecodePath = "assets/shaders/ubershader.bin";
 
-static int TransitionIndex(TransitionType type);
-static const char* GetTransitionPackedPath(TransitionType type);
-static std::string GetTransitionShaderSource(TransitionType type);
+static constexpr size_t kTransitionSlotCount = 6;
+static constexpr const char* kTransitionSlotStems[kTransitionSlotCount] = {
+    "crossfade",
+    "dip_to_black",
+    "fade_out",
+    "fade_in",
+    "glitch",
+    "pixelate"
+};
 
-static TransitionType CanonicalTransitionShaderType(TransitionType type) {
-    if (type == TransitionType::FadeIn || type == TransitionType::FadeOut) {
-        return TransitionType::Crossfade;
+static int TransitionSlotIndexFromStem(const std::string& transitionPresetStem);
+static const char* GetTransitionPackedPathForStem(const std::string& transitionPresetStem);
+static std::string GetTransitionShaderSourceForStem(const std::string& transitionPresetStem);
+
+constexpr uint32_t kComputeHistorySlots = 8;
+constexpr uint32_t kComputeDescriptorCount = 11; // t0 + t1..t8 + u0 + b0
+
+#if !SHADERLAB_TINY_PLAYER
+struct ComputeDispatchParams {
+    float param0;
+    float param1;
+    float param2;
+    float param3;
+    float time;
+    float invWidth;
+    float invHeight;
+    uint32_t frame;
+};
+
+struct RuntimeComputeSceneResources {
+    ComPtr<ID3D12Resource> textureA;
+    ComPtr<ID3D12Resource> textureB;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+ComPtr<ID3D12RootSignature> g_runtimeComputeRootSignature;
+ComPtr<ID3D12DescriptorHeap> g_runtimeComputeDescriptorHeap;
+ComPtr<ID3D12Resource> g_runtimeComputeParamsBuffer;
+uint8_t* g_runtimeComputeParamsMapped = nullptr;
+std::unordered_map<int, RuntimeComputeSceneResources> g_runtimeComputeSceneResources;
+
+uint32_t Align256(uint32_t value) {
+    return (value + 255u) & ~255u;
+}
+
+UINT DescriptorStep(ID3D12Device* device) {
+    return device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+}
+
+bool CreateRuntimeUavTexture(Device* deviceRef, uint32_t width, uint32_t height, ComPtr<ID3D12Resource>& outTexture) {
+    if (!deviceRef || width == 0 || height == 0) return false;
+
+    D3D12_HEAP_PROPERTIES heapProps = { D3D12_HEAP_TYPE_DEFAULT };
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    return SUCCEEDED(deviceRef->GetDevice()->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        nullptr,
+        IID_PPV_ARGS(outTexture.ReleaseAndGetAddressOf())));
+}
+
+bool EnsureRuntimeComputeRootSignature(Device* deviceRef) {
+    if (!deviceRef) return false;
+    if (g_runtimeComputeRootSignature) return true;
+
+    D3D12_DESCRIPTOR_RANGE inputRange = {};
+    inputRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    inputRange.NumDescriptors = 1;
+    inputRange.BaseShaderRegister = 0;
+
+    D3D12_DESCRIPTOR_RANGE historyRange = {};
+    historyRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    historyRange.NumDescriptors = kComputeHistorySlots;
+    historyRange.BaseShaderRegister = 1;
+
+    D3D12_DESCRIPTOR_RANGE outputRange = {};
+    outputRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRange.NumDescriptors = 1;
+    outputRange.BaseShaderRegister = 0;
+
+    D3D12_DESCRIPTOR_RANGE cbvRange = {};
+    cbvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+    cbvRange.NumDescriptors = 1;
+    cbvRange.BaseShaderRegister = 0;
+
+    D3D12_ROOT_PARAMETER rootParams[4] = {};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[0].DescriptorTable.pDescriptorRanges = &inputRange;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &historyRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &outputRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[3].DescriptorTable.pDescriptorRanges = &cbvRange;
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
+    rootDesc.NumParameters = _countof(rootParams);
+    rootDesc.pParameters = rootParams;
+    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errors;
+    if (FAILED(D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                           serialized.GetAddressOf(), errors.GetAddressOf()))) {
+        return false;
     }
-    return type;
+
+    return SUCCEEDED(deviceRef->GetDevice()->CreateRootSignature(
+        0,
+        serialized->GetBufferPointer(),
+        serialized->GetBufferSize(),
+        IID_PPV_ARGS(g_runtimeComputeRootSignature.ReleaseAndGetAddressOf())));
+}
+
+bool EnsureRuntimeComputeDispatchResources(Device* deviceRef) {
+    if (!deviceRef) return false;
+    ID3D12Device* device = deviceRef->GetDevice();
+
+    if (!g_runtimeComputeDescriptorHeap) {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.NumDescriptors = kComputeDescriptorCount;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(g_runtimeComputeDescriptorHeap.ReleaseAndGetAddressOf())))) {
+            return false;
+        }
+    }
+
+    if (!g_runtimeComputeParamsBuffer) {
+        D3D12_HEAP_PROPERTIES heapProps = {};
+        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+        D3D12_RESOURCE_DESC bufferDesc = {};
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width = Align256(static_cast<uint32_t>(sizeof(ComputeDispatchParams)));
+        bufferDesc.Height = 1;
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.MipLevels = 1;
+        bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        if (FAILED(device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &bufferDesc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(g_runtimeComputeParamsBuffer.ReleaseAndGetAddressOf())))) {
+            return false;
+        }
+
+        if (FAILED(g_runtimeComputeParamsBuffer->Map(0, nullptr, reinterpret_cast<void**>(&g_runtimeComputeParamsMapped)))) {
+            g_runtimeComputeParamsBuffer.Reset();
+            g_runtimeComputeParamsMapped = nullptr;
+            return false;
+        }
+    }
+
+    return true;
+}
+#endif
+
+static std::string CanonicalTransitionStem(const std::string& transitionPresetStem) {
+    std::string stem = transitionPresetStem;
+    std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return stem;
 }
 
 static std::string GetDirectoryName(const std::string& path) {
@@ -121,16 +307,76 @@ static std::string GetExecutableDirectory() {
     return GetDirectoryName(std::string(exePath, length));
 }
 
+static bool ReadFileBytesC(const std::string& path, std::vector<uint8_t>& outData) {
+    outData.clear();
+    if (path.empty()) {
+        return false;
+    }
+
+    FILE* file = nullptr;
+#if defined(_MSC_VER)
+    if (fopen_s(&file, path.c_str(), "rb") != 0 || !file) {
+        return false;
+    }
+#else
+    file = std::fopen(path.c_str(), "rb");
+    if (!file) {
+        return false;
+    }
+#endif
+
+    if (std::fseek(file, 0, SEEK_END) != 0) {
+        std::fclose(file);
+        return false;
+    }
+    const long size = std::ftell(file);
+    if (size < 0) {
+        std::fclose(file);
+        return false;
+    }
+    if (std::fseek(file, 0, SEEK_SET) != 0) {
+        std::fclose(file);
+        return false;
+    }
+
+    outData.resize(static_cast<size_t>(size));
+    if (!outData.empty()) {
+        const size_t read = std::fread(outData.data(), 1, outData.size(), file);
+        if (read != outData.size()) {
+            outData.clear();
+            std::fclose(file);
+            return false;
+        }
+    }
+
+    std::fclose(file);
+    return !outData.empty();
+}
+
+static bool ReadFileTextC(const std::string& path, std::string& outText) {
+    std::vector<uint8_t> bytes;
+    if (!ReadFileBytesC(path, bytes)) {
+        outText.clear();
+        return false;
+    }
+    outText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return !outText.empty();
+}
+
 static bool LoadBytecodeFromFile(const std::string& path, std::vector<uint8_t>& outData) {
     if (path.empty()) {
         return false;
     }
+#if SHADERLAB_TINY_PLAYER
+    return ReadFileBytesC(path, outData);
+#else
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
     outData.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     return !outData.empty();
+#endif
 }
 
 static bool LoadBytecodeFromPathCandidates(const std::string& relativeOrAbsolutePath,
@@ -169,8 +415,7 @@ static bool LoadBytecodeFromPathCandidates(const std::string& relativeOrAbsolute
 }
 
 #if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
-static bool ValidatePackedShaderAssets(const ProjectData& project,
-                                       std::vector<std::string>& outMissingPaths) {
+
     outMissingPaths.clear();
 
     auto checkPackedPath = [&](const std::string& packedPath) {
@@ -194,32 +439,22 @@ static bool ValidatePackedShaderAssets(const ProjectData& project,
         }
     }
 
-    bool usedTransitions[7] = {};
+    bool usedTransitions[kTransitionSlotCount] = {};
     for (const auto& row : project.track.rows) {
-        if (row.transition == TransitionType::None) {
+        if (row.transitionPresetStem.empty()) {
             continue;
         }
-        const int transitionIndex = TransitionIndex(row.transition);
-        if (transitionIndex >= 0 && transitionIndex < 7) {
+        const int transitionIndex = TransitionSlotIndexFromStem(row.transitionPresetStem);
+        if (transitionIndex >= 0 && transitionIndex < static_cast<int>(kTransitionSlotCount)) {
             usedTransitions[transitionIndex] = true;
         }
     }
 
-    const TransitionType transitions[] = {
-        TransitionType::Crossfade,
-        TransitionType::DipToBlack,
-        TransitionType::FadeOut,
-        TransitionType::FadeIn,
-        TransitionType::Glitch,
-        TransitionType::Pixelate
-    };
-
-    for (TransitionType transition : transitions) {
-        const int idx = TransitionIndex(transition);
-        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) {
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        if (!usedTransitions[i]) {
             continue;
         }
-        const char* packedPath = GetTransitionPackedPath(transition);
+        const char* packedPath = GetTransitionPackedPathForStem(kTransitionSlotStems[i]);
         if (packedPath && *packedPath) {
             checkPackedPath(packedPath);
         }
@@ -229,14 +464,14 @@ static bool ValidatePackedShaderAssets(const ProjectData& project,
 }
 #endif
 
-std::string DemoPlayer::GetTransitionShader(TransitionType type) {
+std::string DemoPlayer::GetTransitionShader(const std::string& transitionPresetStem) {
 #if SHADERLAB_TINY_PLAYER
-    (void)type;
+    (void)transitionPresetStem;
     if (!m_project.scenes.empty() && !m_project.scenes[0].shaderCode.empty()) {
         return m_project.scenes[0].shaderCode;
     }
 #endif
-    return GetTransitionShaderSource(type);
+    return GetTransitionShaderSourceForStem(transitionPresetStem);
 }
 
 #if SHADERLAB_RUNTIME_DEBUG_LOG && !SHADERLAB_TINY_PLAYER
@@ -292,14 +527,13 @@ static void DebugLogError(const std::string& message) {
 #endif
 
 #if SHADERLAB_TINY_TRACE
-static void TinyTrace(const std::string& message) {
+static void TinyTraceImpl(const std::string& message) {
     std::string line = "[ShaderLabTiny] " + message + "\n";
     OutputDebugStringA(line.c_str());
 }
+#define TinyTrace(messageExpr) do { TinyTraceImpl((messageExpr)); } while (0)
 #else
-static void TinyTrace(const std::string& message) {
-    (void)message;
-}
+#define TinyTrace(messageExpr) do { } while (0)
 #endif
 
 static inline void RuntimeErr(const char* code, const char* shortText) {
@@ -332,6 +566,7 @@ static void TinyDevTrace(const std::string& message) {
 }
 #else
 static void TinyDevTrace(const std::string& message) {
+    (void)message;
     TinyTrace(message);
 }
 #endif
@@ -345,17 +580,17 @@ static void SetCompactTrackDecodeError(std::string& outError, const char* messag
 #endif
 }
 
-static const char* TransitionToString(TransitionType type) {
-    switch (type) {
-        case TransitionType::None: return "None";
-        case TransitionType::Crossfade: return "Crossfade";
-        case TransitionType::DipToBlack: return "DipToBlack";
-        case TransitionType::FadeOut: return "FadeOut";
-        case TransitionType::FadeIn: return "FadeIn";
-        case TransitionType::Glitch: return "Glitch";
-        case TransitionType::Pixelate: return "Pixelate";
-        default: return "Unknown";
+#if SHADERLAB_TINY_PLAYER
+#define SHADERLAB_TRACK_ERROR(msg) "track"
+#else
+#define SHADERLAB_TRACK_ERROR(msg) msg
+#endif
+
+static std::string TransitionToString(const std::string& transitionPresetStem) {
+    if (transitionPresetStem.empty()) {
+        return "None";
     }
+    return transitionPresetStem;
 }
 
 static const char* TextureTypeToString(TextureType type) {
@@ -390,7 +625,7 @@ static void DebugLogProjectSummary(const ProjectData& project) {
     for (const auto& row : project.track.rows) {
         DebugLog("  row=" + std::to_string(row.rowId)
             + " scene=" + std::to_string(row.sceneIndex)
-            + " trans=" + TransitionToString(row.transition)
+            + " trans=" + TransitionToString(row.transitionPresetStem)
             + " dur=" + std::to_string(row.transitionDuration)
             + " offset=" + std::to_string(row.timeOffset)
             + " music=" + std::to_string(row.musicIndex)
@@ -402,42 +637,157 @@ static void DebugLogProjectSummary(const ProjectData& project) {
 #endif
 }
 
-static int TransitionIndex(TransitionType type) {
-    switch (type) {
-        case TransitionType::Crossfade: return 0;
-        case TransitionType::DipToBlack: return 1;
-        case TransitionType::FadeOut: return 2;
-        case TransitionType::FadeIn: return 3;
-        case TransitionType::Glitch: return 4;
-        case TransitionType::Pixelate: return 5;
-        default: return 6;
+static int TransitionSlotIndexFromStem(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionStem(transitionPresetStem);
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        if (canonicalStem == kTransitionSlotStems[i]) {
+            return static_cast<int>(i);
+        }
     }
+    return -1;
 }
 
-static const char* GetTransitionPackedPath(TransitionType type) {
-    type = CanonicalTransitionShaderType(type);
-    switch (type) {
-        case TransitionType::Crossfade: return "assets/shaders/transition_fade_a_b.cso";
-        case TransitionType::DipToBlack: return "assets/shaders/transition_dip_to_black.cso";
-        case TransitionType::Glitch: return "assets/shaders/transition_glitch.cso";
-        case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
-        default: return "";
+static const char* GetTransitionPackedPathForStem(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionStem(transitionPresetStem);
+    if (canonicalStem == "crossfade" || canonicalStem == "fade_in" || canonicalStem == "fade_out") {
+        return "assets/shaders/transition_fade_a_b.cso";
     }
+    if (canonicalStem == "dip_to_black") {
+        return "assets/shaders/transition_dip_to_black.cso";
+    }
+    if (canonicalStem == "glitch") {
+        return "assets/shaders/transition_glitch.cso";
+    }
+    if (canonicalStem == "pixelate") {
+        return "assets/shaders/transition_pixelate.cso";
+    }
+    return "";
 }
 
 struct TinyTrackMetadata {
     int sceneCount = 0;
     std::vector<int16_t> sceneModuleIndices;
     std::vector<std::vector<int16_t>> postFxModuleIndices;
-    std::array<int16_t, 7> transitionModuleIndices = { -1, -1, -1, -1, -1, -1, -1 };
+    std::array<int16_t, kTransitionSlotCount> transitionModuleIndices = { -1, -1, -1, -1, -1, -1 };
 };
 
+#if SHADERLAB_TINY_PLAYER
+static bool LoadCompactTrackBinaryFromBytesTiny(const std::vector<uint8_t>& bytes,
+                                                DemoTrack& track,
+                                                TinyTrackMetadata* outMeta,
+                                                std::string& outError) {
+    (void)outError;
+
+    if (bytes.size() < 14) {
+        return false;
+    }
+
+    const auto readU16 = [&bytes](size_t offset) -> uint16_t {
+        return static_cast<uint16_t>(bytes[offset]) |
+               static_cast<uint16_t>(static_cast<uint16_t>(bytes[offset + 1]) << 8);
+    };
+    const auto readI16 = [&readU16](size_t offset) -> int16_t {
+        return static_cast<int16_t>(readU16(offset));
+    };
+    const auto readI8 = [&bytes](size_t offset) -> int8_t {
+        return static_cast<int8_t>(bytes[offset]);
+    };
+
+    if (readU16(0) != 0x4B54u || readU16(2) != 0x3352u) {
+        return false;
+    }
+
+    const uint16_t bpmQ8 = readU16(4);
+    const uint16_t lengthBeats = readU16(6);
+    const uint16_t rowCount = readU16(8);
+    const uint16_t sceneCount = readU16(10);
+
+    TinyTrackMetadata decodedMeta;
+    decodedMeta.sceneCount = static_cast<int>(sceneCount);
+    decodedMeta.sceneModuleIndices.resize(sceneCount, -1);
+    decodedMeta.postFxModuleIndices.resize(sceneCount);
+
+    size_t offset = 14;
+    if (offset + 12 > bytes.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        decodedMeta.transitionModuleIndices[i] = readI16(offset);
+        offset += 2;
+    }
+
+    for (uint16_t sceneIndex = 0; sceneIndex < sceneCount; ++sceneIndex) {
+        if (offset + 4 > bytes.size()) {
+            return false;
+        }
+
+        decodedMeta.sceneModuleIndices[sceneIndex] = readI16(offset);
+        offset += 2;
+        const uint16_t fxCount = readU16(offset);
+        offset += 2;
+
+        auto& fxModules = decodedMeta.postFxModuleIndices[sceneIndex];
+        fxModules.resize(fxCount, -1);
+        if (offset + static_cast<size_t>(fxCount) * 2u > bytes.size()) {
+            return false;
+        }
+        for (uint16_t fxIndex = 0; fxIndex < fxCount; ++fxIndex) {
+            fxModules[fxIndex] = readI16(offset);
+            offset += 2;
+        }
+    }
+
+    if (offset + static_cast<size_t>(rowCount) * 9u > bytes.size()) {
+        return false;
+    }
+
+    DemoTrack decoded;
+    decoded.name = "CompactTrack";
+    decoded.bpm = static_cast<float>(bpmQ8) / 256.0f;
+    decoded.lengthBeats = static_cast<int>(lengthBeats);
+    decoded.rows.reserve(rowCount);
+
+    for (uint32_t i = 0; i < rowCount; ++i) {
+        TrackerRow row;
+        row.rowId = static_cast<int>(readI16(offset)); offset += 2;
+        row.sceneIndex = static_cast<int>(readI16(offset)); offset += 2;
+        const uint8_t transition = bytes[offset++];
+        const uint8_t flags = bytes[offset++];
+        const uint8_t transitionDurationQ4 = bytes[offset++];
+        const int8_t timeOffsetQ4 = readI8(offset++);
+        const int8_t musicIndex = readI8(offset++);
+
+        row.transitionPresetStem.clear();
+        if (transition < kTransitionSlotCount) {
+            row.transitionPresetStem = kTransitionSlotStems[transition];
+        }
+        row.transitionDuration = static_cast<float>(transitionDurationQ4) / 16.0f;
+        row.timeOffset = static_cast<float>(timeOffsetQ4) / 16.0f;
+        row.musicIndex = static_cast<int>(musicIndex);
+        row.oneShotIndex = -1;
+        row.stop = (flags & 0x1u) != 0;
+        row.isBeat = false;
+        decoded.rows.push_back(row);
+    }
+
+    track = std::move(decoded);
+    if (outMeta) {
+        *outMeta = std::move(decodedMeta);
+    }
+    return true;
+}
+#endif
+
 static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, DemoTrack& track, TinyTrackMetadata* outMeta, std::string& outError) {
+#if SHADERLAB_TINY_PLAYER
+    return LoadCompactTrackBinaryFromBytesTiny(bytes, track, outMeta, outError);
+#else
     constexpr size_t kHeaderV2Size = 10;
     constexpr size_t kHeaderV3Size = 14;
     constexpr size_t kRowSize = 9;
     if (bytes.size() < kHeaderV2Size) {
-        SetCompactTrackDecodeError(outError, "Compact track binary too small.");
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary too small."));
         return false;
     }
 
@@ -455,7 +805,7 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
     const uint16_t magic0 = readU16(0);
     const uint16_t magic1 = readU16(2);
     if (magic0 != 0x4B54u || (magic1 != 0x3252u && magic1 != 0x3352u)) {
-        SetCompactTrackDecodeError(outError, "Compact track binary has invalid magic.");
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary has invalid magic."));
         return false;
     }
     const bool isV3 = (magic1 == 0x3352u);
@@ -469,14 +819,14 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
 
     if (isV3) {
         if (bytes.size() < kHeaderV3Size) {
-            SetCompactTrackDecodeError(outError, "Compact track binary header truncated.");
+            SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary header truncated."));
             return false;
         }
 
         const uint16_t sceneCount = readU16(10);
         const uint8_t transitionSlotCount = bytes[12];
         if (transitionSlotCount < 6) {
-            SetCompactTrackDecodeError(outError, "Compact track binary transition map is invalid.");
+            SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary transition map is invalid."));
             return false;
         }
 
@@ -486,7 +836,7 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
 
         for (int i = 0; i < 6; ++i) {
             if (offset + 2 > bytes.size()) {
-                SetCompactTrackDecodeError(outError, "Compact track binary transition map truncated.");
+                SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary transition map truncated."));
                 return false;
             }
             decodedMeta.transitionModuleIndices[static_cast<size_t>(i)] = readI16(offset);
@@ -495,7 +845,7 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
 
         for (uint16_t sceneIndex = 0; sceneIndex < sceneCount; ++sceneIndex) {
             if (offset + 4 > bytes.size()) {
-                SetCompactTrackDecodeError(outError, "Compact track binary scene map truncated.");
+                SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary scene map truncated."));
                 return false;
             }
 
@@ -509,7 +859,7 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
             fxModules.resize(fxCount, -1);
             for (uint16_t fxIndex = 0; fxIndex < fxCount; ++fxIndex) {
                 if (offset + 2 > bytes.size()) {
-                    SetCompactTrackDecodeError(outError, "Compact track binary post FX map truncated.");
+                    SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary post FX map truncated."));
                     return false;
                 }
                 fxModules[fxIndex] = readI16(offset);
@@ -520,7 +870,7 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
 
     const size_t expectedSize = offset + static_cast<size_t>(rowCount) * kRowSize;
     if (bytes.size() < expectedSize) {
-        SetCompactTrackDecodeError(outError, "Compact track binary truncated.");
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track binary truncated."));
         return false;
     }
 
@@ -542,7 +892,10 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
         TrackerRow row;
         row.rowId = static_cast<int>(rowId);
         row.sceneIndex = static_cast<int>(sceneIndex);
-        row.transition = static_cast<TransitionType>(transition);
+        row.transitionPresetStem.clear();
+        if (transition < kTransitionSlotCount) {
+            row.transitionPresetStem = kTransitionSlotStems[transition];
+        }
         row.transitionDuration = static_cast<float>(transitionDurationQ4) / 16.0f;
         row.timeOffset = static_cast<float>(timeOffsetQ4) / 16.0f;
         row.musicIndex = static_cast<int>(musicIndex);
@@ -557,15 +910,24 @@ static bool LoadCompactTrackBinaryFromBytes(const std::vector<uint8_t>& bytes, D
         *outMeta = std::move(decodedMeta);
     }
     return true;
+#endif
 }
 
 static bool LoadCompactTrackBinaryFromFile(const std::string& path, DemoTrack& track, TinyTrackMetadata* outMeta, std::string& outError) {
+#if SHADERLAB_TINY_PLAYER
+    std::vector<uint8_t> bytes;
+    if (!ReadFileBytesC(path, bytes)) {
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Failed to open compact track binary file."));
+        return false;
+    }
+#else
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        SetCompactTrackDecodeError(outError, "Failed to open compact track binary file.");
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Failed to open compact track binary file."));
         return false;
     }
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+#endif
     return LoadCompactTrackBinaryFromBytes(bytes, track, outMeta, outError);
 }
 
@@ -575,11 +937,20 @@ static bool LoadCompactTrackBinaryFromPathCandidates(const std::string& relative
                                                      TinyTrackMetadata* outMeta,
                                                      std::string& outResolvedPath,
                                                      std::string& outError) {
+#if SHADERLAB_TINY_PLAYER
+    (void)relativeOrAbsolutePath;
+    (void)manifestPath;
+    (void)track;
+    (void)outMeta;
+    outResolvedPath.clear();
+    outError.clear();
+    return false;
+#else
     outResolvedPath.clear();
     outError.clear();
 
     if (relativeOrAbsolutePath.empty()) {
-        SetCompactTrackDecodeError(outError, "Compact track path is empty.");
+        SetCompactTrackDecodeError(outError, SHADERLAB_TRACK_ERROR("Compact track path is empty."));
         return false;
     }
 
@@ -619,6 +990,7 @@ static bool LoadCompactTrackBinaryFromPathCandidates(const std::string& relative
     }
 
     return false;
+#endif
 }
 
 #if !SHADERLAB_TINY_PLAYER
@@ -661,12 +1033,6 @@ static bool LoadCompactTrackFromManifestOrFallback(const std::string& manifestPa
 }
 #endif
 
-struct MicroUbershaderLibrary {
-    std::string source;
-    int moduleCount = 0;
-    bool hasAny = false;
-};
-
 static bool TryLoadMicroUbershaderBytecodeBlob(bool packedAssets, std::vector<uint8_t>& outBlob) {
     outBlob.clear();
 
@@ -676,7 +1042,7 @@ static bool TryLoadMicroUbershaderBytecodeBlob(bool packedAssets, std::vector<ui
     }
 
 #if SHADERLAB_TINY_PLAYER
-    return LoadBytecodeFromFile(kPackedMicroUbershaderBytecodePath, outBlob);
+    return false;
 #else
     const char* candidates[] = {
         "assets/shaders/ubershader.bin",
@@ -751,107 +1117,16 @@ static bool ParseMicroUbershaderBytecodeBlob(const std::vector<uint8_t>& blob,
     return true;
 }
 
-static bool TryLoadMicroUbershaderText(bool packedAssets, std::string& outText) {
-    if (packedAssets && PackageManager::Get().HasFile(kPackedMicroUbershaderPath)) {
-        const auto data = PackageManager::Get().GetFile(kPackedMicroUbershaderPath);
-        outText.assign(data.begin(), data.end());
-        return !outText.empty();
-    }
-
-#if SHADERLAB_TINY_PLAYER
-    std::ifstream file(kPackedMicroUbershaderPath, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
-    outText.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    return !outText.empty();
-#else
-    const char* candidates[] = {
-        "assets/shaders/ubershader.hlsl",
-        "shaders/ubershader.hlsl"
-    };
-    for (const char* candidate : candidates) {
-        std::ifstream file(candidate, std::ios::binary);
-        if (!file.is_open()) continue;
-        outText.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        if (!outText.empty()) {
-            return true;
-        }
-    }
-    return false;
-#endif
-}
-
-static bool ParseMicroUbershaderText(const std::string& text, MicroUbershaderLibrary& outLibrary) {
-    outLibrary = {};
-    size_t eol = text.find('\n');
-    if (eol == std::string::npos) {
-        return false;
-    }
-
-    const std::string header = text.substr(0, eol);
-    if (header.rfind("U:", 0) != 0) {
-        return false;
-    }
-
-    unsigned long long sourceLength = 0;
-    try {
-        const std::string lengthText = header.substr(2);
-        if (lengthText.empty()) {
-            return false;
-        }
-        size_t consumed = 0;
-        sourceLength = std::stoull(lengthText, &consumed, 10);
-        if (consumed != lengthText.size()) {
-            return false;
-        }
-    } catch (...) {
-        return false;
-    }
-
-    size_t cursor = eol + 1;
-    if (cursor + static_cast<size_t>(sourceLength) > text.size()) {
-        return false;
-    }
-
-    outLibrary.source = text.substr(cursor, static_cast<size_t>(sourceLength));
-    outLibrary.hasAny = !outLibrary.source.empty();
-
-    auto countToken = [&](const std::string& token) {
-        size_t probe = 0;
-        while (true) {
-            probe = outLibrary.source.find(token, probe);
-            if (probe == std::string::npos) {
-                break;
-            }
-            ++outLibrary.moduleCount;
-            probe += token.size();
-        }
-    };
-
-    countToken("float4 s");
-    countToken("float4 p");
-    countToken("float4 t");
-    countToken("float4 m"); // backward compatibility with legacy ubershader modules
-
-    return outLibrary.hasAny;
-}
-
 static bool BuildTinyProjectFromAssets(ProjectData& project,
-                                       const MicroUbershaderLibrary* ubershader,
                                        const TinyTrackMetadata& trackMeta,
                                        std::vector<int16_t>& outSceneModuleIds,
                                        std::vector<std::vector<int16_t>>& outPostFxModuleIds,
-                                       std::array<int16_t, 7>& outTransitionModuleIds) {
+                                       std::array<int16_t, kTransitionSlotCount>& outTransitionModuleIds) {
     project = {};
     project.transport.bpm = 120.0f;
     outSceneModuleIds.clear();
     outPostFxModuleIds.clear();
     outTransitionModuleIds.fill(-1);
-
-    if (!(ubershader && ubershader->hasAny && !ubershader->source.empty())) {
-        return false;
-    }
 
     if (trackMeta.sceneCount <= 0 ||
         trackMeta.sceneModuleIndices.size() < static_cast<size_t>(trackMeta.sceneCount) ||
@@ -865,7 +1140,7 @@ static bool BuildTinyProjectFromAssets(ProjectData& project,
     for (int sceneIndex = 0; sceneIndex < trackMeta.sceneCount; ++sceneIndex) {
         Scene scene;
         scene.name = "S" + std::to_string(sceneIndex);
-        scene.shaderCode = ubershader->source;
+        scene.shaderCode.clear();
         scene.precompiledPath.clear();
 
         const int16_t sceneModule = trackMeta.sceneModuleIndices[static_cast<size_t>(sceneIndex)];
@@ -880,18 +1155,18 @@ static bool BuildTinyProjectFromAssets(ProjectData& project,
             if (fxModule < 0) continue;
 
             fxModuleIds.push_back(fxModule);
-                Scene::PostFXEffect fx;
-                fx.enabled = true;
-                fx.name = "fx" + std::to_string(fxIndex);
-                fx.shaderCode = ubershader->source;
-                fx.precompiledPath.clear();
-                scene.postFxChain.push_back(std::move(fx));
+            Scene::PostFXEffect fx;
+            fx.enabled = true;
+            fx.name = "fx" + std::to_string(fxIndex);
+            fx.shaderCode.clear();
+            fx.precompiledPath.clear();
+            scene.postFxChain.push_back(std::move(fx));
         }
 
         project.scenes.push_back(std::move(scene));
     }
 
-    for (size_t i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
         outTransitionModuleIds[i] = trackMeta.transitionModuleIndices[i];
     }
 
@@ -919,7 +1194,12 @@ static int FindNextSceneIndex(const DemoTrack& track, int afterBeat) {
     return row ? row->sceneIndex : -1;
 }
 
-static void ComputeShaderMusicalTiming(const Transport& transport, float& outBeat, float& outBar, float& outBarBeat16) {
+static void ComputeShaderMusicalTiming(const Transport& transport,
+                                       float& outIBeat,
+                                       float& outIBar,
+                                       float& outFBeat,
+                                       float& outFBarBeat,
+                                       float& outFBarBeat16) {
     constexpr float kBeatsPerBar = 4.0f;
     constexpr float kSixteenthPerBeat = 4.0f;
     const float beatsPerSecond = transport.bpm / 60.0f;
@@ -941,9 +1221,11 @@ static void ComputeShaderMusicalTiming(const Transport& transport, float& outBea
         barBeat16 = 15.0f;
     }
 
-    outBeat = beat;
-    outBar = bar;
-    outBarBeat16 = barBeat16;
+    outIBeat = beat;
+    outIBar = bar;
+    outFBeat = exactBeat;
+    outFBarBeat = beatInBar;
+    outFBarBeat16 = barBeat16;
 }
 
 static double BeatSeconds(float bpm) {
@@ -958,26 +1240,31 @@ static double SceneTimeSeconds(double exactBeat, double startBeat, float offsetB
     return sceneBeats * beatSeconds;
 }
 
-static std::string GetTransitionShaderSource(TransitionType type) {
-    type = CanonicalTransitionShaderType(type);
+static std::string GetTransitionShaderSourceForStem(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionStem(transitionPresetStem);
     std::string common = R"(
 float4 main(float2 fragCoord, float2 iResolution, float iTime) {
-float2 uv = fragCoord / iResolution;
-uv.y = 1.0 - uv.y;
+int2 dims = max(int2(iResolution) - int2(1, 1), int2(0, 0));
+int2 pixel = clamp(int2(fragCoord), int2(0, 0), dims);
 float t = saturate(iTime);
-float4 colA = iChannel0.Sample(iSampler0, uv);
-float4 colB = iChannel1.Sample(iSampler1, uv); 
+float4 colA = iChannel0.Load(int3(pixel, 0));
+float4 colB = iChannel1.Load(int3(pixel, 0)); 
 )";
-    switch(type) {
-        case TransitionType::Crossfade: return common + R"(
+    if (canonicalStem == "crossfade" || canonicalStem == "fade_in" || canonicalStem == "fade_out") {
+        return common + R"(
 return lerp(colA, colB, t);
 }
 )";
-        case TransitionType::DipToBlack: return common + R"(
+    }
+    if (canonicalStem == "dip_to_black") {
+        return common + R"(
 return (t < 0.5) ? lerp(colA, float4(0,0,0,1), t*2.0) : lerp(float4(0,0,0,1), colB, (t-0.5)*2.0);
 }
 )";
-        case TransitionType::Glitch: return common + R"(
+    }
+    if (canonicalStem == "glitch") {
+        return common + R"(
+    float2 uv = (float2(pixel) + 0.5) / iResolution;
 float offset = iTime * 10.0;
 float noise = frac(sin(dot(float2(floor(uv.y * 20.0) + offset, offset), float2(12.9898, 78.233))) * 43758.5453);
 float disp = (noise - 0.5) * 0.1 * sin(t * 3.14159);
@@ -987,7 +1274,10 @@ colB = iChannel1.Sample(iSampler1, uv2);
 return lerp(colA, colB, t);
 }
 )";
-         case TransitionType::Pixelate: return common + R"(
+    }
+    if (canonicalStem == "pixelate") {
+        return common + R"(
+float2 uv = (float2(pixel) + 0.5) / iResolution;
 float p = sin(t * 3.14159);
 float n = 50.0 * (1.0 - p) + 1.0; 
 float2 uvP = floor(uv * n) / n;
@@ -996,9 +1286,8 @@ colB = iChannel1.Sample(iSampler1, uvP);
 return lerp(colA, colB, t);
 }
 )";
-       default: 
-          return common + " return colB; }";
     }
+    return common + " return colB; }";
 }
 
 DemoPlayer::DemoPlayer() {}
@@ -1194,39 +1483,37 @@ void DemoPlayer::LoadProject(const std::string& manifestPath) {
     TinyTrace("LoadProject: " + manifestPath);
 }
 
-bool DemoPlayer::EnsureTransitionPipeline(TransitionType type) {
+bool DemoPlayer::EnsureTransitionPipeline(const std::string& transitionPresetStem) {
     if (!m_renderer || !m_rendererReady) {
         return false;
     }
 
-    type = CanonicalTransitionShaderType(type);
-    const int idx = TransitionIndex(type);
-    if (idx < 0 || idx >= static_cast<int>(m_transitionPsoCache.size())) {
+    const std::string canonicalStem = CanonicalTransitionStem(transitionPresetStem);
+    if (canonicalStem.empty()) {
         return false;
     }
 
-    if (m_transitionPsoCache[static_cast<size_t>(idx)]) {
-        m_transitionPSO = m_transitionPsoCache[static_cast<size_t>(idx)];
-        m_compiledTransitionType = type;
+    auto psoIt = m_transitionPsoCache.find(canonicalStem);
+    if (psoIt != m_transitionPsoCache.end() && psoIt->second) {
+        m_transitionPSO = psoIt->second;
+        m_compiledTransitionStem = canonicalStem;
         return true;
     }
 
-    auto loadTransitionBytecode = [&](TransitionType transitionType) -> const std::vector<uint8_t>* {
-        const int transitionIndex = TransitionIndex(transitionType);
-        if (transitionIndex < 0 || transitionIndex >= static_cast<int>(m_transitionBytecode.size())) {
-            return nullptr;
-        }
-        if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
-            return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+    auto loadTransitionBytecode = [&](const std::string& stem) -> const std::vector<uint8_t>* {
+        auto bytecodeIt = m_transitionBytecode.find(stem);
+        if (bytecodeIt != m_transitionBytecode.end() && !bytecodeIt->second.empty()) {
+            return &bytecodeIt->second;
         }
 
-        const char* packedPath = GetTransitionPackedPath(transitionType);
+        const char* packedPath = GetTransitionPackedPathForStem(stem);
         if (packedPath && *packedPath) {
             if (PackageManager::Get().IsPacked()) {
                 if (PackageManager::Get().HasFile(packedPath)) {
-                    m_transitionBytecode[static_cast<size_t>(transitionIndex)] = PackageManager::Get().GetFile(packedPath);
-                    if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
-                        return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+                    auto& cache = m_transitionBytecode[stem];
+                    cache = PackageManager::Get().GetFile(packedPath);
+                    if (!cache.empty()) {
+                        return &cache;
                     }
                 }
             } else {
@@ -1234,10 +1521,11 @@ bool DemoPlayer::EnsureTransitionPipeline(TransitionType type) {
                 fs::path diskPath = fs::path(m_manifestPath).parent_path() / packedPath;
                 std::ifstream file(diskPath, std::ios::binary);
                 if (file.is_open()) {
-                    m_transitionBytecode[static_cast<size_t>(transitionIndex)].assign(
+                    auto& cache = m_transitionBytecode[stem];
+                    cache.assign(
                         (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                    if (!m_transitionBytecode[static_cast<size_t>(transitionIndex)].empty()) {
-                        return &m_transitionBytecode[static_cast<size_t>(transitionIndex)];
+                    if (!cache.empty()) {
+                        return &cache;
                     }
                 }
 #endif
@@ -1246,8 +1534,9 @@ bool DemoPlayer::EnsureTransitionPipeline(TransitionType type) {
         return nullptr;
     };
 
-    const std::vector<uint8_t>* bytecode = loadTransitionBytecode(type);
+    const std::vector<uint8_t>* bytecode = loadTransitionBytecode(canonicalStem);
 #if SHADERLAB_TINY_PLAYER
+    const int idx = TransitionSlotIndexFromStem(canonicalStem);
     if ((!bytecode || bytecode->empty()) && idx >= 0 && idx < static_cast<int>(m_microTransitionModuleIds.size())) {
         const int16_t moduleId = m_microTransitionModuleIds[static_cast<size_t>(idx)];
         if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
@@ -1268,9 +1557,9 @@ bool DemoPlayer::EnsureTransitionPipeline(TransitionType type) {
         return false;
     }
 
-    m_transitionPsoCache[static_cast<size_t>(idx)] = pipeline;
+    m_transitionPsoCache[canonicalStem] = pipeline;
     m_transitionPSO = pipeline;
-    m_compiledTransitionType = type;
+    m_compiledTransitionStem = canonicalStem;
     return true;
 }
 
@@ -1283,30 +1572,22 @@ void DemoPlayer::PrimeRuntimeResources() {
         }
     }
 
-    bool usedTransitions[7] = {};
+    bool usedTransitions[kTransitionSlotCount] = {};
     for (const auto& row : m_project.track.rows) {
-        if (row.transition == TransitionType::None) {
+        if (row.transitionPresetStem.empty()) {
             continue;
         }
-        const int transitionIndex = TransitionIndex(CanonicalTransitionShaderType(row.transition));
-        if (transitionIndex >= 0 && transitionIndex < 7) {
+        const int transitionIndex = TransitionSlotIndexFromStem(row.transitionPresetStem);
+        if (transitionIndex >= 0 && transitionIndex < static_cast<int>(kTransitionSlotCount)) {
             usedTransitions[transitionIndex] = true;
         }
     }
 
-    const TransitionType transitions[] = {
-        TransitionType::Crossfade,
-        TransitionType::DipToBlack,
-        TransitionType::Glitch,
-        TransitionType::Pixelate
-    };
-
-    for (TransitionType transition : transitions) {
-        const int idx = TransitionIndex(transition);
-        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) {
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        if (!usedTransitions[i]) {
             continue;
         }
-        EnsureTransitionPipeline(transition);
+        EnsureTransitionPipeline(kTransitionSlotStems[i]);
     }
 }
 
@@ -1327,15 +1608,66 @@ void DemoPlayer::Update(double wallTime, float dt) {
 #if !SHADERLAB_TINY_PLAYER
     auto loadAudioClip = [&](const auto& clip, bool packedAssets) {
         if (!m_audio) {
-            return;
+            return false;
         }
 
-        if (packedAssets && PackageManager::Get().HasFile(clip.path)) {
-            auto audioData = PackageManager::Get().GetFile(clip.path);
-            m_audio->LoadAudioFromMemory(audioData.data(), audioData.size());
-        } else {
-            m_audio->LoadAudio(clip.path);
+        std::vector<std::string> packageCandidates;
+        packageCandidates.push_back(clip.path);
+
+        std::string normalizedPath = clip.path;
+        std::replace(normalizedPath.begin(), normalizedPath.end(), '\\', '/');
+        if (normalizedPath != clip.path) {
+            packageCandidates.push_back(normalizedPath);
         }
+
+        std::filesystem::path clipPathFs(clip.path);
+        const std::string clipFileName = clipPathFs.filename().string();
+        if (!clipFileName.empty()) {
+            packageCandidates.push_back("assets/audio/" + clipFileName);
+            packageCandidates.push_back("audio/" + clipFileName);
+        }
+
+        if (packedAssets) {
+            for (const auto& candidate : packageCandidates) {
+                if (!PackageManager::Get().HasFile(candidate)) {
+                    continue;
+                }
+
+                auto audioData = PackageManager::Get().GetFile(candidate);
+                if (!audioData.empty() && m_audio->LoadAudioFromMemory(audioData.data(), audioData.size())) {
+                    return true;
+                }
+            }
+        }
+
+        std::vector<std::string> diskCandidates;
+        diskCandidates.push_back(clip.path);
+
+        if (!normalizedPath.empty() && normalizedPath != clip.path) {
+            diskCandidates.push_back(normalizedPath);
+        }
+
+        if (!m_manifestPath.empty()) {
+            const std::filesystem::path manifestDir = std::filesystem::path(m_manifestPath).parent_path();
+            if (!manifestDir.empty()) {
+                diskCandidates.push_back((manifestDir / clip.path).string());
+                if (!clipFileName.empty()) {
+                    diskCandidates.push_back((manifestDir / "assets" / "audio" / clipFileName).string());
+                    diskCandidates.push_back((manifestDir / "audio" / clipFileName).string());
+                }
+            }
+        }
+
+        for (const auto& candidate : diskCandidates) {
+            if (candidate.empty()) {
+                continue;
+            }
+            if (m_audio->LoadAudio(candidate)) {
+                return true;
+            }
+        }
+
+        return false;
     };
 #endif
 
@@ -1359,72 +1691,43 @@ void DemoPlayer::Update(double wallTime, float dt) {
 
             bool loaded = false;
 #if SHADERLAB_TINY_PLAYER
-            MicroUbershaderLibrary tinyUbershader;
-            std::string tinyUbershaderText;
-            const bool hasTinyUbershader =
-                TryLoadMicroUbershaderText(packed, tinyUbershaderText) &&
-                ParseMicroUbershaderText(tinyUbershaderText, tinyUbershader);
-            TinyTrace(hasTinyUbershader ? "Ubershader parse OK" : "Ubershader parse missing/failed");
-
-            std::vector<uint8_t> tinyUbershaderBlob;
-            std::vector<std::vector<uint8_t>> tinyModuleBytecode;
-            const bool hasTinyUbershaderBlob =
-                TryLoadMicroUbershaderBytecodeBlob(packed, tinyUbershaderBlob) &&
-                ParseMicroUbershaderBytecodeBlob(tinyUbershaderBlob, tinyModuleBytecode);
-            TinyTrace(hasTinyUbershaderBlob ? "Ubershader bytecode parse OK" : "Ubershader bytecode missing/failed");
-
-            DemoTrack decodedTrack;
-            TinyTrackMetadata decodedMeta;
-            std::string trackError;
-            bool trackLoaded = false;
-
-            if (packed && PackageManager::Get().HasFile("assets/track.bin")) {
-                auto trackData = PackageManager::Get().GetFile("assets/track.bin");
-                trackLoaded = LoadCompactTrackBinaryFromBytes(trackData, decodedTrack, &decodedMeta, trackError);
-            } else {
-                trackLoaded = LoadCompactTrackBinaryFromFile(
-                    "assets/track.bin", decodedTrack, &decodedMeta, trackError);
-
-                if (trackLoaded) {
-                    TinyTrace("Compact track load OK: assets/track.bin");
-                } else if (!trackError.empty()) {
-                    TinyTrace("Compact track load FAILED: " + trackError);
-                }
+            if (!packed) {
+                packed = PackageManager::Get().Initialize();
             }
 
-            const bool tinyProjectReady = hasTinyUbershaderBlob && trackLoaded && BuildTinyProjectFromAssets(
-                m_project,
-                hasTinyUbershader ? &tinyUbershader : nullptr,
-                decodedMeta,
-                m_microSceneModuleIds,
-                m_microPostFxModuleIds,
-                m_microTransitionModuleIds);
+            if (packed) {
+                const auto tinyUbershaderBlob = PackageManager::Get().GetFile(kPackedMicroUbershaderBytecodePath);
+                std::vector<std::vector<uint8_t>> tinyModuleBytecode;
+                const bool hasTinyUbershaderBlob = ParseMicroUbershaderBytecodeBlob(tinyUbershaderBlob, tinyModuleBytecode);
 
-            loaded = tinyProjectReady && trackLoaded;
+                DemoTrack decodedTrack;
+                TinyTrackMetadata decodedMeta;
+                std::string trackError;
+                const auto trackData = PackageManager::Get().GetFile("assets/track.bin");
+                const bool trackLoaded = LoadCompactTrackBinaryFromBytes(trackData, decodedTrack, &decodedMeta, trackError);
 
-            if (loaded) {
-                m_project.track = std::move(decodedTrack);
-                m_project.transport.bpm = m_project.track.bpm;
-                m_microModuleBytecode = std::move(tinyModuleBytecode);
-                TinyTrace("Compact track load OK");
-                m_loadingStatus = "Manifest loaded";
+                const bool tinyProjectReady = hasTinyUbershaderBlob && trackLoaded && BuildTinyProjectFromAssets(
+                    m_project,
+                    decodedMeta,
+                    m_microSceneModuleIds,
+                    m_microPostFxModuleIds,
+                    m_microTransitionModuleIds);
+
+                loaded = tinyProjectReady;
+                if (loaded) {
+                    m_project.track = std::move(decodedTrack);
+                    m_project.transport.bpm = m_project.track.bpm;
+                    m_microModuleBytecode = std::move(tinyModuleBytecode);
+                    m_loadingStatus = "Manifest loaded";
+                } else {
+                    m_microSceneModuleIds.clear();
+                    m_microPostFxModuleIds.clear();
+                    m_microTransitionModuleIds.fill(-1);
+                    m_microModuleBytecode.clear();
+                    m_loadingStatus = "Tiny load failed";
+                }
             } else {
-                m_microSceneModuleIds.clear();
-                m_microPostFxModuleIds.clear();
-                m_microTransitionModuleIds.fill(-1);
-                m_microModuleBytecode.clear();
-                std::string reason;
-                if (!hasTinyUbershaderBlob) reason += "missing ubershader.bin; ";
-                if (!trackLoaded) reason += "track.bin load failed; ";
-                if (!tinyProjectReady) reason += "module map build failed; ";
-                if (reason.empty()) reason = "unknown tiny loading failure";
-                m_loadingStatus = "Tiny load failed: " + reason;
-                if (!tinyProjectReady) {
-                    TinyTrace("Tiny project load FAILED (missing ubershader assets)");
-                }
-                if (!trackLoaded) {
-                    TinyTrace("Compact track load FAILED");
-                }
+                m_loadingStatus = "Tiny load failed";
             }
 #else
             if (packed) {
@@ -1625,23 +1928,16 @@ void DemoPlayer::Update(double wallTime, float dt) {
                  for(auto& row : track.rows) {
                      if (row.rowId == b) {
                          // Scene
-                         if (row.transition != TransitionType::None && row.transitionDuration > 0) {
+                         if (!row.transitionPresetStem.empty() && row.transitionDuration > 0) {
                             m_transitionActive = true;
                             m_transitionFromIndex = m_activeSceneIndex;
                             m_transitionFromOffset = m_activeSceneOffset;
                             m_transitionFromStartBeat = m_activeSceneStartBeat;
                             m_transitionToStartBeat = static_cast<double>(b);
-                            const bool isFadeOut = row.transition == TransitionType::FadeOut;
-                            const bool isFadeIn = row.transition == TransitionType::FadeIn;
                             int target = row.sceneIndex;
                             float targetOffset = row.timeOffset;
 
-                            if (isFadeOut) {
-                                target = -1;
-                                targetOffset = 0.0f;
-                            }
-
-                            if (target == -1 && (row.transition == TransitionType::Crossfade || isFadeIn)) {
+                            if (target == -1) {
                                 const TrackerRow* nextRow = FindNextSceneRow(track, b);
                                 if (nextRow) {
                                     target = nextRow->sceneIndex;
@@ -1650,17 +1946,11 @@ void DemoPlayer::Update(double wallTime, float dt) {
                                 }
                             }
 
-                            if (isFadeIn) {
-                                m_transitionFromIndex = -1;
-                                m_transitionFromOffset = 0.0f;
-                                m_transitionFromStartBeat = static_cast<double>(b);
-                            }
-
-                            if (target == -1 && !isFadeOut) {
+                            if (target == -1) {
                                 target = m_activeSceneIndex;
                                 targetOffset = m_activeSceneOffset;
                                 m_transitionToStartBeat = m_activeSceneStartBeat;
-                            } else if (target == m_activeSceneIndex && !isFadeIn) {
+                            } else if (target == m_activeSceneIndex) {
                                 targetOffset = m_activeSceneOffset;
                                 m_transitionToStartBeat = m_activeSceneStartBeat;
                             }
@@ -1668,7 +1958,7 @@ void DemoPlayer::Update(double wallTime, float dt) {
                             m_transitionToOffset = targetOffset;
                             m_transitionStartBeat = (double)b;
                             m_transitionDurationBeats = (double)row.transitionDuration;
-                            m_currentTransitionType = row.transition;
+                            m_currentTransitionStem = row.transitionPresetStem;
                             m_pendingActiveScene = target;
                          } else if (row.sceneIndex >= 0) {
                              if (m_transitionJustCompletedBeat == row.rowId &&
@@ -1688,9 +1978,9 @@ void DemoPlayer::Update(double wallTime, float dt) {
                          // Audio
                          if (row.musicIndex >= 0 && row.musicIndex < (int)m_project.audioLibrary.size() && m_audio) {
                              auto& clip = m_project.audioLibrary[row.musicIndex];
-                             loadAudioClip(clip, PackageManager::Get().IsPacked());
-
-                             m_audio->Play();
+                             if (loadAudioClip(clip, PackageManager::Get().IsPacked())) {
+                                 m_audio->Play();
+                             }
                              if(clip.bpm > 0) m_transport.bpm = clip.bpm;
                          }
 #endif
@@ -1746,6 +2036,27 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
 
     bool sceneReady = false;
 
+#if SHADERLAB_TINY_PLAYER
+    int16_t moduleId = -1;
+    if (sceneIndex >= 0 && sceneIndex < static_cast<int>(m_microSceneModuleIds.size())) {
+        moduleId = m_microSceneModuleIds[static_cast<size_t>(sceneIndex)];
+    }
+    if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
+        const auto& bytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
+        if (!bytecode.empty()) {
+            scene.pipelineState = m_renderer->CreatePSOFromBytecode(bytecode);
+            sceneReady = scene.pipelineState != nullptr;
+        }
+    }
+
+    for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
+        auto& fx = scene.postFxChain[fxIndex];
+        CompilePostFxEffect(fx, sceneIndex, static_cast<int>(fxIndex));
+    }
+
+    return sceneReady;
+#else
+
     if (!scene.precompiledPath.empty()) {
         std::vector<uint8_t> data;
         if (PackageManager::Get().IsPacked()) {
@@ -1780,38 +2091,9 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
         }
     }
 
-    std::vector<PreviewRenderer::TextureDecl> decls;
-    for(const auto& b : scene.bindings) {
-        if (!b.enabled) continue;
-        PreviewRenderer::TextureDecl decl;
-        decl.slot = b.channelIndex;
-        if (b.type == TextureType::TextureCube) decl.type = "TextureCube";
-        else if (b.type == TextureType::Texture3D) decl.type = "Texture3D";
-        else decl.type = "Texture2D";
-        decls.push_back(decl);
-    }
-    #if !SHADERLAB_TINY_PLAYER
     if (!sceneReady) {
         SHADERLAB_RT_DEBUG_LOG_ERROR("Missing precompiled scene shader for scene " + scene.name);
     }
-    #else
-    if (!sceneReady) {
-        int16_t moduleId = -1;
-        if (sceneIndex >= 0 && sceneIndex < static_cast<int>(m_microSceneModuleIds.size())) {
-            moduleId = m_microSceneModuleIds[static_cast<size_t>(sceneIndex)];
-        }
-        if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
-            const auto& bytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
-            if (!bytecode.empty()) {
-                scene.pipelineState = m_renderer->CreatePSOFromBytecode(bytecode);
-            }
-        }
-        sceneReady = scene.pipelineState != nullptr;
-        if (!sceneReady) {
-            SHADERLAB_RT_DEBUG_LOG_ERROR("Tiny player requires precompiled ubershader bytecode for scene: " + scene.name);
-        }
-    }
-    #endif
 
     for (size_t fxIndex = 0; fxIndex < scene.postFxChain.size(); ++fxIndex) {
         auto& fx = scene.postFxChain[fxIndex];
@@ -1819,7 +2101,17 @@ bool DemoPlayer::CompileScene(int sceneIndex) {
             SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to compile post fx for scene " + scene.name + " (" + fx.name + ")");
         }
     }
+
+#if !SHADERLAB_TINY_PLAYER
+    for (size_t computeIndex = 0; computeIndex < scene.computeEffectChain.size(); ++computeIndex) {
+        auto& effect = scene.computeEffectChain[computeIndex];
+        if (!CompileComputeEffect(effect, sceneIndex, static_cast<int>(computeIndex))) {
+            SHADERLAB_RT_DEBUG_LOG_ERROR("Failed to compile compute fx for scene " + scene.name + " (" + effect.name + ")");
+        }
+    }
+#endif
     return sceneReady;
+#endif
 }
 
 void DemoPlayer::EnsureSceneTexture(int sceneIndex) {
@@ -1969,10 +2261,29 @@ void DemoPlayer::EnsurePostFxHistory(Scene::PostFXEffect& effect) {
 bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex) {
     if (!m_renderer || !m_rendererReady) return false;
 
-#if !SHADERLAB_TINY_PLAYER
+#if SHADERLAB_TINY_PLAYER
+    int16_t moduleId = -1;
+    if (sceneIndex >= 0 && sceneIndex < static_cast<int>(m_microPostFxModuleIds.size())) {
+        const auto& sceneFxModuleIds = m_microPostFxModuleIds[static_cast<size_t>(sceneIndex)];
+        if (fxIndex >= 0 && fxIndex < static_cast<int>(sceneFxModuleIds.size())) {
+            moduleId = sceneFxModuleIds[static_cast<size_t>(fxIndex)];
+        }
+    }
+    if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
+        const auto& bytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
+        if (!bytecode.empty()) {
+            effect.pipelineState = m_renderer->CreatePSOFromBytecode(bytecode);
+        }
+    }
+    if (effect.pipelineState) {
+        effect.isDirty = false;
+        effect.lastCompiledCode = effect.shaderCode;
+        return true;
+    }
+    return false;
+#else
     (void)sceneIndex;
     (void)fxIndex;
-#endif
 
     if (!effect.precompiledPath.empty()) {
         std::vector<uint8_t> data;
@@ -2005,32 +2316,324 @@ bool DemoPlayer::CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex
         }
     }
 
-    #if !SHADERLAB_TINY_PLAYER
     SHADERLAB_RT_DEBUG_LOG_ERROR("Missing precompiled post FX shader for: " + effect.name);
-    #endif
 
+    return false;
+#endif
+}
+
+bool DemoPlayer::CompileComputeEffect(Scene::ComputeEffect& effect, int sceneIndex, int computeIndex) {
 #if SHADERLAB_TINY_PLAYER
-    int16_t moduleId = -1;
-    if (sceneIndex >= 0 && sceneIndex < static_cast<int>(m_microPostFxModuleIds.size())) {
-        const auto& sceneFxModuleIds = m_microPostFxModuleIds[static_cast<size_t>(sceneIndex)];
-        if (fxIndex >= 0 && fxIndex < static_cast<int>(sceneFxModuleIds.size())) {
-            moduleId = sceneFxModuleIds[static_cast<size_t>(fxIndex)];
+    (void)effect;
+    (void)sceneIndex;
+    (void)computeIndex;
+    return false;
+#else
+    (void)sceneIndex;
+    (void)computeIndex;
+    if (!m_device) return false;
+    if (!EnsureRuntimeComputeRootSignature(m_device)) return false;
+
+    std::vector<uint8_t> bytecode;
+
+    if (!effect.precompiledPath.empty()) {
+        if (PackageManager::Get().IsPacked()) {
+            if (PackageManager::Get().HasFile(effect.precompiledPath)) {
+                bytecode = PackageManager::Get().GetFile(effect.precompiledPath);
+            }
+        } else {
+            LoadBytecodeFromPathCandidates(effect.precompiledPath, m_manifestPath, bytecode);
         }
     }
-    if (moduleId >= 0 && moduleId < static_cast<int>(m_microModuleBytecode.size())) {
-        const auto& bytecode = m_microModuleBytecode[static_cast<size_t>(moduleId)];
-        if (!bytecode.empty()) {
-            effect.pipelineState = m_renderer->CreatePSOFromBytecode(bytecode);
+
+    if (bytecode.empty()) {
+        if (effect.shaderCode.empty()) {
+            return false;
         }
-        if (effect.pipelineState) {
-            effect.isDirty = false;
-            effect.lastCompiledCode = effect.shaderCode;
-            return true;
+        const std::string entryPoint = effect.entryPoint.empty() ? "main" : effect.entryPoint;
+        ComPtr<ID3DBlob> shaderBlob;
+        ComPtr<ID3DBlob> errorBlob;
+        if (FAILED(D3DCompile(effect.shaderCode.c_str(),
+                              effect.shaderCode.size(),
+                              "compute_runtime.hlsl",
+                              nullptr,
+                              nullptr,
+                              entryPoint.c_str(),
+                              "cs_5_0",
+                              D3DCOMPILE_ENABLE_STRICTNESS,
+                              0,
+                              shaderBlob.GetAddressOf(),
+                              errorBlob.GetAddressOf()))) {
+            return false;
+        }
+        if (!shaderBlob) {
+            return false;
+        }
+        const uint8_t* begin = static_cast<const uint8_t*>(shaderBlob->GetBufferPointer());
+        bytecode.assign(begin, begin + shaderBlob->GetBufferSize());
+    }
+
+    if (bytecode.empty()) {
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
+    desc.pRootSignature = g_runtimeComputeRootSignature.Get();
+    desc.CS = { bytecode.data(), bytecode.size() };
+
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(m_device->GetDevice()->CreateComputePipelineState(&desc, IID_PPV_ARGS(pso.GetAddressOf())))) {
+        return false;
+    }
+
+    effect.pipelineState = pso;
+    effect.compiledShaderBytes = bytecode.size();
+    effect.isDirty = false;
+    effect.lastCompiledCode = effect.shaderCode;
+    return true;
+#endif
+}
+
+void DemoPlayer::EnsureComputeHistory(Scene::ComputeEffect& effect) {
+#if SHADERLAB_TINY_PLAYER
+    (void)effect;
+    return;
+#else
+    if (!m_device || m_width == 0 || m_height == 0) return;
+    const int historyCount = (std::max)(0, (std::min)(effect.historyCount, static_cast<int>(kComputeHistorySlots)));
+    if (historyCount <= 0) {
+        effect.historyTextures.clear();
+        effect.historyIndex = 0;
+        effect.historyInitialized = false;
+        return;
+    }
+
+    bool needsCreate = static_cast<int>(effect.historyTextures.size()) != historyCount;
+    if (!needsCreate && !effect.historyTextures.empty()) {
+        const auto desc = effect.historyTextures.front()->GetDesc();
+        needsCreate = desc.Width != m_width || desc.Height != m_height;
+    }
+    if (!needsCreate) return;
+
+    effect.historyTextures.clear();
+    effect.historyTextures.resize(static_cast<size_t>(historyCount));
+    effect.historyIndex = 0;
+    effect.historyInitialized = false;
+
+    for (int i = 0; i < historyCount; ++i) {
+        if (!CreateRuntimeUavTexture(m_device, m_width, m_height, effect.historyTextures[static_cast<size_t>(i)])) {
+            effect.historyTextures.clear();
+            effect.historyIndex = 0;
+            effect.historyInitialized = false;
+            return;
         }
     }
 #endif
+}
 
-    return false;
+ID3D12Resource* DemoPlayer::ApplyComputeChain(ID3D12GraphicsCommandList* commandList,
+                                             int sceneIndex,
+                                             std::vector<Scene::ComputeEffect>& chain,
+                                             ID3D12Resource* inputTexture,
+                                             double timeSeconds) {
+#if SHADERLAB_TINY_PLAYER
+    (void)commandList;
+    (void)sceneIndex;
+    (void)chain;
+    (void)timeSeconds;
+    return inputTexture;
+#else
+    if (!commandList || !inputTexture || !m_device || chain.empty()) return inputTexture;
+    if (!EnsureRuntimeComputeRootSignature(m_device) || !EnsureRuntimeComputeDispatchResources(m_device)) {
+        return inputTexture;
+    }
+
+    bool anyEnabled = false;
+    for (const auto& effect : chain) {
+        if (effect.enabled) {
+            anyEnabled = true;
+            break;
+        }
+    }
+    if (!anyEnabled) return inputTexture;
+
+    auto& resources = g_runtimeComputeSceneResources[sceneIndex];
+    const bool recreate = !resources.textureA || !resources.textureB || resources.width != m_width || resources.height != m_height;
+    if (recreate) {
+        resources = {};
+        if (!CreateRuntimeUavTexture(m_device, m_width, m_height, resources.textureA) ||
+            !CreateRuntimeUavTexture(m_device, m_width, m_height, resources.textureB)) {
+            resources = {};
+            return inputTexture;
+        }
+        resources.width = m_width;
+        resources.height = m_height;
+    }
+
+    ID3D12Device* device = m_device->GetDevice();
+    const UINT step = DescriptorStep(device);
+    const auto heapCpu = g_runtimeComputeDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    const auto heapGpu = g_runtimeComputeDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+
+    ID3D12Resource* currentInput = inputTexture;
+    ID3D12Resource* outputA = resources.textureA.Get();
+    ID3D12Resource* outputB = resources.textureB.Get();
+    ID3D12Resource* currentOutput = outputA;
+
+    for (auto& effect : chain) {
+        if (!effect.enabled) continue;
+        if (effect.isDirty || !effect.pipelineState) {
+            if (!CompileComputeEffect(effect, sceneIndex, -1)) {
+                continue;
+            }
+        }
+
+        EnsureComputeHistory(effect);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE inputCpu = heapCpu;
+        device->CreateShaderResourceView(currentInput, &srvDesc, inputCpu);
+
+        for (uint32_t i = 0; i < kComputeHistorySlots; ++i) {
+            D3D12_CPU_DESCRIPTOR_HANDLE histCpu = heapCpu;
+            histCpu.ptr += static_cast<SIZE_T>(step) * (1 + i);
+            ID3D12Resource* historyRes = nullptr;
+            const int historyCount = static_cast<int>(effect.historyTextures.size());
+            if (historyCount > 0) {
+                int readIndex = effect.historyIndex - static_cast<int>(i);
+                while (readIndex < 0) readIndex += historyCount;
+                readIndex %= historyCount;
+                historyRes = effect.historyTextures[static_cast<size_t>(readIndex)].Get();
+            }
+            if (!historyRes) historyRes = currentInput;
+            device->CreateShaderResourceView(historyRes, &srvDesc, histCpu);
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE outputCpu = heapCpu;
+        outputCpu.ptr += static_cast<SIZE_T>(step) * 9;
+        device->CreateUnorderedAccessView(currentOutput, nullptr, &uavDesc, outputCpu);
+
+        if (!g_runtimeComputeParamsMapped || !g_runtimeComputeParamsBuffer) {
+            return currentInput;
+        }
+
+        ComputeDispatchParams params{};
+        params.param0 = effect.param0;
+        params.param1 = effect.param1;
+        params.param2 = effect.param2;
+        params.param3 = effect.param3;
+        params.time = static_cast<float>(timeSeconds);
+        params.invWidth = m_width > 0 ? 1.0f / static_cast<float>(m_width) : 0.0f;
+        params.invHeight = m_height > 0 ? 1.0f / static_cast<float>(m_height) : 0.0f;
+        params.frame = static_cast<uint32_t>(m_transport.timeSeconds * 60.0);
+        std::memcpy(g_runtimeComputeParamsMapped, &params, sizeof(params));
+
+        D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+        cbvDesc.BufferLocation = g_runtimeComputeParamsBuffer->GetGPUVirtualAddress();
+        cbvDesc.SizeInBytes = Align256(static_cast<uint32_t>(sizeof(ComputeDispatchParams)));
+        D3D12_CPU_DESCRIPTOR_HANDLE cbvCpu = heapCpu;
+        cbvCpu.ptr += static_cast<SIZE_T>(step) * 10;
+        device->CreateConstantBufferView(&cbvDesc, cbvCpu);
+
+        D3D12_RESOURCE_BARRIER beginBarriers[2] = {};
+        beginBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        beginBarriers[0].Transition.pResource = currentInput;
+        beginBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        beginBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        beginBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        beginBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        beginBarriers[1].Transition.pResource = currentOutput;
+        beginBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        beginBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        beginBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(2, beginBarriers);
+
+        ID3D12DescriptorHeap* heaps[] = { g_runtimeComputeDescriptorHeap.Get() };
+        commandList->SetDescriptorHeaps(1, heaps);
+        commandList->SetComputeRootSignature(g_runtimeComputeRootSignature.Get());
+        commandList->SetPipelineState(effect.pipelineState.Get());
+
+        D3D12_GPU_DESCRIPTOR_HANDLE inputGpu = heapGpu;
+        D3D12_GPU_DESCRIPTOR_HANDLE historyGpu = heapGpu;
+        historyGpu.ptr += static_cast<UINT64>(step) * 1;
+        D3D12_GPU_DESCRIPTOR_HANDLE outputGpu = heapGpu;
+        outputGpu.ptr += static_cast<UINT64>(step) * 9;
+        D3D12_GPU_DESCRIPTOR_HANDLE cbvGpu = heapGpu;
+        cbvGpu.ptr += static_cast<UINT64>(step) * 10;
+
+        commandList->SetComputeRootDescriptorTable(0, inputGpu);
+        commandList->SetComputeRootDescriptorTable(1, historyGpu);
+        commandList->SetComputeRootDescriptorTable(2, outputGpu);
+        commandList->SetComputeRootDescriptorTable(3, cbvGpu);
+
+        const uint32_t tgx = (std::max)(1u, effect.threadGroupX);
+        const uint32_t tgy = (std::max)(1u, effect.threadGroupY);
+        const uint32_t tgz = (std::max)(1u, effect.threadGroupZ);
+        const uint32_t groupsX = (m_width + tgx - 1u) / tgx;
+        const uint32_t groupsY = (m_height + tgy - 1u) / tgy;
+        const uint32_t groupsZ = (1u + tgz - 1u) / tgz;
+        commandList->Dispatch(groupsX, groupsY, groupsZ);
+
+        D3D12_RESOURCE_BARRIER uavBarrier = {};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = currentOutput;
+        commandList->ResourceBarrier(1, &uavBarrier);
+
+        D3D12_RESOURCE_BARRIER endBarriers[2] = {};
+        endBarriers[0] = beginBarriers[0];
+        endBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        endBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        endBarriers[1] = beginBarriers[1];
+        endBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        endBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        commandList->ResourceBarrier(2, endBarriers);
+
+        if (!effect.historyTextures.empty()) {
+            const int historyCount = static_cast<int>(effect.historyTextures.size());
+            const int writeIndex = (effect.historyIndex + 1) % historyCount;
+
+            D3D12_RESOURCE_BARRIER preCopy[2] = {};
+            preCopy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            preCopy[0].Transition.pResource = currentOutput;
+            preCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            preCopy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            preCopy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            preCopy[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            preCopy[1].Transition.pResource = effect.historyTextures[static_cast<size_t>(writeIndex)].Get();
+            preCopy[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            preCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            preCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(2, preCopy);
+
+            commandList->CopyResource(effect.historyTextures[static_cast<size_t>(writeIndex)].Get(), currentOutput);
+
+            preCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            preCopy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            preCopy[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            preCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            commandList->ResourceBarrier(2, preCopy);
+
+            effect.historyIndex = writeIndex;
+            effect.historyInitialized = true;
+        }
+
+        currentInput = currentOutput;
+        currentOutput = (currentOutput == outputA) ? outputB : outputA;
+    }
+
+    return currentInput;
+#endif
 }
 
 ID3D12Resource* DemoPlayer::ApplyPostFxChain(ID3D12GraphicsCommandList* commandList,
@@ -2149,8 +2752,10 @@ ID3D12Resource* DemoPlayer::ApplyPostFxChain(ID3D12GraphicsCommandList* commandL
         srvGpu.ptr += baseSlot * handleStep;
         float iBeat = 0.0f;
         float iBar = 0.0f;
+        float fBeat = 0.0f;
         float fBarBeat = 0.0f;
-        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+        float fBarBeat16 = 0.0f;
+        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBeat, fBarBeat, fBarBeat16);
         m_renderer->Render(
             commandList,
             fx.pipelineState.Get(),
@@ -2161,6 +2766,8 @@ ID3D12Resource* DemoPlayer::ApplyPostFxChain(ID3D12GraphicsCommandList* commandL
             (float)timeSeconds,
             iBeat,
             iBar,
+            fBarBeat16,
+            fBeat,
             fBarBeat
         );
 
@@ -2205,8 +2812,16 @@ ID3D12Resource* DemoPlayer::GetSceneFinalTexture(ID3D12GraphicsCommandList* comm
     RenderScene(commandList, sceneIndex, timeSeconds);
     auto& scene = m_project.scenes[sceneIndex];
     if (!scene.texture) return nullptr;
-    if (scene.postFxChain.empty()) return scene.texture.Get();
-    return ApplyPostFxChain(commandList, scene, scene.texture.Get(), timeSeconds);
+    ID3D12Resource* output = scene.texture.Get();
+    if (!scene.postFxChain.empty()) {
+        output = ApplyPostFxChain(commandList, scene, output, timeSeconds);
+    }
+#if !SHADERLAB_TINY_PLAYER
+    if (!scene.computeEffectChain.empty()) {
+        output = ApplyComputeChain(commandList, sceneIndex, scene.computeEffectChain, output, timeSeconds);
+    }
+#endif
+    return output;
 }
 
 void DemoPlayer::OnResize(int width, int height) {
@@ -2305,11 +2920,13 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
 
     float iBeat = 0.0f;
     float iBar = 0.0f;
+    float fBeat = 0.0f;
     float fBarBeat = 0.0f;
-    ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+    float fBarBeat16 = 0.0f;
+    ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBeat, fBarBeat, fBarBeat16);
     m_renderer->Render(cmd, scene.pipelineState.Get(), scene.texture.Get(), rtvHandle,
                        scene.srvHeap ? scene.srvHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{},
-                       m_width, m_height, (float)time, iBeat, iBar, fBarBeat);
+                       m_width, m_height, (float)time, iBeat, iBar, fBarBeat16, fBeat, fBarBeat);
 
     // Barrier: RT -> Resource
     std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
@@ -2374,8 +2991,10 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
 
         float iBeat = 0.0f;
         float iBar = 0.0f;
+        float fBeat = 0.0f;
         float fBarBeat = 0.0f;
-        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+        float fBarBeat16 = 0.0f;
+        ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBeat, fBarBeat, fBarBeat16);
 
         m_renderer->Render(
             cmd,
@@ -2388,6 +3007,8 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
             static_cast<float>(sceneTime),
             iBeat,
             iBar,
+            fBarBeat16,
+            fBeat,
             fBarBeat);
         return true;
     };
@@ -2558,8 +3179,9 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
                 toTex = GetSceneFinalTexture(cmd, m_transitionToIndex, toTime);
              }
              
-             if (!m_transitionPSO || m_compiledTransitionType != CanonicalTransitionShaderType(m_currentTransitionType)) {
-                 EnsureTransitionPipeline(m_currentTransitionType);
+             const std::string canonicalTransitionStem = CanonicalTransitionStem(m_currentTransitionStem);
+             if (!m_transitionPSO || m_compiledTransitionStem != canonicalTransitionStem) {
+                 EnsureTransitionPipeline(canonicalTransitionStem);
              }
              if (m_transitionPSO) {
                  if (!m_transitionSrvHeap) {
@@ -2604,11 +3226,13 @@ void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTa
                  
                  float iBeat = 0.0f;
                  float iBar = 0.0f;
+                 float fBeat = 0.0f;
                  float fBarBeat = 0.0f;
-                 ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBarBeat);
+                 float fBarBeat16 = 0.0f;
+                 ComputeShaderMusicalTiming(m_transport, iBeat, iBar, fBeat, fBarBeat, fBarBeat16);
                  m_renderer->Render(cmd, m_transitionPSO.Get(), renderTarget, rtvHandle,
                      m_transitionSrvHeap->GetGPUDescriptorHandleForHeapStart(), m_width, m_height, (float)progress,
-                     iBeat, iBar, fBarBeat);
+                     iBeat, iBar, fBarBeat16, fBeat, fBarBeat);
              } else {
                  float clearColor[] = {0, 0, 0, 1};
                  cmd->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);

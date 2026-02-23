@@ -1,9 +1,17 @@
 #include "ShaderLab/Core/Serializer.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <unordered_set>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -12,8 +20,84 @@ namespace ShaderLab {
 
 namespace {
 
+constexpr char kPackedCompressedMagic[4] = {'S', 'L', 'Z', '1'};
+
+#if defined(_WIN32)
+typedef LONG (WINAPI *RtlGetCompressionWorkSpaceSizeFn)(USHORT, PULONG, PULONG);
+typedef LONG (WINAPI *RtlCompressBufferFn)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, ULONG, PULONG, PVOID);
+
+bool TryCompressPackedEntry(const std::vector<uint8_t>& input, std::vector<uint8_t>& output) {
+    output.clear();
+
+    if (input.size() < 256 || input.size() > static_cast<size_t>(UINT32_MAX)) {
+        return false;
+    }
+
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) {
+        ntdll = LoadLibraryW(L"ntdll.dll");
+    }
+    if (!ntdll) {
+        return false;
+    }
+
+    const auto rtlGetCompressionWorkSpaceSize = reinterpret_cast<RtlGetCompressionWorkSpaceSizeFn>(
+        GetProcAddress(ntdll, "RtlGetCompressionWorkSpaceSize"));
+    const auto rtlCompressBuffer = reinterpret_cast<RtlCompressBufferFn>(
+        GetProcAddress(ntdll, "RtlCompressBuffer"));
+    if (!rtlGetCompressionWorkSpaceSize || !rtlCompressBuffer) {
+        return false;
+    }
+
+    constexpr USHORT kFormatAndEngine = static_cast<USHORT>(2u | 0x0100u);
+    ULONG workspaceSize = 0;
+    ULONG fragmentWorkspaceSize = 0;
+    if (rtlGetCompressionWorkSpaceSize(kFormatAndEngine, &workspaceSize, &fragmentWorkspaceSize) != 0 || workspaceSize == 0) {
+        return false;
+    }
+
+    std::vector<uint8_t> workspace(static_cast<size_t>(workspaceSize));
+    std::vector<uint8_t> compressed(input.size() + input.size() / 8 + 1024);
+
+    ULONG compressedSize = 0;
+    if (rtlCompressBuffer(
+            kFormatAndEngine,
+            reinterpret_cast<PUCHAR>(const_cast<uint8_t*>(input.data())),
+            static_cast<ULONG>(input.size()),
+            reinterpret_cast<PUCHAR>(compressed.data()),
+            static_cast<ULONG>(compressed.size()),
+            4096,
+            &compressedSize,
+            workspace.data()) != 0) {
+        return false;
+    }
+
+    constexpr size_t kHeaderSize = 12;
+    if (compressedSize == 0 || (kHeaderSize + static_cast<size_t>(compressedSize)) >= input.size()) {
+        return false;
+    }
+
+    output.resize(kHeaderSize + static_cast<size_t>(compressedSize));
+    std::memcpy(output.data(), kPackedCompressedMagic, 4);
+
+    const uint32_t rawSize = static_cast<uint32_t>(input.size());
+    const uint32_t storedCompressedSize = static_cast<uint32_t>(compressedSize);
+    std::memcpy(output.data() + 4, &rawSize, sizeof(uint32_t));
+    std::memcpy(output.data() + 8, &storedCompressedSize, sizeof(uint32_t));
+    std::memcpy(output.data() + kHeaderSize, compressed.data(), compressedSize);
+    return true;
+}
+#endif
+
 std::string NormalizePathSlashes(std::string value) {
     std::replace(value.begin(), value.end(), '\\', '/');
+    return value;
+}
+
+std::string ToLower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return value;
 }
 
@@ -35,7 +119,57 @@ bool TryParseCodeLink(const std::string& codeField, std::string& outPath) {
     return !outPath.empty();
 }
 
+fs::path InferWorkspaceRootFromProjectDirectory(const fs::path& projectDirectory) {
+    if (!projectDirectory.empty()) {
+        const fs::path parent = projectDirectory.parent_path();
+        if (!parent.empty() && parent.filename() == "projects") {
+            return parent.parent_path();
+        }
+    }
+
+    if (const char* workspaceEnv = std::getenv("SHADERLAB_WORKSPACE")) {
+        if (*workspaceEnv) {
+            return fs::path(workspaceEnv);
+        }
+    }
+
+    if (const char* userProfile = std::getenv("USERPROFILE")) {
+        if (*userProfile) {
+            return fs::path(userProfile) / "ShaderLabs";
+        }
+    }
+
+    return {};
+}
+
+fs::path ResolveProjectPath(const std::string& storedPath,
+                           const fs::path& projectDirectory,
+                           const fs::path& workspaceRoot) {
+    fs::path sourcePath(storedPath);
+    if (sourcePath.is_absolute()) {
+        return sourcePath;
+    }
+
+    const fs::path projectRelative = (projectDirectory / sourcePath).lexically_normal();
+    std::error_code ec;
+    if (fs::exists(projectRelative, ec) && !ec) {
+        return projectRelative;
+    }
+
+    if (!workspaceRoot.empty()) {
+        const fs::path workspaceRelative = (workspaceRoot / sourcePath).lexically_normal();
+        ec.clear();
+        if (fs::exists(workspaceRelative, ec) && !ec) {
+            return workspaceRelative;
+        }
+        return workspaceRelative;
+    }
+
+    return projectRelative;
+}
+
 void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirectory) {
+    const fs::path workspaceRoot = InferWorkspaceRootFromProjectDirectory(projectDirectory);
     auto resolveShader = [&](std::string& shaderCode, std::string& shaderCodePath) {
         if (shaderCodePath.empty()) {
             std::string linkedPath;
@@ -48,10 +182,7 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
             return;
         }
 
-        fs::path sourcePath = fs::path(shaderCodePath);
-        if (!sourcePath.is_absolute()) {
-            sourcePath = projectDirectory / sourcePath;
-        }
+        const fs::path sourcePath = ResolveProjectPath(shaderCodePath, projectDirectory, workspaceRoot);
 
         std::string fileContent;
         if (TryReadTextFile(sourcePath, fileContent)) {
@@ -63,6 +194,34 @@ void ResolveLinkedShaderCode(ProjectData& project, const fs::path& projectDirect
         resolveShader(scene.shaderCode, scene.shaderCodePath);
         for (auto& fx : scene.postFxChain) {
             resolveShader(fx.shaderCode, fx.shaderCodePath);
+        }
+    }
+}
+
+void ResolveLinkedAssetPaths(ProjectData& project, const fs::path& projectDirectory) {
+    const fs::path workspaceRoot = InferWorkspaceRootFromProjectDirectory(projectDirectory);
+
+    auto resolvePath = [&](std::string& pathValue) {
+        if (pathValue.empty()) {
+            return;
+        }
+        const fs::path resolved = ResolveProjectPath(pathValue, projectDirectory, workspaceRoot);
+        pathValue = resolved.lexically_normal().string();
+    };
+
+    for (auto& clip : project.audioLibrary) {
+        resolvePath(clip.path);
+    }
+
+    for (auto& scene : project.scenes) {
+        resolvePath(scene.precompiledPath);
+        for (auto& bind : scene.bindings) {
+            if (bind.bindingType == BindingType::File) {
+                resolvePath(bind.filePath);
+            }
+        }
+        for (auto& fx : scene.postFxChain) {
+            resolvePath(fx.precompiledPath);
         }
     }
 }
@@ -99,6 +258,11 @@ void ForEachProjectAssetPath(const ProjectData& project, Visitor&& visitor) {
 }
 
 struct ExecutablePackAccumulator {
+    explicit ExecutablePackAccumulator(bool enableCompression)
+        : compressEntries(enableCompression) {
+    }
+
+    bool compressEntries = false;
     std::vector<uint8_t> packBlob;
     std::vector<PackedEntryInfo> entries;
     std::unordered_set<std::string> packedPathIndex;
@@ -108,13 +272,21 @@ struct ExecutablePackAccumulator {
     }
 
     void AddEntryFromData(const std::string& packedPath, const std::vector<uint8_t>& data) {
+        std::vector<uint8_t> compressedData;
+        const std::vector<uint8_t>* payload = &data;
+#if defined(_WIN32)
+        if (compressEntries && TryCompressPackedEntry(data, compressedData)) {
+            payload = &compressedData;
+        }
+#endif
+
         PackedEntryInfo info;
         info.path = packedPath;
         info.offset = packBlob.size();
-        info.size = data.size();
+        info.size = payload->size();
         entries.push_back(info);
         packedPathIndex.insert(packedPath);
-        packBlob.insert(packBlob.end(), data.begin(), data.end());
+        packBlob.insert(packBlob.end(), payload->begin(), payload->end());
     }
 
     void TryAddEntryFromDisk(const fs::path& diskPath, const std::string& packedPathRaw) {
@@ -227,16 +399,6 @@ bool WritePackedExecutable(const std::string& outputPathText,
         {BindingType::File, "File"}
     })
     
-    NLOHMANN_JSON_SERIALIZE_ENUM(TransitionType, {
-        {TransitionType::None, "None"},
-        {TransitionType::Crossfade, "Crossfade"},
-        {TransitionType::DipToBlack, "DipToBlack"},
-        {TransitionType::FadeOut, "FadeOut"},
-        {TransitionType::FadeIn, "FadeIn"},
-        {TransitionType::Glitch, "Glitch"},
-        {TransitionType::Pixelate, "Pixelate"}
-    })
-
     void to_json(json& j, const TextureBinding& b);
     void from_json(const json& j, TextureBinding& b);
     void to_json(json& j, const Scene::PostFXEffect& e);
@@ -276,9 +438,11 @@ bool WritePackedExecutable(const std::string& outputPathText,
     void to_json(json& j, const Scene::PostFXEffect& e) {
         j = json{
             {"name", e.name},
-            {"code", e.shaderCode},
             {"enabled", e.enabled}
         };
+        if (e.shaderCodePath.empty()) {
+            j["code"] = e.shaderCode;
+        }
         if (!e.shaderCodePath.empty()) j["codePath"] = e.shaderCodePath;
         if (!e.precompiledPath.empty()) j["precompiled"] = e.precompiledPath;
     }
@@ -296,16 +460,74 @@ bool WritePackedExecutable(const std::string& outputPathText,
         e.historyTextures.clear();
     }
 
+    void to_json(json& j, const Scene::ComputeEffect& e) {
+        j = json{
+            {"name", e.name},
+            {"type", static_cast<int>(e.type)},
+            {"enabled", e.enabled},
+            {"threadGroupX", e.threadGroupX},
+            {"threadGroupY", e.threadGroupY},
+            {"param0", e.param0},
+            {"param1", e.param1},
+            {"param2", e.param2},
+            {"param3", e.param3}
+        };
+        if (e.shaderCodePath.empty()) {
+            j["code"] = e.shaderCode;
+        }
+        if (!e.shaderCodePath.empty()) j["codePath"] = e.shaderCodePath;
+        if (!e.precompiledPath.empty()) j["precompiled"] = e.precompiledPath;
+        if (e.entryPoint != "main") j["entryPoint"] = e.entryPoint;
+        if (e.historyCount > 0) j["historyCount"] = e.historyCount;
+    }
+
+    void from_json(const json& j, Scene::ComputeEffect& e) {
+        j.at("name").get_to(e.name);
+        if (j.contains("type")) {
+            int t; j.at("type").get_to(t);
+            e.type = static_cast<Scene::ComputeEffect::Type>(t);
+        }
+        if (j.contains("code")) j.at("code").get_to(e.shaderCode);
+        if (j.contains("codePath")) j.at("codePath").get_to(e.shaderCodePath);
+        if (j.contains("precompiled")) j.at("precompiled").get_to(e.precompiledPath);
+        if (j.contains("enabled")) j.at("enabled").get_to(e.enabled);
+        if (j.contains("entryPoint")) j.at("entryPoint").get_to(e.entryPoint);
+        if (j.contains("threadGroupX")) j.at("threadGroupX").get_to(e.threadGroupX);
+        if (j.contains("threadGroupY")) j.at("threadGroupY").get_to(e.threadGroupY);
+        if (j.contains("threadGroupZ")) j.at("threadGroupZ").get_to(e.threadGroupZ);
+        if (j.contains("param0")) j.at("param0").get_to(e.param0);
+        if (j.contains("param1")) j.at("param1").get_to(e.param1);
+        if (j.contains("param2")) j.at("param2").get_to(e.param2);
+        if (j.contains("param3")) j.at("param3").get_to(e.param3);
+        if (j.contains("historyCount")) {
+            j.at("historyCount").get_to(e.historyCount);
+        } else {
+            const std::string lowerCode = ToLower(e.shaderCode);
+            const bool looksTemporal = (e.type == Scene::ComputeEffect::Type::Temporal) ||
+                (lowerCode.find("historytexture") != std::string::npos) ||
+                (lowerCode.find("register(t1)") != std::string::npos);
+            e.historyCount = looksTemporal ? 1 : 0;
+        }
+        e.isDirty = true;
+        e.pipelineState = nullptr;
+        e.historyIndex = 0;
+        e.historyInitialized = false;
+        e.historyTextures.clear();
+    }
+
     void to_json(json& j, const Scene& s) {
         j = json{
             {"name", s.name},
-            {"code", s.shaderCode},
             {"bindings", s.bindings},
             {"outputType", s.outputType}
         };
+        if (s.shaderCodePath.empty()) {
+            j["code"] = s.shaderCode;
+        }
         if (!s.description.empty()) j["description"] = s.description;
         if (!s.shaderCodePath.empty()) j["codePath"] = s.shaderCodePath;
         if (!s.postFxChain.empty()) j["postfx"] = s.postFxChain;
+        if (!s.computeEffectChain.empty()) j["compute"] = s.computeEffectChain;
         if (!s.precompiledPath.empty()) j["precompiled"] = s.precompiledPath;
     }
 
@@ -317,6 +539,7 @@ bool WritePackedExecutable(const std::string& outputPathText,
         j.at("bindings").get_to(s.bindings);
         if(j.contains("outputType")) j.at("outputType").get_to(s.outputType);
         if(j.contains("postfx")) j.at("postfx").get_to(s.postFxChain);
+        if(j.contains("compute")) j.at("compute").get_to(s.computeEffectChain);
         if(j.contains("precompiled")) j.at("precompiled").get_to(s.precompiledPath);
     }
 
@@ -340,19 +563,33 @@ bool WritePackedExecutable(const std::string& outputPathText,
         j = json{
             {"id", r.rowId},
             {"scene", r.sceneIndex},
-            {"trans", r.transition},
+            {"transStem", r.transitionPresetStem},
             {"dur", r.transitionDuration},
             {"offset", r.timeOffset},
             {"music", r.musicIndex},
             {"oneshot", r.oneShotIndex},
             {"stop", r.stop}
         };
+        if (!r.transitionShaderPath.empty()) {
+            j["transPath"] = r.transitionShaderPath;
+        }
     }
 
     void from_json(const json& j, TrackerRow& r) {
         j.at("id").get_to(r.rowId);
         j.at("scene").get_to(r.sceneIndex);
-        j.at("trans").get_to(r.transition);
+        if (j.contains("transStem")) {
+            j.at("transStem").get_to(r.transitionPresetStem);
+        } else {
+            r.transitionPresetStem.clear();
+        }
+        if (j.contains("transPath")) {
+            j.at("transPath").get_to(r.transitionShaderPath);
+        } else if (j.contains("transCode")) {
+            r.transitionShaderPath.clear();
+        } else {
+            r.transitionShaderPath.clear();
+        }
         j.at("dur").get_to(r.transitionDuration);
         if(j.contains("offset")) j.at("offset").get_to(r.timeOffset);
         j.at("music").get_to(r.musicIndex);
@@ -424,7 +661,9 @@ namespace Serializer {
         json j;
         i >> j;
         outProject = j.get<ProjectData>();
-        ResolveLinkedShaderCode(outProject, fs::path(filepath).parent_path());
+        const fs::path projectDirectory = fs::path(filepath).parent_path();
+        ResolveLinkedShaderCode(outProject, projectDirectory);
+        ResolveLinkedAssetPaths(outProject, projectDirectory);
         return true;
     }
 
@@ -644,7 +883,8 @@ namespace Serializer {
         if (loadProjectAssets && !LoadProject(projectJsonPath, project)) return false;
 
         // 3. Prepare Pack Data
-        ExecutablePackAccumulator packAccumulator;
+        const bool compressPackedEntries = !includeProjectManifest;
+        ExecutablePackAccumulator packAccumulator(compressPackedEntries);
         packAccumulator.TryAddProjectManifest(projectJsonPath, includeProjectManifest, hasProjectJsonPath);
 
         const fs::path projectRoot = hasProjectJsonPath ? fs::path(projectJsonPath).parent_path() : fs::path();

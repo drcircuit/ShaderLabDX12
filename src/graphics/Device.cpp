@@ -1,6 +1,4 @@
 #include "ShaderLab/Graphics/Device.h"
-#include <stdexcept>
-#include <cstdio>
 
 #ifndef SHADERLAB_TINY_PLAYER
 #define SHADERLAB_TINY_PLAYER 0
@@ -10,8 +8,11 @@ namespace ShaderLab {
 
 #if SHADERLAB_TINY_PLAYER
 static inline void TinyErrCode(const char* code) {
-    std::fputs(code, stderr);
-    std::fputc('\n', stderr);
+    if (!code) {
+        return;
+    }
+    OutputDebugStringA(code);
+    OutputDebugStringA("\n");
 }
 #endif
 

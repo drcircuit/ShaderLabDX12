@@ -60,7 +60,7 @@ if ($LASTEXITCODE -eq 0) {
     $signScript = Join-Path $PSScriptRoot "sign_build.ps1"
     if (Test-Path $signScript) {
             $binaries = @(
-            "build\bin\ShaderLabEditor.exe",
+            "build\bin\ShaderLabIIDE.exe",
             "build\bin\ShaderLabPlayer.exe"
             )
 
@@ -72,7 +72,7 @@ if ($LASTEXITCODE -eq 0) {
             }
     }
 
-    $exe = "build\bin\ShaderLabEditor.exe"
+    $exe = "build\bin\ShaderLabIIDE.exe"
     if (Test-Path $exe) {
         if ($Run) {
             Write-Host "Running..." -ForegroundColor Cyan

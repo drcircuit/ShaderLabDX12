@@ -11,6 +11,7 @@ $tinyCrinklerSmokeReady = $true
 $m6PrebuiltReady = $true
 $editorIncludeReady = $true
 $fullscreenPolicyReady = $true
+$uiStyleGuardReady = $true
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 function Get-VcvarsPath {
@@ -169,7 +170,7 @@ Write-Host "Editor Include Boundary:" -ForegroundColor Cyan
 if ($allReady) {
     try {
         $editorRoots = @(
-            (Join-Path $repoRoot "src\app\editor"),
+            (Join-Path $repoRoot "src\app\ShaderLabMain"),
             (Join-Path $repoRoot "src\ui"),
             (Join-Path $repoRoot "include\ShaderLab\UI")
         )
@@ -274,6 +275,56 @@ if ($allReady) {
 Write-Host ""
 Write-Host "Micro Packaging Contract:" -ForegroundColor Cyan
 $microCheckDir = "build_micro_contract_check"
+
+Write-Host ""
+Write-Host "UI Style Guardrails:" -ForegroundColor Cyan
+if ($allReady) {
+    try {
+        $uiRoot = Join-Path $repoRoot "src\ui"
+        $uiFiles = @()
+        if (Test-Path $uiRoot) {
+            $uiFiles = Get-ChildItem -Path $uiRoot -Recurse -File -Include *.h,*.hpp,*.cpp
+        }
+
+        $violations = @()
+        if ($uiFiles.Count -gt 0) {
+            $forbiddenPatterns = @(
+                'PushStyleColor\s*\(\s*ImGuiCol_FrameBg\s*,\s*ImVec4\s*\(',
+                'PushStyleColor\s*\(\s*ImGuiCol_ChildBg\s*,\s*ImVec4\s*\(',
+                'PushStyleColor\s*\(\s*ImGuiCol_PopupBg\s*,\s*ImVec4\s*\(',
+                'ImGuiCol_FrameBg\s*\]\s*=\s*ImVec4\s*\(',
+                'ImGuiCol_ChildBg\s*\]\s*=\s*ImVec4\s*\(',
+                'ImGuiCol_PopupBg\s*\]\s*=\s*ImVec4\s*\('
+            )
+
+            foreach ($pattern in $forbiddenPatterns) {
+                $violations += Select-String -Path $uiFiles.FullName -Pattern $pattern -CaseSensitive -ErrorAction SilentlyContinue
+            }
+        }
+
+        if ($violations.Count -eq 0) {
+            Write-Host "  UI style guardrails: OK" -ForegroundColor Green
+        } else {
+            Write-Host "  UI style guardrails: FAILED" -ForegroundColor Red
+            Write-Host "  Found hardcoded ImGui color literals for FrameBg/ChildBg/PopupBg in src/ui:" -ForegroundColor Yellow
+            $violations | Select-Object -First 12 | ForEach-Object {
+                Write-Host "    $($_.Path):$($_.LineNumber): $($_.Line.Trim())"
+            }
+            if ($violations.Count -gt 12) {
+                Write-Host "    ... and $($violations.Count - 12) more" -ForegroundColor Yellow
+            }
+            $uiStyleGuardReady = $false
+        }
+    }
+    catch {
+        Write-Host "  UI style guardrails: FAILED" -ForegroundColor Red
+        Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Yellow
+        $uiStyleGuardReady = $false
+    }
+} else {
+    Write-Host "  Skipped (build prerequisites not ready)" -ForegroundColor Yellow
+    $uiStyleGuardReady = $false
+}
 
 if ($allReady -and $layeringReady) {
     try {
@@ -410,7 +461,7 @@ if ($allReady) {
 Write-Host ""
 Write-Host "===================================" -ForegroundColor Cyan
 
-if ($allReady -and $docsReady -and $layeringReady -and $editorIncludeReady -and $fullscreenPolicyReady -and $microContractReady -and $m6PrebuiltReady -and $tinyCrinklerSmokeReady) {
+if ($allReady -and $docsReady -and $layeringReady -and $editorIncludeReady -and $fullscreenPolicyReady -and $uiStyleGuardReady -and $microContractReady -and $m6PrebuiltReady -and $tinyCrinklerSmokeReady) {
     Write-Host "Ready to build!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Run: .\tools\build.ps1" -ForegroundColor Cyan

@@ -4,8 +4,6 @@
 #include "ShaderLab/Graphics/Device.h"
 #include "ShaderLab/Graphics/Swapchain.h"
 
-#include <windowsx.h>
-
 namespace ShaderLab {
 
 namespace {
@@ -20,12 +18,7 @@ struct TinyRuntimeResources {
 TinyRuntimeResources g_resources;
 
 struct TinyRuntimeState {
-    bool windowed = false;
-    bool screenSaverMode = false;
     bool vsyncEnabled = true;
-    bool startFullscreen = true;
-    bool runtimeCursorHidden = false;
-    POINT lastMousePos = { 0, 0 };
 };
 
 TinyRuntimeState g_runtime;
@@ -79,32 +72,6 @@ LRESULT CALLBACK TinyWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return TRUE;
     }
 
-    if (g_runtime.screenSaverMode) {
-        switch (uMsg) {
-            case WM_MOUSEMOVE: {
-                POINT p;
-                p.x = GET_X_LPARAM(lParam);
-                p.y = GET_Y_LPARAM(lParam);
-                const int dx = p.x - g_runtime.lastMousePos.x;
-                const int dy = p.y - g_runtime.lastMousePos.y;
-                if (dx > 2 || dx < -2 || dy > 2 || dy < -2) {
-                    PostQuitMessage(0);
-                }
-                g_runtime.lastMousePos = p;
-                break;
-            }
-            case WM_LBUTTONDOWN:
-            case WM_RBUTTONDOWN:
-            case WM_MBUTTONDOWN:
-            case WM_KEYDOWN:
-            case WM_SYSKEYDOWN:
-                PostQuitMessage(0);
-                return 0;
-            default:
-                break;
-        }
-    }
-
     switch (uMsg) {
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -129,34 +96,32 @@ LRESULT CALLBACK TinyWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     g_runtime = TinyRuntimeState{};
-    g_runtime.screenSaverMode = options.screenSaverMode;
     g_runtime.vsyncEnabled = options.vsyncEnabled;
-    g_runtime.startFullscreen = options.startFullscreen;
 
-    const char kClassName[] = "ShaderLabTinyPlayerWindow";
-    WNDCLASS wc = {};
+    const wchar_t kClassName[] = L"ShaderLabTinyPlayerWindow";
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = TinyWindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = kClassName;
     wc.hCursor = nullptr;
     wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    RegisterClass(&wc);
+    RegisterClassW(&wc);
 
     const int screenW = GetSystemMetrics(SM_CXSCREEN);
     const int screenH = GetSystemMetrics(SM_CYSCREEN);
-    const bool launchFullscreen = (!g_runtime.screenSaverMode && g_runtime.startFullscreen);
+    const bool launchFullscreen = options.startFullscreen;
 
-    const DWORD windowStyle = (g_runtime.screenSaverMode || launchFullscreen) ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-    const int windowW = (g_runtime.screenSaverMode || launchFullscreen) ? screenW : 1280;
-    const int windowH = (g_runtime.screenSaverMode || launchFullscreen) ? screenH : 720;
-    const int windowX = (g_runtime.screenSaverMode || launchFullscreen) ? 0 : (screenW - windowW) / 2;
-    const int windowY = (g_runtime.screenSaverMode || launchFullscreen) ? 0 : (screenH - windowH) / 2;
-    const DWORD exStyle = (g_runtime.screenSaverMode || launchFullscreen) ? WS_EX_TOPMOST : 0;
+    const DWORD windowStyle = launchFullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    const int windowW = launchFullscreen ? screenW : 1280;
+    const int windowH = launchFullscreen ? screenH : 720;
+    const int windowX = launchFullscreen ? 0 : (screenW - windowW) / 2;
+    const int windowY = launchFullscreen ? 0 : (screenH - windowH) / 2;
+    const DWORD exStyle = launchFullscreen ? WS_EX_TOPMOST : 0;
 
-    HWND hwnd = CreateWindowEx(
+    HWND hwnd = CreateWindowExW(
         exStyle,
         kClassName,
-        "ShaderLab Tiny Player",
+        L"ShaderLab Tiny Player",
         windowStyle,
         windowX,
         windowY,
@@ -174,11 +139,6 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
     SetForegroundWindow(hwnd);
-
-    if (g_runtime.screenSaverMode) {
-        GetCursorPos(&g_runtime.lastMousePos);
-        ScreenToClient(hwnd, &g_runtime.lastMousePos);
-    }
 
     g_resources.device = new Device();
     if (!g_resources.device->Initialize()) {

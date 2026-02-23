@@ -11,7 +11,7 @@
 ### Portable build
 
 1. Extract the portable zip to a writable folder.
-2. Run `ShaderLabEditor.exe`.
+2. Run `ShaderLabIIDE.exe`.
 
 ## First Launch
 

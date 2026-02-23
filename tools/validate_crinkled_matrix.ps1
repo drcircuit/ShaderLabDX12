@@ -12,7 +12,7 @@ $cliCandidates = @(
 )
 $cli = $cliCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-function Is-ExcludedProjectPath {
+function Assert-ExcludedProjectPath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
         }
 
         $candidate = Get-ChildItem -Path $root -Recurse -File -Filter "project.json" -ErrorAction SilentlyContinue |
-            Where-Object { -not (Is-ExcludedProjectPath $_.FullName) } |
+            Where-Object { -not (Assert-ExcludedProjectPath $_.FullName) } |
             Sort-Object FullName |
             Select-Object -First 1
 
@@ -77,6 +77,9 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 }
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
+$runStamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$runId = "${runStamp}_$PID"
+
 function Invoke-Crinkled {
     param(
         [string]$Name,
@@ -85,11 +88,11 @@ function Invoke-Crinkled {
         [string]$Size = "none"
     )
 
-    $root = Join-Path $OutputRoot ("root_" + $Name)
+    $root = Join-Path $OutputRoot ("root_" + $Name + "_" + $runId)
     $out = Join-Path $OutputRoot ("artifact_" + $Name + $Ext)
 
     Write-Host "--- $Name (crinkled) ---" -ForegroundColor Cyan
-    & $cli --app-root $repo --project $ProjectPath --output $out --solution-root $root --target $Target --mode crinkled --size $Size
+    & $cli --app-root $repo --project $ProjectPath --output $out --solution-root $root --target $Target --mode crinkled --size $Size | Out-Host
 
     $code = $LASTEXITCODE
     $exists = Test-Path $out

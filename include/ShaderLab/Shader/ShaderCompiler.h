@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dxcapi.h>
 #include <wrl/client.h>
+#include "ShaderLab/Shader/ShaderBase.h"
 #include <string>
 #include <vector>
 
@@ -37,35 +38,12 @@ public:
     };
 
     static std::string WrapShaderSource(const std::string& fragmentSource, const std::vector<BindingDecl>& bindings) {
-        std::string wrapped = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
-)";
-        // Generate texture declarations (Always 8 slots to match root signature/standard)
-        for(int i=0; i<8; ++i) {
-            std::string type = "Texture2D";
-            for(const auto& decl : bindings) {
-                if (decl.slot == i) {
-                    type = decl.type;
-                    break;
-                }
-            }
-            wrapped += type + " iChannel" + std::to_string(i) + " : register(t" + std::to_string(i) + ");\n";
+        std::vector<ShaderBase::TextureBindingDecl> sharedBindings;
+        sharedBindings.reserve(bindings.size());
+        for (const auto& binding : bindings) {
+            sharedBindings.push_back({binding.slot, binding.type});
         }
-        wrapped += "\n";
-
-        // Generate samplers
-        for(int i=0; i<8; ++i) {
-             wrapped += "SamplerState iChannel" + std::to_string(i) + "Sampler : register(s" + std::to_string(i) + ");\n";
-        }
-        wrapped += "\n";
-        wrapped += fragmentSource;
-        return wrapped;
+        return ShaderBase::BuildFragmentShaderTemplate(fragmentSource, sharedBindings);
     }
 
     ShaderCompiler();

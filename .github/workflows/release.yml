@@ -3,12 +3,6 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: >
-          Release version (e.g. 1.2.3).
-          Leave blank to auto-bump the patch number from the latest release tag.
-        required: false
-        default: ''
       prerelease:
         description: 'Mark as pre-release'
         type: boolean
@@ -25,41 +19,26 @@ jobs:
       # ── Checkout ──────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0        # needed to read tags for version bumping
 
       # ── Resolve version ───────────────────────────────────────────────────
       - name: Resolve version
         id: version
         shell: pwsh
         run: |
-          $v = "${{ inputs.version }}".Trim()
-          if (-not $v) {
-            # Try to bump patch from the latest semver tag (vX.Y.Z only)
-            $latest = git tag --list --sort=-version:refname 'v[0-9]*.[0-9]*.[0-9]*' |
-                        Select-Object -First 1
-            if ($latest -and "$latest" -match '^v?(\d+)\.(\d+)\.(\d+)$') {
-              $v = "$($Matches[1]).$($Matches[2]).$([int]$Matches[3] + 1)"
-            } else {
-              # Fall back to the version declared in CMakeLists.txt
-              $m = Select-String -Path CMakeLists.txt `
-                    -Pattern 'project\(ShaderLab\s+VERSION\s+(\S+)' |
-                    Select-Object -First 1
-              $v = if ($m) { $m.Matches[0].Groups[1].Value } else { "1.0.0" }
-            }
+          $metadataPath = "metadata/app_metadata.json"
+          if (-not (Test-Path $metadataPath)) {
+            throw "Version source missing: $metadataPath"
           }
+
+          $metadata = Get-Content -Path $metadataPath -Raw | ConvertFrom-Json
+          $v = [string]$metadata.version
+          if ([string]::IsNullOrWhiteSpace($v) -or ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$')) {
+            throw "Unable to parse semantic version (x.y.z) from $metadataPath"
+          }
+
           "version=$v" | Out-File -Append $env:GITHUB_OUTPUT
           "tag=v$v"    | Out-File -Append $env:GITHUB_OUTPUT
-          Write-Host "::notice::Release version resolved to $v"
-
-      # ── Stamp version into source ─────────────────────────────────────────
-      - name: Stamp version into CMakeLists.txt
-        shell: pwsh
-        run: |
-          $v = "${{ steps.version.outputs.version }}"
-          (Get-Content CMakeLists.txt -Raw) `
-            -replace '(project\(ShaderLab\s+VERSION\s+)[\d.]+', "`${1}$v" |
-            Set-Content CMakeLists.txt -NoNewline
+          Write-Host "::notice::Release version resolved from app_metadata.json to $v"
 
       # ── MSVC build environment ────────────────────────────────────────────
       - name: Set up MSVC (x64)
@@ -141,19 +120,6 @@ jobs:
         shell: pwsh
         run: cmake --build build --config Release
 
-      # ── Refactor guardrails (layering + micro packaging contract) ───────
-      - name: Run refactor guard checks
-        id: refactor_checks
-        shell: pwsh
-        continue-on-error: true
-        run: .\tools\check.ps1
-
-      - name: Warn if refactor guard checks failed
-        if: ${{ steps.refactor_checks.outcome == 'failure' }}
-        shell: pwsh
-        run: |
-          Write-Host "::warning::tools/check.ps1 failed in headless release workflow. Continuing because this gate is non-blocking. Review logs before publishing artifacts."
-
       # ── Stage end-user docs ───────────────────────────────────────────────
       - name: Stage end-user docs
         shell: pwsh
@@ -177,7 +143,7 @@ jobs:
           $v = "${{ steps.version.outputs.version }}"
           Compress-Archive `
             -Path "build\installer_stage\app\*" `
-            -DestinationPath "artifacts\ShaderLabEditor-x64-$v-portable.zip"
+            -DestinationPath "artifacts\ShaderLabIIDE-x64-$v-portable.zip"
 
       # ── Tag & publish release ─────────────────────────────────────────────
       - name: Create and push release tag

@@ -385,6 +385,45 @@ void ShaderCompiler::ParseDiagnostics(IDxcBlobEncoding* errorBlob,
                 }
             }
         }
+
+        // DXC can also report: filename:line:column: error: message
+        if (diag.line == 0) {
+            size_t firstColon = line.find(':');
+            if (firstColon != std::string::npos && firstColon > 1) {
+                size_t secondColon = line.find(':', firstColon + 1);
+                if (secondColon != std::string::npos) {
+                    size_t thirdColon = line.find(':', secondColon + 1);
+                    if (thirdColon != std::string::npos) {
+                        const std::string lineStr = line.substr(firstColon + 1, secondColon - firstColon - 1);
+                        const std::string colStr = line.substr(secondColon + 1, thirdColon - secondColon - 1);
+                        bool validLine = !lineStr.empty();
+                        bool validCol = !colStr.empty();
+                        for (char c : lineStr) {
+                            if (c < '0' || c > '9') {
+                                validLine = false;
+                                break;
+                            }
+                        }
+                        for (char c : colStr) {
+                            if (c < '0' || c > '9') {
+                                validCol = false;
+                                break;
+                            }
+                        }
+
+                        if (validLine && validCol) {
+                            try {
+                                diag.filename = line.substr(0, firstColon);
+                                diag.line = static_cast<uint32_t>(std::stoi(lineStr));
+                                diag.column = static_cast<uint32_t>(std::stoi(colStr));
+                            } catch (...) {
+                                // Keep unstructured if conversion fails
+                            }
+                        }
+                    }
+                }
+            }
+        }
         
         // Check if error or warning
         diag.isError = (line.find("error") != std::string::npos);

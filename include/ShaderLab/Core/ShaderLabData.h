@@ -13,7 +13,6 @@ namespace ShaderLab {
 enum class TextureType { Texture2D, TextureCube, Texture3D };
 enum class BindingType { Scene, File };
 enum class AudioType { Music, OneShot };
-enum class TransitionType { None, Crossfade, DipToBlack, FadeOut, FadeIn, Glitch, Pixelate };
 
 struct TextureBinding {
     int channelIndex = 0;
@@ -36,7 +35,8 @@ struct AudioClip {
 struct TrackerRow {
     int rowId = 0; 
     int sceneIndex = -1;
-    TransitionType transition = TransitionType::None;
+    std::string transitionPresetStem;
+    std::string transitionShaderPath;
     float transitionDuration = 1.0f; 
     float timeOffset = 0.0f; // Offset in beats to subtract from global time for this scene
     int musicIndex = -1; 
@@ -73,6 +73,9 @@ struct Scene {
     std::vector<TextureBinding> bindings;
     TextureType outputType = TextureType::Texture2D;
 
+    // ========================================================================
+    // PIXEL SHADER BASED POST-FX EFFECT (Traditional)
+    // ========================================================================
     struct PostFXEffect {
         std::string name;
         std::string shaderCode;
@@ -92,7 +95,57 @@ struct Scene {
             : name(inName), shaderCode(code) {}
     };
 
+    // ========================================================================
+    // COMPUTE SHADER BASED EFFECT (New - enables optimized algorithms)
+    // ========================================================================
+    struct ComputeEffect {
+        enum class Type {
+            Temporal,      // Temporal accumulation: motion blur, trails
+            Denoising,     // Denoise, bilateral filter
+            PostProcess,   // Tone mapping, color grading
+            Custom         // User-defined
+        };
+
+        std::string name;
+        std::string shaderCode;
+        std::string shaderCodePath;
+        std::string precompiledPath;
+        Type type = Type::Custom;
+        bool enabled = true;
+        bool isDirty = true;
+        std::string lastCompiledCode;
+
+        // Compute shader parameters (standardized)
+        // These map to cbuffer in compute shader
+        float param0 = 0.0f;   // Decay, radius, threshold, etc.
+        float param1 = 0.0f;   // Blend, intensity, strength, etc.
+        float param2 = 0.0f;   // Saturation, falloff, speed, etc.
+        float param3 = 0.0f;   // Custom effect-specific
+
+        // Thread group dimensions
+        uint32_t threadGroupX = 8;
+        uint32_t threadGroupY = 8;
+        uint32_t threadGroupZ = 1;
+
+        // Entry point (default: "main")
+        std::string entryPoint = "main";
+
+        // Runtime data
+        ComPtr<ID3D12PipelineState> pipelineState;
+        size_t compiledShaderBytes = 0;
+        int historyIndex = 0;
+        bool historyInitialized = false;
+        std::vector<ComPtr<ID3D12Resource>> historyTextures;
+        int historyCount = 0;  // How many history frames this effect needs
+
+        ComputeEffect() = default;
+        ComputeEffect(const std::string& inName, Type inType, const std::string& code)
+            : name(inName), type(inType), shaderCode(code) {}
+    };
+
+    // Both effect types in the processing chain
     std::vector<PostFXEffect> postFxChain;
+    std::vector<ComputeEffect> computeEffectChain;
     
     // Runtime resources
     ComPtr<ID3D12Resource> texture;

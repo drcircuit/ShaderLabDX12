@@ -118,7 +118,7 @@ cd ShaderLab
 # powershell -NoProfile -ExecutionPolicy Bypass -Command ". .\tools\dev_env.ps1; cmd /c .\.vscode\build-debug.bat"
 
 # Run the editor from the repository root
-build\bin\ShaderLabEditor.exe
+build\bin\ShaderLabIIDE.exe
 ```
 
 Third-party dependencies are listed in [third_party/README.md](third_party/README.md).
@@ -135,7 +135,7 @@ For full setup and packaging flows, see:
 
 ## Usage
 
-1. **Launch Editor**: Run `build\bin\ShaderLabEditor.exe` from the repo root
+1. **Launch Editor**: Run `build\bin\ShaderLabIIDE.exe` from the repo root
 2. **Load Audio**: Import a music track (WAV, MP3, OGG)
 3. **Set BPM**: Configure tempo for beat synchronization
 4. **Create Effect**: Write HLSL pixel shaders in the Effect View

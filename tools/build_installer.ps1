@@ -21,7 +21,7 @@ if (-not (Test-Path $BuildBin)) {
     throw "Build output folder not found: $BuildBin"
 }
 
-$editorExe = Join-Path $BuildBin "ShaderLabEditor.exe"
+$editorExe = Join-Path $BuildBin "ShaderLabIIDE.exe"
 if (-not (Test-Path $editorExe)) {
     throw "Required runtime not found: $editorExe"
 }
@@ -37,15 +37,15 @@ Write-Host ("Using editor binary: {0} (size={1} bytes, mtime={2})" -f $editorInf
 Write-Host ("Using player binary: {0} (size={1} bytes, mtime={2})" -f $playerInfo.FullName, $playerInfo.Length, $playerInfo.LastWriteTime.ToString("s")) -ForegroundColor DarkCyan
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $cmakePath = Join-Path $repoRoot "CMakeLists.txt"
-    if (Test-Path $cmakePath) {
-        $line = Select-String -Path $cmakePath -Pattern "project\(ShaderLab\s+VERSION\s+([0-9\.]+)" -AllMatches | Select-Object -First 1
-        if ($line -and $line.Matches.Count -gt 0) {
-            $Version = $line.Matches[0].Groups[1].Value
-        }
+    $metadataPath = Join-Path $repoRoot "metadata\app_metadata.json"
+    if (-not (Test-Path $metadataPath)) {
+        throw "Version source missing: $metadataPath"
     }
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        $Version = "0.1.0"
+
+    $metadata = Get-Content -Path $metadataPath -Raw | ConvertFrom-Json
+    $Version = [string]$metadata.version
+    if ([string]::IsNullOrWhiteSpace($Version) -or ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$')) {
+        throw "Unable to parse semantic version (x.y.z) from $metadataPath"
     }
 }
 
@@ -79,6 +79,20 @@ foreach ($item in $extraToCopy) {
         Copy-Item -Path $src -Destination $stageApp -Recurse -Force
     }
 }
+
+# Remove user-local runtime state so installs are always clean/fresh.
+$localStatePatterns = @(
+    "imgui.ini",
+    "*.shaderlab.user.json",
+    "ui_settings.json",
+    "snippets.json"
+)
+foreach ($pattern in $localStatePatterns) {
+    Get-ChildItem -Path $stageApp -Filter $pattern -File -Recurse -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+Get-ChildItem -Path $stageApp -Directory -Filter ".shaderlab" -Recurse -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $stageDevKitCmake = Join-Path $stageApp "dev_kit\CMakeLists.txt"
 if (-not (Test-Path $stageDevKitCmake)) {
@@ -194,7 +208,7 @@ $issLines = @(
     ('#define MyAppName "{0}"' -f $AppName),
     ('#define MyAppVersion "{0}"' -f $Version),
     '#define MyAppPublisher "ShaderLab"',
-    '#define MyAppExeName "ShaderLabEditor.exe"',
+    '#define MyAppExeName "ShaderLabIIDE.exe"',
     ('#define SourceRoot "{0}"' -f $stageAppEsc),
     '',
     '[Setup]',
@@ -212,6 +226,7 @@ $issLines = @(
     'ArchitecturesAllowed=x64compatible',
     'ArchitecturesInstallIn64BitMode=x64compatible',
     'SetupIconFile={#SourceRoot}\\editor_assets\\shaderlab.ico.ico',
+    'UninstallDisplayIcon={app}\\editor_assets\\shaderlab.ico.ico',
     ('LicenseFile={0}\LICENSE-COMMUNITY.md' -f $repoRootEsc),
     '',
     '[Languages]',
@@ -219,6 +234,15 @@ $issLines = @(
     '',
     '[Tasks]',
     'Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Additional icons:"',
+    '',
+    '[Dirs]',
+    'Name: "{code:GetWorkspaceFolder}"',
+    'Name: "{code:GetWorkspaceProjects}"',
+    'Name: "{code:GetWorkspaceSnippets}"',
+    'Name: "{code:GetWorkspacePostFx}"',
+    '',
+    '[Registry]',
+    'Root: HKCU; Subkey: "Software\ShaderLab"; ValueType: string; ValueName: "WorkspaceFolder"; ValueData: "{code:GetWorkspaceFolder}"; Flags: uninsdeletevalue',
     '',
     '[Files]',
     'Source: "{#SourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs'
@@ -243,6 +267,52 @@ if ($vcRedistStaged) {
 }
 
 $issLines += 'Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent'
+
+$issLines += @(
+    '',
+    '[Code]',
+    'var',
+    '  WorkspacePage: TInputDirWizardPage;',
+    '',
+    'procedure InitializeWizard();',
+    'var',
+    '  DefaultWorkspace: string;',
+    'begin',
+    '  DefaultWorkspace := ExpandConstant(''{%USERPROFILE}\ShaderLabs'');',
+    '  WorkspacePage := CreateInputDirPage(',
+    '    wpSelectDir,',
+    '    ''Shader Workspace Folder'',',
+    '    ''Choose where ShaderLab stores your workspace files.'',',
+    '    ''ShaderLab will create and use subfolders: projects, snippets, and postfx.'',',
+    '    False,',
+    '    '''');',
+    '  WorkspacePage.Add(''Workspace folder:'');',
+    '  WorkspacePage.Values[0] := DefaultWorkspace;',
+    'end;',
+    '',
+    'function GetWorkspaceFolder(Param: string): string;',
+    'begin',
+    '  if Assigned(WorkspacePage) then',
+    '    Result := WorkspacePage.Values[0]',
+    '  else',
+    '    Result := ExpandConstant(''{%USERPROFILE}\ShaderLabs'');',
+    'end;',
+    '',
+    'function GetWorkspaceProjects(Param: string): string;',
+    'begin',
+    '  Result := AddBackslash(GetWorkspaceFolder(Param)) + ''projects'';',
+    'end;',
+    '',
+    'function GetWorkspaceSnippets(Param: string): string;',
+    'begin',
+    '  Result := AddBackslash(GetWorkspaceFolder(Param)) + ''snippets'';',
+    'end;',
+    '',
+    'function GetWorkspacePostFx(Param: string): string;',
+    'begin',
+    '  Result := AddBackslash(GetWorkspaceFolder(Param)) + ''postfx'';',
+    'end;'
+)
 
 Set-Content -Path $issPath -Value $issLines -Encoding UTF8
 

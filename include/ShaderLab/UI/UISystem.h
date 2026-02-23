@@ -27,6 +27,7 @@ class Device;
 class Swapchain;
 class PreviewRenderer;
 class AudioSystem;
+class ICompilationService;
 
 enum class UIMode { Demo, Scene, PostFX };
 
@@ -61,7 +62,7 @@ struct ShaderEditState {
     
     // Theme
     EditorTheme theme = EditorTheme::Dark;
-    CodeFontSize codeFontSize = CodeFontSize::M;
+    CodeFontSize codeFontSize = CodeFontSize::L;
     
     // Performance
     bool showPerformanceOverlay = false;
@@ -124,6 +125,22 @@ struct UIThemeColors {
     ImVec4 ConsoleFontColor = ImVec4(0.85f, 0.95f, 0.95f, 1.00f);
     ImVec4 ConsoleBackground = ImVec4(0.02f, 0.03f, 0.04f, 1.00f);
     ImVec4 StatusFontColor = ImVec4(0.40f, 0.45f, 0.45f, 1.00f);
+    ImVec4 PerfOverlayFontColor = ImVec4(0.40f, 0.45f, 0.45f, 1.00f);
+    ImVec4 PerfOverlayBackground = ImVec4(0.00f, 0.00f, 0.00f, 0.69f);
+    ImVec4 PerfOverlayBorder = ImVec4(0.00f, 0.78f, 0.78f, 0.82f);
+    ImVec4 PerfOverlayBarBackground = ImVec4(0.14f, 0.14f, 0.14f, 0.86f);
+    ImVec4 PerfOverlayBarBorder = ImVec4(0.63f, 0.63f, 0.63f, 0.86f);
+    ImVec4 PerfOverlayBarText = ImVec4(0.94f, 0.94f, 0.94f, 1.00f);
+    ImVec4 PerfOverlayVramOk = ImVec4(0.24f, 0.86f, 0.39f, 1.00f);
+    ImVec4 PerfOverlayVramWarn = ImVec4(0.94f, 0.80f, 0.27f, 1.00f);
+    ImVec4 PerfOverlayVramCritical = ImVec4(0.96f, 0.35f, 0.35f, 1.00f);
+    float ControlFontScale = 1.0f;
+    float MenuFontScale = 1.0f;
+    float NumericFontScale = 1.0f;
+    float CodeFontScale = 1.0f;
+    float ConsoleFontScale = 1.0f;
+    float LogoFontScale = 1.0f;
+    float StatusFontScale = 1.0f;
     float ControlOpacity = 1.0f;
     float PanelOpacity = 0.92f;
     float PanelHeadingOpacity = 0.96f;
@@ -135,10 +152,10 @@ struct NamedUITheme {
     UIThemeColors colors;
 };
 
-class UISystem {
+class ShaderLabIDE {
 public:
-    UISystem();
-    ~UISystem();
+    ShaderLabIDE();
+    ~ShaderLabIDE();
 
     bool Initialize(HWND hwnd, Device* device, Swapchain* swapchain);
     void Shutdown();
@@ -201,26 +218,94 @@ private:
     void ShowTransportControls();
     void ShowMainMenuBar();
     void ShowModeWindows();
+    void ShowDemoModeWindows();
+    void ShowSceneModeWindows();
+    void ShowPostFxModeWindows();
     void ShowAboutWindow();
+    void ShowPreviewWindow();
     void ShowFullscreenPreview();
+    void ShowUbershaderPopup();
+    void OpenUbershaderViewer();
     void ShowShaderEditor();
     void ShowSnippetBin();
+    void ShowScenePostStack();
+    void ShowSceneTexturesAndChannels();
+    void ShowPostEffectsWindows();
+    void ShowPostFxLibraryWindow();
+    void ShowPostFxSourceWindow();
+    void ShowPostFxChainWindow();
+    void CompileShaderEditorSelection();
+    void ApplyShaderEditorTheme(EditorTheme theme);
+    void GetShaderEditorCompileStatusDisplay(const char*& statusText, ImVec4& statusColor) const;
+    size_t GetShaderEditorCompiledByteSize() const;
+    void ShowShaderEditorCompiledByteSize() const;
+    void ShowShaderEditorThemeAndFontControls();
+    void ShowShaderEditorHeader(bool editorFocused, bool ctrlEnterPressed);
+    void ShowShaderEditorSearchReplaceBar();
+    void ShowShaderEditorBody(bool editorFocused, bool ctrlEnterPressed);
+    void ShowShaderEditorStatusBar();
     void ShowDiagnostics();
     void ShowSceneList();
     void ShowDemoMetadata();
     void ShowDemoPlaylist(); // Tracker View
+    void RenderPlaylistTopToolbar(const ImVec2& spinnerSize);
+    void SetupPlaylistTrackerTable() const;
+    void BuildPlaylistSceneNameOptions(std::vector<const char*>& sceneNames) const;
+    void RenderPlaylistBeatColumn(int beat,
+                                  TrackerRow*& row,
+                                  int& focusedBeatThisFrame,
+                                  bool& pushedBarStartStyle);
+    void MarkPlaylistFocusedRow(int beat, int& focusedBeatThisFrame);
+    void RenderPlaylistSceneColumn(int beat,
+                                   TrackerRow*& row,
+                                   const std::vector<const char*>& sceneNames,
+                                   const ImVec2& spinnerSize,
+                                   int& focusedBeatThisFrame);
+    void RenderPlaylistTransitionColumn(int beat,
+                                        TrackerRow*& row,
+                                        const std::vector<const char*>& transitionNames,
+                                        const std::vector<std::string>& transitionStems,
+                                        const ImVec2& spinnerSize,
+                                        int& focusedBeatThisFrame);
+    void RenderPlaylistMusicColumn(int beat, TrackerRow*& row, int& focusedBeatThisFrame);
+    void RenderPlaylistOneShotColumn(int beat, TrackerRow*& row, int& focusedBeatThisFrame);
+    TrackerRow* FindPlaylistRowByBeat(int targetBeat);
+    TrackerRow* EnsurePlaylistRowByBeat(int targetBeat);
+    void ScrubPlaylistToBeat(int targetBeat);
+    void ScrubPlaylistByDeltaBeats(double deltaBeats);
+    void HandlePlaylistFocusScrub(bool playlistWindowFocused, bool editingAnyItem, int focusedBeatThisFrame);
+    void HandlePlaylistScrollFollow(int focusedBeatThisFrame);
     void ShowAudioLibrary();
+    void ShowDemoRuntimeLogWindow();
     void CreateDefaultScene();
     void CreateDefaultTrack();
+    void InitializeCodeEditors();
+    void LoadGlobalUiBuildSettings();
+    void SaveGlobalUiBuildSettings() const;
     bool LoadTextureFromFile(const std::string& path, ComPtr<ID3D12Resource>& outResource);
     void CreateTextureFromData(const void* data, int width, int height, int channels, ComPtr<ID3D12Resource>& outResource);
     bool CompileScene(int sceneIndex);
     void SyncPostFxEditorToSelection();
+    void SyncComputeEditorToSelection();
+    bool CompileComputeEffect(Scene::ComputeEffect& effect, std::vector<Diagnostic>& outDiagnostics);
+    bool CompileComputePipeline(Scene::ComputeEffect& effect);
+    void EnsureComputeHistory(Scene::ComputeEffect& effect, uint32_t width, uint32_t height);
+    ID3D12Resource* ApplyComputeEffectChain(ID3D12GraphicsCommandList* commandList,
+                                            int sceneIndex,
+                                            std::vector<Scene::ComputeEffect>& chain,
+                                            ID3D12Resource* inputTexture,
+                                            uint32_t width,
+                                            uint32_t height,
+                                            double timeSeconds);
     void AppendDemoLog(const std::string& message);
     void PushNumericFont();
     void PopNumericFont();
     float GetNumericFieldMinWidth() const;
     void SetNextNumericFieldWidth(float requestedWidth);
+    ImVec4 GetSemanticSuccessColor() const;
+    ImVec4 GetSemanticWarningColor() const;
+    ImVec4 GetSemanticErrorColor() const;
+    ImVec4 GetSemanticInfoColor() const;
     void ShowThemeEditorPopup();
     void ApplyUiTheme();
     void ApplyCodeEditorControlOpacity();
@@ -258,6 +343,7 @@ private:
     Swapchain* m_swapchainRef = nullptr;
     PreviewRenderer* m_previewRenderer = nullptr;
     AudioSystem* m_audioSystem = nullptr;
+    std::unique_ptr<ICompilationService> m_compilationService;
 
     // Preview Texture (Final/Active)
     ComPtr<ID3D12Resource> m_previewTexture;
@@ -286,12 +372,14 @@ private:
 
     std::vector<Scene> m_scenes;
     int m_activeSceneIndex = 0;
+    int m_editingSceneIndex = 0;
     float m_activeSceneOffset = 0.0f; // Offset in beats relative to scene start
     double m_activeSceneStartBeat = 0.0;
     
     // Editor
     TextEditor m_textEditor;
     TextEditor m_snippetTextEditor;
+    TextEditor m_ubershaderTextEditor;
     
     // Transition State
     bool m_transitionActive = false;
@@ -303,7 +391,7 @@ private:
     double m_transitionToStartBeat = 0.0;
     float m_transitionFromOffset = 0.0f;
     float m_transitionToOffset = 0.0f;
-    TransitionType m_currentTransitionType = TransitionType::None;
+    std::string m_currentTransitionStem;
     int m_pendingActiveScene = -2; // -2 = None
     int m_transitionJustCompletedBeat = -1;
 
@@ -312,7 +400,7 @@ private:
     // Transition Resources
     ComPtr<ID3D12PipelineState> m_transitionPSO;
     ComPtr<ID3D12DescriptorHeap> m_transitionSrvHeap;
-    TransitionType m_compiledTransitionType = TransitionType::None;
+    std::string m_compiledTransitionStem;
 
     // Cycle detection
     std::vector<int> m_renderStack;
@@ -325,12 +413,24 @@ private:
     std::string m_demoAuthor;
     std::string m_demoDescription;
     std::string m_appRoot; // Root directory where ShaderLab started (where CMakeLists.txt resides)
+    std::string m_workspaceRootPath;
+    std::string m_workspaceProjectsPath;
+    std::string m_workspaceSnippetsPath;
+    std::string m_workspacePostFxPath;
+    bool m_workspaceExplicitlyConfigured = false;
+    bool m_workspaceSelectionPromptPending = false;
     HWND m_hwnd = nullptr;
 
     // Post FX editor state
     int m_postFxSourceSceneIndex = -1;
     int m_postFxSelectedIndex = -1;
     std::vector<Scene::PostFXEffect> m_postFxDraftChain;
+    std::vector<Scene::PostFXEffect> m_computePreviewEmulationChain;
+    std::unordered_map<int, std::vector<Scene::PostFXEffect>> m_sceneComputePreviewEmulationChains;
+    
+    // Compute effect editor state
+    int m_computeEffectSelectedIndex = -1;
+    std::vector<Scene::ComputeEffect> m_computeEffectDraftChain;
 
     bool m_previewFullscreen = false;
     bool m_previewVsyncEnabled = true;
@@ -363,6 +463,9 @@ private:
     void SaveProject();
     void SaveProjectAs();
     void OpenProject();
+    std::string ImportAssetIntoProject(const std::string& sourcePath);
+    std::string MakeWorkspaceRelativePath(const std::string& absolutePath) const;
+    bool EnsureProjectLayoutFolders() const;
     void LoadProjectUiSettings();
     void SaveProjectUiSettings() const;
     void BuildProject();
@@ -373,11 +476,25 @@ private:
     void ShowBuildSettingsWindow();
     void RefreshMicroUbershaderConflictCache();
     void ExportRuntimePackage();
+    void ResetTransitionState(bool clearActiveScene);
+    void ResetTransportTimelineState();
+    void StopAudioAndClearMusicState();
+    void ApplyPlaybackActiveScene(int index);
+    void BeginSceneTransition(int beat,
+                              double durationBeats,
+                              int targetSceneIndex,
+                              float targetOffset,
+                              double targetStartBeat,
+                              const std::string& transitionPresetStem);
     void SeekToBeat(int beat);
 
     void LoadGlobalSnippets();
     void SaveGlobalSnippets() const;
     void InsertSnippetIntoEditor(const std::string& snippetCode);
+    void ResolveWorkspaceRootPath();
+    void EnsureWorkspaceFolders();
+    void CreateNewProjectInWorkspace(const std::string& projectNameHint);
+    void ChooseWorkspaceFolder();
 
     // Auto-Build State
     bool m_isBuilding = false;
@@ -386,6 +503,7 @@ private:
     std::future<void> m_buildFuture;
     bool m_buildComplete = false;
     bool m_buildSuccess = false;
+    std::string m_lastSuccessfulBuildOutputPath;
     bool m_showBuildSettings = false;
     BuildTargetKind m_buildSettingsTargetKind = BuildTargetKind::SelfContainedDemo;
     BuildMode m_buildSettingsMode = BuildMode::Release;
@@ -425,6 +543,11 @@ private:
     int m_snippetDraftFolderIndex = -1;
     int m_snippetDraftIndex = -1;
     std::string m_snippetDraftCode;
+
+    bool m_showUbershaderPopup = false;
+    std::string m_ubershaderSource;
+    std::string m_ubershaderStatus;
+    std::string m_ubershaderPath;
 
     size_t m_lastDemoCompiledSizeBytes = 0;
     bool m_hasDemoCompiledSize = false;

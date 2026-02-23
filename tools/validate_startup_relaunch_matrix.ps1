@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-function Is-ExcludedProjectPath {
+function Assert-ExcludedProjectPath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -52,7 +52,7 @@ function Resolve-DefaultProjectPath {
         }
 
         $projectCandidates = Get-ChildItem -Path $root -Recurse -File -Filter "project.json" -ErrorAction SilentlyContinue |
-            Where-Object { -not (Is-ExcludedProjectPath $_.FullName) } |
+            Where-Object { -not (Assert-ExcludedProjectPath $_.FullName) } |
             Sort-Object FullName
 
         $first = $projectCandidates | Select-Object -First 1

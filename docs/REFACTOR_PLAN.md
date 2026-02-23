@@ -7,6 +7,17 @@ Status: Draft v3 (M6 prebuilt packaging spike implemented and validated)
 
 Additional progress (2026-02-21):
 
+Additional progress (2026-02-22):
+
+- Renamed editor app host to align naming with current architecture:
+  - `EditorApp` -> `ShaderLabApp`
+  - `src/app/editor/*` -> `src/app/ShaderLabMain/*`
+  - updated build graph and docs to use the new app-host path and naming.
+- Continued behavior-preserving UI decomposition:
+  - `src/ui/ShaderLabIDE.cpp` reduced to orchestration-focused responsibilities.
+  - major UI logic extracted to feature modules under `src/ui/Features/*`.
+  - code editor theming split into per-theme files under `src/ui/Features/CodeEditor/CodeThemes/*`.
+
 - Completed a milestone-sized behavior-preserving decomposition of `src/core/Serializer.cpp` packaging flow:
   - introduced file-scope helpers for stream reads, project asset-path traversal, directory blob creation, output directory creation, and final packed executable writing.
   - introduced `ExecutablePackAccumulator` to centralize packed-entry dedupe/indexing and asset ingestion (`project.json`, project assets, extra files).
@@ -43,7 +54,7 @@ Completed runtime refactor slices in `src/app/runtime` with behavior-preserving 
   - `ShaderLabPlayer` / `ShaderLabScreenSaver` now link entrypoint-only executables against `ShaderLabDevKit` + `ShaderLabCoreApi`.
   - `ShaderLabMicroPlayer` CMake wiring now follows the same entrypoint-only pattern (when `SHADERLAB_BUILD_MICRO_PLAYER=ON`).
   - `ShaderLabBuildCli` now links `ShaderLabDevKitBuildTools` + `ShaderLabCoreApi`.
-  - `ShaderLabEditor` now links split libs (`ShaderLabEditorLib` + `ShaderLabDevKitBuildTools` + `ShaderLabCoreApi`) instead of monolithic `ShaderLabCore`.
+  - `ShaderLabIIDE` now links split libs (`ShaderLabEditorLib` + `ShaderLabDevKitBuildTools` + `ShaderLabCoreApi`) instead of monolithic `ShaderLabCore`.
 - Removed monolithic `ShaderLabCore` target from the main workspace `CMakeLists.txt`; split targets are now the authoritative build graph.
 - Migrated `templates/Standalone_CMakeLists.txt` to split targets (`ShaderLabCoreApi` + `ShaderLabDevKit`) and entrypoint-only player executable linkage.
 - Completed runtime include boundary cleanup:
@@ -100,7 +111,7 @@ Notes:
 
 4. **Editor isolation and integration** (in progress)
   - continue enforcing editor boundary as entrypoint + editor-lib orchestration only.
-  - add explicit CMake layering assertion for `ShaderLabEditor` executable target.
+  - add explicit CMake layering assertion for `ShaderLabIIDE` executable target.
   - add `tools/check.ps1` include-surface gate to prevent editor/UI code from including runtime-internal headers.
   - enforce the same guard in CI/release automation via `.github/workflows/release.yml` (non-blocking check gate) and local `tools/check.ps1`.
 
@@ -171,7 +182,7 @@ Refactor the solution into three explicit deliverables with clear ownership and 
 ## 3) Editor
 
 **Owns**
-- `src/app/editor/*`
+- `src/app/ShaderLabMain/*`
 - `src/editor/*`
 - `src/ui/*`
 - Editor assets/workflows
@@ -202,7 +213,7 @@ Refactor the solution into three explicit deliverables with clear ownership and 
 - Move editor-only source lists out of core target.
 - Wire executables:
   - `ShaderLabPlayer`, `ShaderLabScreenSaver`, `ShaderLabMicroPlayer` -> Dev Kit + Core API
-  - `ShaderLabEditor` -> EditorLib + Dev Kit + Core API
+  - `ShaderLabIIDE` -> EditorLib + Dev Kit + Core API
   - `ShaderLabBuildCli` -> Dev Kit + Core API
 
 **Checkpoints**

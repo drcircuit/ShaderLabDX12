@@ -1,9 +1,15 @@
 @echo off
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+
+if exist build_release (
+	echo Removing existing build_release folder...
+	rmdir /s /q build_release
+)
+
 cmake -S . -B build_release -G Ninja -DCMAKE_BUILD_TYPE=Release
 if %errorlevel% neq 0 exit /b %errorlevel%
 
-cmake --build build_release --config Release --clean-first --target ShaderLabEditor ShaderLabPlayer ShaderLabScreenSaver
+cmake --build build_release --config Release --clean-first --target ShaderLabIIDE ShaderLabBuildCli ShaderLabPlayer ShaderLabScreenSaver
 
 if %errorlevel% neq 0 exit /b %errorlevel%
 
@@ -14,7 +20,7 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo.
 echo Signing executable...
-powershell -ExecutionPolicy Bypass -File "%~dp0..\tools\sign_build.ps1" -ExePath "%~dp0..\build_release\bin\ShaderLabEditor.exe"
+powershell -ExecutionPolicy Bypass -File "%~dp0..\tools\sign_build.ps1" -ExePath "%~dp0..\build_release\bin\ShaderLabIIDE.exe"
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo.

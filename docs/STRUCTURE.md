@@ -51,7 +51,7 @@ These are generated outputs and should not be treated as source directories.
 
 ## Editor Include Boundary
 
-Editor and UI source trees (`src/app/editor/*`, `src/ui/*`, `include/ShaderLab/UI/*`) should not include runtime-internal app/runtime headers.
+Editor and UI source trees (`src/app/ShaderLabMain/*`, `src/ui/*`, `include/ShaderLab/UI/*`) should not include runtime-internal app/runtime headers.
 
 - Allowed include surfaces:
 	- `ShaderLab/DevKit/*`

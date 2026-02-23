@@ -2,7 +2,9 @@
 
 #include <string>
 #include <vector>
+#if !SHADERLAB_TINY_PLAYER
 #include <map>
+#endif
 #include <cstdint>
 
 namespace ShaderLab {
@@ -31,7 +33,11 @@ private:
     bool m_isPacked = false;
     std::string m_exePath;
     uint64_t m_packRequestOffset = 0; // Where the pack data starts in the file
+#if SHADERLAB_TINY_PLAYER
+    std::vector<PackedEntry> m_directory;
+#else
     std::map<std::string, PackedEntry> m_directory;
+#endif
 };
 
 }

@@ -12,7 +12,7 @@ $cliCandidates = @(
 )
 $cli = $cliCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-function Is-ExcludedProjectPath {
+function Assert-ExcludedProjectPath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
         }
 
         $candidate = Get-ChildItem -Path $root -Recurse -File -Filter "project.json" -ErrorAction SilentlyContinue |
-            Where-Object { -not (Is-ExcludedProjectPath $_.FullName) } |
+            Where-Object { -not (Assert-ExcludedProjectPath $_.FullName) } |
             Sort-Object FullName |
             Select-Object -First 1
 

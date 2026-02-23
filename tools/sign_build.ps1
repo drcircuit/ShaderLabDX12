@@ -1,5 +1,5 @@
 param (
-    [string]$ExePath = "$PSScriptRoot\..\build\bin\ShaderLabEditor.exe"
+    [string]$ExePath = "$PSScriptRoot\..\build\bin\ShaderLabIIDE.exe"
 )
 
 $ExePath = Resolve-Path $ExePath -ErrorAction SilentlyContinue

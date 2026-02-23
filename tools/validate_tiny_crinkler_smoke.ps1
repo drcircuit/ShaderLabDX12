@@ -68,7 +68,7 @@ function New-SmokeBatchScript {
         ('call "' + $VcvarsPath + '"'),
         "if errorlevel 1 exit /b 1",
         "echo [tiny-crinkler-smoke] VSCMD_ARG_TGT_ARCH=%VSCMD_ARG_TGT_ARCH%",
-        ('cmake -S . -B "' + $buildDirCmd + '" -G Ninja -DSHADERLAB_BUILD_EDITOR=OFF -DSHADERLAB_BUILD_RUNTIME=OFF -DSHADERLAB_BUILD_MICRO_PLAYER=ON -DSHADERLAB_USE_CRINKLER=ON -DCRINKLER_PATH=' + $crinklerPathCmd + ' -DSHADERLAB_TINY_RUNTIME_COMPILE=OFF -DSHADERLAB_ENABLE_DXC=OFF -DCMAKE_BUILD_TYPE=Release'),
+        ('cmake -S . -B "' + $buildDirCmd + '" -G Ninja -DSHADERLAB_BUILD_EDITOR=OFF -DSHADERLAB_BUILD_RUNTIME=OFF -DSHADERLAB_BUILD_MICRO_PLAYER=ON -DSHADERLAB_USE_CRINKLER=ON -DSHADERLAB_CRINKLER_TINYIMPORT=OFF -DCRINKLER_PATH=' + $crinklerPathCmd + ' -DSHADERLAB_TINY_RUNTIME_COMPILE=OFF -DSHADERLAB_ENABLE_DXC=OFF -DCMAKE_BUILD_TYPE=Release'),
         "if errorlevel 1 exit /b 1",
         ('cmake --build "' + $buildDirCmd + '" --target ShaderLabMicroPlayer --verbose'),
         "set _exitcode=%errorlevel%",

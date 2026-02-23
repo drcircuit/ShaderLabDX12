@@ -80,6 +80,9 @@ class BuildPipeline {
 public:
     static BuildPrereqReport CheckPrereqs(const std::string& appRoot, BuildMode mode = BuildMode::Release);
     static std::vector<MicroUbershaderConflict> AnalyzeMicroUbershaderConflicts(const std::string& projectPath);
+    static bool GenerateMicroUbershaderSource(const std::string& projectPath,
+                                              std::string& outSource,
+                                              std::string& outError);
     static BuildResult BuildSelfContained(
         const BuildRequest& request,
         const std::function<void(const std::string&)>& log);

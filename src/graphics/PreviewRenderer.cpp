@@ -1,9 +1,11 @@
 #include "ShaderLab/Graphics/PreviewRenderer.h"
 #include "ShaderLab/Graphics/Device.h"
+#include "ShaderLab/Shader/ShaderBase.h"
+#include "ShaderLab/Shader/ShaderBaseVertex.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
 
 #include <d3d12.h>
-#include <stdexcept>
+#include <cstdio>
 
 #ifndef SHADERLAB_TINY_PLAYER
 #define SHADERLAB_TINY_PLAYER 0
@@ -16,6 +18,7 @@
 namespace ShaderLab {
 
 namespace {
+#if !SHADERLAB_TINY_PLAYER
 std::string GetShaderLabLogPath() {
     char tempPath[MAX_PATH] = {};
     DWORD len = GetTempPathA(MAX_PATH, tempPath);
@@ -23,6 +26,24 @@ std::string GetShaderLabLogPath() {
         return std::string(tempPath) + "shaderlab_log.txt";
     }
     return "shaderlab_log.txt";
+}
+#endif
+
+void AppendPreviewLogLine(const std::string& line) {
+#if SHADERLAB_TINY_PLAYER
+    OutputDebugStringA(line.c_str());
+    OutputDebugStringA("\n");
+#else
+    const std::string logPath = GetShaderLabLogPath();
+    FILE* f = nullptr;
+    fopen_s(&f, logPath.c_str(), "a");
+    if (!f) {
+        return;
+    }
+    std::fputs(line.c_str(), f);
+    std::fputc('\n', f);
+    std::fclose(f);
+#endif
 }
 }
 
@@ -36,9 +57,9 @@ struct Constants {
     float iResolution[2];
     float iBeat;
     float iBar;
+    float fBeat;
     float fBarBeat;
-    float padding0;
-    float padding1;
+    float fBarBeat16;
 };
 
 PreviewRenderer::PreviewRenderer() = default;
@@ -48,12 +69,8 @@ PreviewRenderer::~PreviewRenderer() {
 }
 
 bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_FORMAT renderTargetFormat, const std::vector<uint8_t>* precompiledVertexShader) {
-    const std::string logPath = GetShaderLabLogPath();
-    FILE* f = nullptr;
-    fopen_s(&f, logPath.c_str(), "a");
-    
     if (!device) {
-        if (f) { fprintf(f, "PreviewRenderer: Invalid device or compiler\n"); fclose(f); }
+        AppendPreviewLogLine("PreviewRenderer: Invalid device or compiler");
         return false;
     }
 
@@ -61,20 +78,18 @@ bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_
     m_compiler = compiler;
     m_renderTargetFormat = renderTargetFormat;
 
-    if (f) { fprintf(f, "PreviewRenderer: About to create root signature\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: About to create root signature");
     if (!CreateRootSignature()) {
-        if (!f) fopen_s(&f, logPath.c_str(), "a");
-        if (f) { fprintf(f, "PreviewRenderer: Failed to create root signature\n"); fclose(f); }
+        AppendPreviewLogLine("PreviewRenderer: Failed to create root signature");
         return false;
     }
-    if (!f) fopen_s(&f, logPath.c_str(), "a");
-    if (f) { fprintf(f, "PreviewRenderer: Root signature created\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: Root signature created");
 
     CreateFullscreenQuadVertices();
-    if (!f) fopen_s(&f, logPath.c_str(), "a");
-    if (f) { fprintf(f, "PreviewRenderer: Fullscreen quad created\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: Fullscreen quad created");
 
     // Init Timestamps
+#if !SHADERLAB_TINY_PLAYER
     D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
     queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
     queryHeapDesc.Count = 2; // Start and End
@@ -118,69 +133,38 @@ bool PreviewRenderer::Initialize(Device* device, ShaderCompiler* compiler, DXGI_
     // We will wait with frequency until we render the first time? No, we need Queue to get it.
     
     if (precompiledVertexShader && !precompiledVertexShader->empty()) {
+#else
+    if (precompiledVertexShader && !precompiledVertexShader->empty()) {
+#endif
         m_vertexShaderBytecode = *precompiledVertexShader;
-        if (f) { fprintf(f, "PreviewRenderer: Using precompiled vertex shader\n"); fclose(f); }
+        AppendPreviewLogLine("PreviewRenderer: Using precompiled vertex shader");
         return true;
     }
 
     if (!m_compiler) {
-        if (f) { fprintf(f, "PreviewRenderer: Missing compiler and no precompiled vertex shader\n"); fclose(f); }
+        AppendPreviewLogLine("PreviewRenderer: Missing compiler and no precompiled vertex shader");
         return false;
     }
 
 #if SHADERLAB_TINY_PLAYER
-    if (f) { fprintf(f, "PreviewRenderer: Tiny build requires precompiled vertex shader\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: Tiny build requires precompiled vertex shader");
     return false;
 #else
 
-    // Compile default vertex shader
-    const char* vertexShaderSource = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
+    const std::string vertexShaderSource = ShaderBase::BuildFullscreenQuadVertexShaderSource();
 
-struct VSInput {
-    float3 pos : POSITION;
-    float2 uv : TEXCOORD0;
-};
-
-struct PSInput {
-    float4 pos : SV_POSITION;
-    float2 fragCoord : TEXCOORD0;
-};
-
-PSInput main(VSInput input) {
-    PSInput output;
-    output.pos = float4(input.pos, 1.0);
-    // Convert UV (0-1) to pixel coordinates like ShaderToy
-    // Flip Y axis: ShaderToy has origin at bottom-left
-    output.fragCoord = float2(input.uv.x, 1.0 - input.uv.y) * iResolution;
-    return output;
-}
-)";
-
-    if (!f) fopen_s(&f, logPath.c_str(), "a");
-    if (f) { fprintf(f, "PreviewRenderer: About to compile vertex shader\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: About to compile vertex shader");
     auto vsResult = m_compiler->CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl");
     if (!vsResult.success) {
-        if (!f) fopen_s(&f, logPath.c_str(), "a");
-        if (f) { 
-            fprintf(f, "PreviewRenderer: Failed to compile vertex shader\n");
-            for (const auto& diag : vsResult.diagnostics) {
-                fprintf(f, "  %s\n", diag.message.c_str());
-            }
-            fclose(f);
+        AppendPreviewLogLine("PreviewRenderer: Failed to compile vertex shader");
+        for (const auto& diag : vsResult.diagnostics) {
+            AppendPreviewLogLine(std::string("  ") + diag.message);
         }
         return false;
     }
     m_vertexShaderBytecode = vsResult.bytecode;
 
-    if (!f) fopen_s(&f, logPath.c_str(), "a");
-    if (f) { fprintf(f, "PreviewRenderer: Initialized successfully\n"); fclose(f); }
+    AppendPreviewLogLine("PreviewRenderer: Initialized successfully");
     return true;
 #endif
 }
@@ -217,61 +201,13 @@ ComPtr<ID3D12PipelineState> PreviewRenderer::CompileShader(const std::string& sh
     return nullptr;
 #else
 
-    // Wrap user shader code with proper entry point
-    std::string wrappedSource = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
-)";
-
-    // Generate texture declarations
-    // Default to Texture2D for all slots if not specified, or override based on declares
-    // Actually, we should just declare what is used. But for simplicity and compatibility,
-    // we iterate 0-7 and use the type provided, or Texture2D as default.
-    for(int i=0; i<8; ++i) {
-        std::string type = "Texture2D";
-        for(const auto& decl : textureDecls) {
-            if (decl.slot == i) {
-                type = decl.type;
-                break;
-            }
-        }
-        wrappedSource += type + " iChannel" + std::to_string(i) + " : register(t" + std::to_string(i) + ");\n";
+    std::vector<ShaderBase::TextureBindingDecl> bindings;
+    bindings.reserve(textureDecls.size());
+    for (const auto& textureDecl : textureDecls) {
+        bindings.push_back({textureDecl.slot, textureDecl.type});
     }
-
-    wrappedSource += "\n";
-
-    // Generate samplers
-    for(int i=0; i<8; ++i) {
-        wrappedSource += "SamplerState iSampler" + std::to_string(i) + " : register(s" + std::to_string(i) + ");\n";
-    }
-
-    wrappedSource += R"(
-
-struct PSInput {
-    float4 pos : SV_POSITION;
-    float2 fragCoord : TEXCOORD0;
-};
-
-)";
-    wrappedSource += shaderSource;
-    wrappedSource += R"(
-
-float4 PSMain(PSInput input) : SV_TARGET {
-)";
-    if (flipFragCoord) {
-        wrappedSource += "    float2 fragCoord = float2(input.fragCoord.x, iResolution.y - input.fragCoord.y);\n";
-    } else {
-        wrappedSource += "    float2 fragCoord = input.fragCoord;\n";
-    }
-    wrappedSource += "    return " + shaderEntryPoint + "(fragCoord, iResolution, iTime);\n";
-    wrappedSource += R"(
-}
-)";
+    const std::string wrappedSource = ShaderBase::BuildPreviewPixelShaderTemplate(
+        shaderSource, bindings, flipFragCoord, shaderEntryPoint);
 
     auto psResult = m_compiler->CompileFromSource(wrappedSource, "PSMain", "ps_6_0", L"pixel.hlsl");
     
@@ -306,9 +242,11 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
                               D3D12_GPU_DESCRIPTOR_HANDLE srvHandle,
                               uint32_t width, uint32_t height,
                               float timeSeconds,
-                              float beat,
-                              float bar,
-                              float barBeat16) {
+                              float iBeat,
+                              float iBar,
+                              float fBarBeat16,
+                              float fBeat,
+                              float fBarBeat) {
     if (!pipelineState || !renderTarget) {
         return;
     }
@@ -318,6 +256,7 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     // If we have a ring buffer of queries, no stall. With single buffer, we might read old data or stall?
     // Doing simple blocking read for now for simplicity as this is a tool.
     // Ideally we'd buffer N frames.
+#if !SHADERLAB_TINY_PLAYER
     if (m_queryResultBuffer && m_gpuFrequency > 0) {
         uint64_t* times = nullptr;
         D3D12_RANGE readRange = { 0, sizeof(uint64_t) * 2 };
@@ -334,6 +273,7 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     if (m_queryHeap) {
         commandList->EndQuery(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
     }
+#endif
 
     // Set render target (assume caller has already transitioned)
     commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
@@ -364,9 +304,11 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     constants.iTime = timeSeconds;
     constants.iResolution[0] = static_cast<float>(width);
     constants.iResolution[1] = static_cast<float>(height);
-    constants.iBeat = beat;
-    constants.iBar = bar;
-    constants.fBarBeat = barBeat16;
+    constants.iBeat = iBeat;
+    constants.iBar = iBar;
+    constants.fBeat = fBeat;
+    constants.fBarBeat = fBarBeat;
+    constants.fBarBeat16 = fBarBeat16;
     commandList->SetGraphicsRoot32BitConstants(0, sizeof(Constants) / 4, &constants, 0);
 
     // Set textures (SRV table)
@@ -378,10 +320,12 @@ void PreviewRenderer::Render(ID3D12GraphicsCommandList* commandList,
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
     commandList->DrawInstanced(3, 1, 0, 0);
+#if !SHADERLAB_TINY_PLAYER
     if (m_queryHeap && m_queryResultBuffer) {
         commandList->EndQuery(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
         commandList->ResolveQueryData(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, m_queryResultBuffer.Get(), 0);
     }
+#endif
 }
 
 

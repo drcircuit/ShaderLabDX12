@@ -34,17 +34,4 @@ inline double SceneTimeSeconds(double exactBeat, double startBeat, float offsetB
     return sceneBeats * beatSeconds;
 }
 
-inline const char* TransitionName(TransitionType type) {
-    switch (type) {
-        case TransitionType::None: return "None";
-        case TransitionType::Crossfade: return "Crossfade";
-        case TransitionType::DipToBlack: return "DipToBlack";
-        case TransitionType::FadeOut: return "FadeOut";
-        case TransitionType::FadeIn: return "FadeIn";
-        case TransitionType::Glitch: return "Glitch";
-        case TransitionType::Pixelate: return "Pixelate";
-        default: return "Unknown";
-    }
-}
-
 } // namespace ShaderLab

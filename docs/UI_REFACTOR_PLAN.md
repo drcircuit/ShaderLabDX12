@@ -1,9 +1,23 @@
 # ShaderLab UI Refactor Plan (Entropy Reduction)
 
 Date: 2026-02-21  
-Status: Draft v1 (planning stage)
+Status: Active v2 (amended 2026-02-22 to match implementation reality)
 
 Update (2026-02-21): feature-first organization is now the preferred refactor direction.
+
+Update (2026-02-22): the refactor execution moved faster than the original phase ordering. The codebase now follows a hybrid of vertical mode views and feature modules, with `ShaderLabIDE.cpp` reduced to an orchestration-focused composition root.
+
+## Reality Check (2026-02-22)
+
+Implemented direction (behavior-preserving):
+
+- `ShaderLabIDE.cpp` is now orchestration-only (constructor/lifecycle/project naming + delegation).
+- Major responsibilities were extracted into `src/ui/Features/*` modules (Render/Frame, Transport, MainMenuBar, Theme, BuildSettings, About, Project state, Snippets, CodeEditor).
+- Mode composition remains explicit under `src/ui/ShaderLabIDE{DemoMode,SceneMode,PostFXMode}.cpp` and view modules under `src/ui/ShaderLabIDEView/*`.
+- Cross-cutting helpers live under `src/ui/ShaderLabIDECore/*` and `src/ui/Helpers/*`.
+- App-side UI boundary folder was renamed from `src/app/editor/*` to `src/app/ShaderLabMain/*`.
+
+Conclusion: the original goals are being met, but physical foldering is currently hybrid rather than a strict one-shot move into only `ShaderLabIDECore/ShaderLabIDEView/ShaderLabEditorWindows`.
 
 ## Why This Refactor
 
@@ -20,7 +34,7 @@ Primary outcomes:
 In scope:
 
 - `src/ui/*`
-- editor-side UI integration points (`src/app/editor/*` where UI boundary touches Win32)
+- editor-side UI integration points (`src/app/ShaderLabMain/*` where UI boundary touches Win32)
 - existing theme system and UI panel composition
 
 Out of scope (for this refactor wave):
@@ -44,11 +58,11 @@ Rules:
 
 The refactor target is explicitly organized into these verticals:
 
-1. **ShaderLabEditorCore**
-2. **ShaderLabEditorView**
+1. **ShaderLabIDECore**
+2. **ShaderLabIDEView**
   - **DemoModeView**
   - **SceneModeView**
-  - **PostEffectsView**
+  - **PostFXModeView**
 3. **ShaderLabEditorWindows**
   - **ThemeEditorWindow**
   - **BuildSettingsWindow**
@@ -72,17 +86,17 @@ Preferred feature slices:
 
 Mapping to requested verticals:
 
-- `ShaderLabEditorCore`
+- `ShaderLabIDECore`
   - shared editor orchestration state
   - theme/token application
   - global constants/layout metrics
   - transport primitives used by all views
   - platform boundary helpers (window actions, non-client policy)
 
-- `ShaderLabEditorView`
+- `ShaderLabIDEView`
   - `DemoModeView`: demo metadata, tracker, demo transport-facing interactions
   - `SceneModeView`: scene library, scene preview, scene-specific editing flows
-  - `PostEffectsView`: post FX chain editing, post FX diagnostics, compile interactions
+  - `PostFXModeView`: post FX chain editing, post FX diagnostics, compile interactions
 
 - `ShaderLabEditorWindows`
   - `ThemeEditorWindow`: theme selection/editor popup and persistence interactions
@@ -115,7 +129,7 @@ Must stay out of shared core unless proven reusable by multiple features.
 Purpose: top-level flow stays minimal.
 
 - `UISystem::BeginFrame/ShowModeWindows/EndFrame` remains orchestration-only.
-- Delegates to `ShaderLabEditorView` mode views and `ShaderLabEditorWindows` windows.
+- Delegates to `ShaderLabIDEView` mode views and `ShaderLabEditorWindows` windows.
 - Avoids deep feature logic.
 
 ## 4) Platform Boundary Layer
@@ -125,9 +139,9 @@ Purpose: keep Win32-specific behavior isolated from general feature UI logic.
 - Keep titlebar hit/click and non-client behavior behind explicit UI boundary helpers.
 - Keep minimize/close/window policy outside feature rendering details.
 
-## Phased Migration Plan
+## Phased Migration Plan (Amended)
 
-## Phase P0 — Baseline + Safety (0.5 day)
+## Phase P0 — Baseline + Safety (0.5 day) ✅
 
 - Capture baseline behavior checklist (titlebar controls, mode switches, compile flow, theme switching).
 - Confirm build + smoke workflow used for every slice.
@@ -137,7 +151,7 @@ Exit criteria:
 - Debug build clean.
 - Manual smoke list agreed.
 
-## Phase P1 — Styling Consolidation (1 day)
+## Phase P1 — Styling Consolidation (1 day) 🟡
 
 - Introduce style helper functions for common semantic intents:
   - success/warning/error/info text
@@ -149,7 +163,7 @@ Exit criteria:
 
 - No hardcoded control-surface colors in `src/ui/*` except intentionally fixed branding assets.
 
-## Phase P2 — Shader Editor Feature Slice (1–2 days)
+## Phase P2 — Shader Editor Feature Slice (1–2 days) ✅
 
 - Split large shader editor draw flow into feature-local sections:
   - toolbar/status
@@ -161,13 +175,13 @@ Exit criteria:
 
 Vertical destination:
 
-- `ShaderLabEditorView/PostEffectsView`
+- `ShaderLabIDEView/PostFXModeView`
 
 Exit criteria:
 
 - `ShowShaderEditor()` reduced to orchestration-level readability.
 
-## Phase P3 — Demo/Tracker Feature Slice (1–2 days)
+## Phase P3 — Demo/Tracker Feature Slice (1–2 days) 🟡
 
 - Extract beat-row rendering and tracker editing helpers.
 - Isolate metadata panel controls and validation.
@@ -176,13 +190,13 @@ Exit criteria:
 
 Vertical destination:
 
-- `ShaderLabEditorView/DemoModeView`
+- `ShaderLabIDEView/DemoModeView`
 
 Exit criteria:
 
 - Tracker row rendering and editing logic separated from top-level panel flow.
 
-## Phase P4 — Titlebar/Menu Feature Slice + Platform Boundary (1 day)
+## Phase P4 — Titlebar/Menu Feature Slice + Platform Boundary (1 day) ✅
 
 - Encapsulate custom title strip draw + interaction into a dedicated unit.
 - Keep Win32 action dispatch (`minimize/close`) behind a narrow helper API.
@@ -190,14 +204,14 @@ Exit criteria:
 
 Vertical destination:
 
-- UI composition in `ShaderLabEditorCore`
-- mode-specific actions delegated to `ShaderLabEditorView`
+- UI composition in `ShaderLabIDECore`
+- mode-specific actions delegated to `ShaderLabIDEView`
 
 Exit criteria:
 
 - Titlebar/menu code no longer mixed with unrelated panel orchestration.
 
-## Phase P5 — Guardrails + Docs (0.5–1 day)
+## Phase P5 — Guardrails + Docs (0.5–1 day) 🟡
 
 - Add lightweight static checks for UI style hygiene:
   - alert on new hardcoded control backgrounds in `src/ui/*`
@@ -228,31 +242,39 @@ Exit criteria:
 
 ## Immediate Next Slice (Recommended)
 
-Start with **P1 Styling Consolidation** because it is low-risk and gives immediate entropy reduction across all panels.
+Given current progress, the highest-value next slice is **P5 Guardrails + Docs completion** plus **targeted P1 cleanup**.
 
-Concrete first tasks:
+Concrete next tasks:
 
-1. Add semantic color helpers in `UISystem` (success/warn/error/info text).
-2. Replace remaining hardcoded status text colors in build-settings UI with those helpers.
-3. Add a simple grep guard in `tools/check.ps1` for new hardcoded `ImGuiCol_FrameBg/ChildBg/PopupBg` literals under `src/ui/*`.
+1. Add a UI-style guard in `tools/check.ps1` for new hardcoded control-surface color literals under `src/ui/*`.
+2. Finish a lightweight styling sweep to replace remaining one-off status/control colors with theme tokens.
+3. Document the adopted hybrid structure (`Features` + `ShaderLabIDEView` + `ShaderLabIDECore`) as the canonical interim architecture.
+4. Keep extracting only when it improves ownership clarity; avoid churn-only moves.
 
-## Vertical Foldering Direction (Incremental)
+## Vertical Foldering Direction (Incremental, Updated)
 
-When moving code physically, prefer an incremental structure such as:
+Current accepted structure is hybrid. Prefer incremental moves only when they reduce entropy:
 
-- `src/ui/ShaderLabEditorCore/*`
-- `src/ui/ShaderLabEditorView/DemoModeView/*`
-- `src/ui/ShaderLabEditorView/SceneModeView/*`
-- `src/ui/ShaderLabEditorView/PostEffectsView/*`
+- `src/ui/Features/*` for feature-owned behavior and rendering
+- `src/ui/ShaderLabIDEView/*` for mode-oriented composition views
+- `src/ui/ShaderLabIDECore/*` for shared editor-core primitives
+- `src/ui/Helpers/*` for small orchestration helpers
+
+If/when consolidation is needed, use this structure as the destination:
+
+- `src/ui/ShaderLabIDECore/*`
+- `src/ui/ShaderLabIDEView/DemoModeView/*`
+- `src/ui/ShaderLabIDEView/SceneModeView/*`
+- `src/ui/ShaderLabIDEView/PostFXModeView/*`
 - `src/ui/ShaderLabEditorWindows/ThemeEditorWindow/*`
 - `src/ui/ShaderLabEditorWindows/BuildSettingsWindow/*`
 - `src/ui/ShaderLabEditorWindows/AboutWindow/*`
 
 Shared cross-cutting utilities stay in a narrow common area:
 
-- `src/ui/ShaderLabEditorCore/theme/*`
-- `src/ui/ShaderLabEditorCore/constants/*`
-- `src/ui/ShaderLabEditorCore/transport/*`
-- `src/ui/ShaderLabEditorCore/platform/*`
+- `src/ui/ShaderLabIDECore/theme/*`
+- `src/ui/ShaderLabIDECore/constants/*`
+- `src/ui/ShaderLabIDECore/transport/*`
+- `src/ui/ShaderLabIDECore/platform/*`
 
 This foldering is a direction, not a big-bang migration requirement.

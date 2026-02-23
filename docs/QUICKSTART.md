@@ -44,7 +44,7 @@ cmd /c .\.vscode\build-debug.bat
 From repository root:
 
 ```powershell
-.\build\bin\ShaderLabEditor.exe
+.\build\bin\ShaderLabIIDE.exe
 ```
 
 ## 5) Build Preset Behavior (Important)

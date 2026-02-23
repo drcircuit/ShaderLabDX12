@@ -16,7 +16,7 @@ From VS Code, use the workspace tasks:
 - `Build ShaderLab (Debug)`
 - `Build ShaderLab (Release)`
 - `Reconfigure CMake`
-- `Run ShaderLabEditor (Dev Env)`
+- `Run ShaderLabIIDE (Dev Env)`
 - `Layering Check`
 - `Startup Relaunch Validation`
 - `M6 Prebuilt Packaging Spike`
@@ -53,6 +53,30 @@ Release builds now also produce a setup artifact automatically:
 - Inno Setup architecture directives use modern identifiers (`x64compatible`) to avoid deprecated `x64` warnings.
 - End-user docs from `docs/enduser/` are staged into `build/bin/docs/enduser/` and included in installer/portable artifacts.
 
+## App Metadata and Versioning (Windows)
+
+ShaderLab uses a single metadata source for versioning and Windows file properties:
+
+- Source of truth: `metadata/app_metadata.json`
+- CMake consumes it to set `project(VERSION ...)`
+- CMake generates:
+  - `generated/include/ShaderLab/Generated/AppMetadata.h` (for C++ access)
+  - per-target VERSIONINFO resources (embedded in `.exe`/`.scr`)
+- Release workflow and installer read the same JSON metadata
+
+How to update app identity/version safely:
+
+1. Edit `metadata/app_metadata.json`
+   - `version` must be semantic: `MAJOR.MINOR.PATCH`
+   - keep `productName`, `companyName`, `publisher`, and `description` in sync with your release intent
+2. Reconfigure/build (`Reconfigure CMake` or normal build task)
+3. Verify Windows file properties on built binaries (`Details` tab)
+4. Run packaging/release steps normally
+
+Compatibility note:
+
+- `include/ShaderLab/Constants.h` remains as a compatibility wrapper for existing code and now resolves version from generated metadata.
+
 VC++ runtime bundling for installer builds:
 
 - The installer script attempts to locate and bundle `vc_redist.x64.exe`
@@ -81,7 +105,7 @@ The build pipeline logs selected architecture and runtime path in build output.
 
 Executable linkage:
 
-- `ShaderLabEditor` -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+- `ShaderLabIIDE` -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
 - `ShaderLabBuildCli` -> `ShaderLabDevKitBuildTools + ShaderLabCoreApi`
 - `ShaderLabPlayer`/`ShaderLabScreenSaver` -> entrypoint + `ShaderLabDevKit + ShaderLabCoreApi`
 
@@ -164,7 +188,7 @@ When present, `BuildPipeline` prefers this bundled SDK for include/lib/rc tool r
 
 Typical outputs:
 
-- Editor: `build/bin/ShaderLabEditor.exe`
+- Editor: `build/bin/ShaderLabIIDE.exe`
 - Runtime/player outputs: under active build directory `bin/`
 - Packaged assets: `build_selfcontained_pack/` when packaging is used
 

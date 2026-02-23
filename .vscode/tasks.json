@@ -2,7 +2,7 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "Build ShaderLab (Debug)",
+			"label": "Build ShaderLab (Debug, No Installer)",
 			"type": "shell",
 			"command": "powershell",
 			"args": [
@@ -23,7 +23,26 @@
 			"problemMatcher": "$msCompile"
 		},
 		{
-			"label": "Build ShaderLab (Release)",
+			"label": "Agent Build (Debug, No Installer)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-debug.bat"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": false,
+				"clear": true
+			},
+			"problemMatcher": "$msCompile"
+		},
+		{
+			"label": "Build ShaderLab (Release + Installer)",
 			"type": "shell",
 			"command": "powershell",
 			"args": [
@@ -44,6 +63,27 @@
 			"problemMatcher": "$msCompile"
 		},
 		{
+			"label": "Build ShaderLab (Release, No Installer)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				". .\\tools\\dev_env.ps1; cmd /c .\\.vscode\\build-release-no-installer.bat"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": false
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": "$msCompile"
+		},
+		{
 			"label": "Clean Build",
 			"type": "shell",
 			"command": "powershell",
@@ -52,7 +92,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				"Remove-Item -Recurse -Force build_debug,build_release -ErrorAction SilentlyContinue"
+				"Get-ChildItem -Directory -Name build* | ForEach-Object { Remove-Item -Recurse -Force $_ -ErrorAction SilentlyContinue }"
 			],
 			"presentation": {
 				"reveal": "always",
@@ -96,7 +136,7 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Run ShaderLabEditor (Dev Env)",
+			"label": "Run ShaderLabIIDE (Dev Env)",
 			"type": "shell",
 			"command": "powershell",
 			"args": [
@@ -104,7 +144,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-Command",
-				". .\\tools\\dev_env.ps1; .\\build_debug\\bin\\ShaderLabEditor.exe"
+				". .\\tools\\dev_env.ps1; .\\build_debug\\bin\\ShaderLabIIDE.exe"
 			],
 			"presentation": {
 				"reveal": "always",
@@ -185,6 +225,33 @@
 				"reveal": "always",
 				"panel": "shared"
 			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Tiny Crinkler Smoke",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				".\\tools\\validate_tiny_crinkler_smoke.ps1"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Local Dev Validate (No Installer)",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Build ShaderLab (Debug, No Installer)",
+				"Layering Check",
+				"Startup Relaunch Validation"
+			],
 			"problemMatcher": []
 		}
 	]

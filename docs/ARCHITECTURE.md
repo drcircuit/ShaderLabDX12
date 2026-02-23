@@ -84,11 +84,11 @@ Features:
 - Dark theme optimized for long coding sessions
 - Win32 and D3D12 backend integration
 
-### Editor Application (`src/app/editor/`)
+### ShaderLabMain Application (`src/app/ShaderLabMain/`)
 
 The editor ties everything together:
 
-- **EditorApp**: Main application class
+- **ShaderLabApp**: Main application class
 - **main.cpp**: Win32 entry point and message loop
 
 The editor uses a simple single-threaded architecture:
@@ -118,13 +118,13 @@ CMake-based build with split ownership targets:
 - **ShaderLabDevKitBuildTools**: Build/export orchestration (`BuildPipeline`, `RuntimeExporter`)
 - **ShaderLabEditorLib**: Editor UI + editor-facing orchestration
 - Executables:
-     - **ShaderLabEditor** -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
+     - **ShaderLabIIDE** -> `ShaderLabEditorLib + ShaderLabDevKitBuildTools + ShaderLabCoreApi`
      - **ShaderLabBuildCli** -> `ShaderLabDevKitBuildTools + ShaderLabCoreApi`
      - **ShaderLabPlayer/ShaderLabScreenSaver** -> entrypoint-only + `ShaderLabDevKit + ShaderLabCoreApi`
 
 ### Editor API Boundary
 
-Editor-facing code (`src/app/editor/*`, `src/ui/*`, `include/ShaderLab/UI/*`) must consume runtime and build functionality through stable API surfaces only:
+Editor-facing code (`src/app/ShaderLabMain/*`, `src/ui/*`, `include/ShaderLab/UI/*`) must consume runtime and build functionality through stable API surfaces only:
 
 - Allowed runtime/build headers:
      - `ShaderLab/DevKit/*`

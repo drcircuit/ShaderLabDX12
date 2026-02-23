@@ -15,7 +15,8 @@
 
 #include "ShaderLab/Core/Serializer.h"
 #include "ShaderLab/Core/ShaderLabData.h"
-#include "ShaderLab/Graphics/PreviewRenderer.h"
+#include "ShaderLab/Shader/ShaderBaseBuild.h"
+#include "ShaderLab/Shader/ShaderBaseVertex.h"
 #include "ShaderLab/Shader/ShaderCompiler.h"
 
 namespace ShaderLab {
@@ -72,23 +73,36 @@ bool IsTinySizeTarget(SizeTargetPreset preset) {
     }
 }
 
-int TransitionIndex(TransitionType type) {
-    switch (type) {
-        case TransitionType::Crossfade: return 0;
-        case TransitionType::DipToBlack: return 1;
-        case TransitionType::FadeOut: return 2;
-        case TransitionType::FadeIn: return 3;
-        case TransitionType::Glitch: return 4;
-        case TransitionType::Pixelate: return 5;
-        default: return 6;
-    }
+constexpr size_t kTransitionSlotCount = 6;
+constexpr const char* kTransitionSlotStems[kTransitionSlotCount] = {
+    "crossfade",
+    "dip_to_black",
+    "fade_out",
+    "fade_in",
+    "glitch",
+    "pixelate"
+};
+
+std::string CanonicalTransitionStem(const std::string& transitionPresetStem) {
+    std::string stem = transitionPresetStem;
+    std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return stem;
 }
 
-TransitionType CanonicalTransitionShaderType(TransitionType type) {
-    if (type == TransitionType::FadeIn || type == TransitionType::FadeOut) {
-        return TransitionType::Crossfade;
+int TransitionSlotIndexFromStem(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionStem(transitionPresetStem);
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        if (canonicalStem == kTransitionSlotStems[i]) {
+            return static_cast<int>(i);
+        }
     }
-    return type;
+    return -1;
+}
+
+std::string CanonicalTransitionShaderStem(const std::string& transitionPresetStem) {
+    return CanonicalTransitionStem(transitionPresetStem);
 }
 
 std::string TrimString(const std::string& value) {
@@ -605,72 +619,10 @@ bool HasDxcRuntime(const fs::path& appRoot) {
 }
 
 std::string BuildPixelShaderSource(const std::string& shaderSource,
-                                   const std::vector<PreviewRenderer::TextureDecl>& textureDecls,
+                                   const std::vector<ShaderBase::TextureBindingDecl>& textureDecls,
                                    bool flipFragCoord = false,
                                    const std::string& shaderEntryPoint = "main") {
-    int declaredChannels = -1;
-    for (int i = 0; i < 8; ++i) {
-        if (shaderSource.find("iChannel" + std::to_string(i)) != std::string::npos ||
-            shaderSource.find("iSampler" + std::to_string(i)) != std::string::npos) {
-            declaredChannels = (std::max)(declaredChannels, i);
-        }
-    }
-    for (const auto& decl : textureDecls) {
-        if (decl.slot >= 0 && decl.slot < 8) {
-            declaredChannels = (std::max)(declaredChannels, decl.slot);
-        }
-    }
-    const int slotCount = declaredChannels + 1;
-
-    std::string wrapped = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
-)";
-
-    for (int i = 0; i < slotCount; ++i) {
-        std::string type = "Texture2D";
-        for (const auto& decl : textureDecls) {
-            if (decl.slot == i) {
-                type = decl.type;
-                break;
-            }
-        }
-        wrapped += type + " iChannel" + std::to_string(i) + " : register(t" + std::to_string(i) + ");\n";
-    }
-
-    wrapped += "\n";
-    for (int i = 0; i < slotCount; ++i) {
-        wrapped += "SamplerState iSampler" + std::to_string(i) + " : register(s" + std::to_string(i) + ");\n";
-    }
-
-    wrapped += R"(
-
-struct PSInput {
-    float4 pos : SV_POSITION;
-    float2 fragCoord : TEXCOORD0;
-};
-
-)";
-    wrapped += shaderSource;
-    wrapped += R"(
-
-float4 PSMain(PSInput input) : SV_TARGET {
-)";
-    if (flipFragCoord) {
-        wrapped += "    float2 fragCoord = float2(input.fragCoord.x, iResolution.y - input.fragCoord.y);\n";
-    } else {
-        wrapped += "    float2 fragCoord = input.fragCoord;\n";
-    }
-    wrapped += "    return " + shaderEntryPoint + "(fragCoord, iResolution, iTime);\n";
-    wrapped += R"(
-}
-)";
-    return wrapped;
+    return ShaderBase::BuildBuildPixelShaderTemplate(shaderSource, textureDecls, flipFragCoord, shaderEntryPoint);
 }
 
 bool WriteBinaryFile(const fs::path& path, const std::vector<uint8_t>& data, std::string& outError) {
@@ -803,7 +755,7 @@ void AppendValue(std::vector<uint8_t>& output, const T& value) {
     output.insert(output.end(), ptr, ptr + sizeof(T));
 }
 
-std::string GetTransitionShaderSourceForBuild(TransitionType type);
+std::string GetTransitionShaderSourceForBuild(const std::string& transitionPresetStem);
 std::string MinifyShaderTextForPack(const std::string& input);
 
 struct TinyModuleMap {
@@ -812,7 +764,7 @@ struct TinyModuleMap {
     std::vector<std::string> moduleLabels;
     std::vector<int16_t> sceneModuleIndices;
     std::vector<std::vector<int16_t>> postFxModuleIndices;
-    int16_t transitionModuleIndices[7] = { -1, -1, -1, -1, -1, -1, -1 };
+    int16_t transitionModuleIndices[kTransitionSlotCount] = { -1, -1, -1, -1, -1, -1 };
 };
 
 struct ParsedFunctionDecl {
@@ -1211,21 +1163,12 @@ TinyModuleMap BuildTinyModuleMap(const ProjectData& project, bool scopeLocalFunc
     int postFxCounter = 0;
     int transitionCounter = 0;
 
-    bool usedTransitions[7] = {};
+    bool usedTransitions[kTransitionSlotCount] = {};
     for (const auto& row : project.track.rows) {
-        if (row.transition == TransitionType::None) continue;
-        const int idx = TransitionIndex(row.transition);
-        if (idx >= 0 && idx < 7) usedTransitions[idx] = true;
+        if (row.transitionPresetStem.empty()) continue;
+        const int idx = TransitionSlotIndexFromStem(row.transitionPresetStem);
+        if (idx >= 0 && idx < static_cast<int>(kTransitionSlotCount)) usedTransitions[idx] = true;
     }
-
-    const TransitionType transitions[] = {
-        TransitionType::Crossfade,
-        TransitionType::DipToBlack,
-        TransitionType::FadeOut,
-        TransitionType::FadeIn,
-        TransitionType::Glitch,
-        TransitionType::Pixelate
-    };
 
     auto appendModule = [&](const std::string& shaderCode, const std::string& entrypointName, const std::string& moduleLabel) -> int16_t {
         const int16_t moduleId = static_cast<int16_t>((std::min)(static_cast<size_t>(32767), map.modules.size()));
@@ -1243,11 +1186,10 @@ TinyModuleMap BuildTinyModuleMap(const ProjectData& project, bool scopeLocalFunc
         return moduleId;
     };
 
-    for (TransitionType type : transitions) {
-        const int idx = TransitionIndex(type);
-        if (idx < 0 || idx >= 7 || !usedTransitions[idx]) continue;
+    for (size_t i = 0; i < kTransitionSlotCount; ++i) {
+        if (!usedTransitions[i]) continue;
         const std::string entrypoint = "t" + std::to_string(transitionCounter++);
-        map.transitionModuleIndices[idx] = appendModule(GetTransitionShaderSourceForBuild(type), entrypoint, "Transition " + std::to_string(idx));
+        map.transitionModuleIndices[i] = appendModule(GetTransitionShaderSourceForBuild(kTransitionSlotStems[i]), entrypoint, "Transition " + std::to_string(i));
     }
 
     for (size_t sceneIndex = 0; sceneIndex < project.scenes.size(); ++sceneIndex) {
@@ -1337,7 +1279,10 @@ bool BuildCompactTrackBinary(const ProjectData& project, std::vector<uint8_t>& o
         const auto& src = track.rows[i];
         const int16_t rowId = static_cast<int16_t>((std::max)(-32768, (std::min)(32767, src.rowId)));
         const int16_t sceneIndex = static_cast<int16_t>((std::max)(-1, (std::min)(32767, src.sceneIndex)));
-        const uint8_t transition = static_cast<uint8_t>(src.transition);
+        const int transitionSlot = TransitionSlotIndexFromStem(src.transitionPresetStem);
+        const uint8_t transition = (transitionSlot >= 0 && transitionSlot < static_cast<int>(kTransitionSlotCount))
+            ? static_cast<uint8_t>(transitionSlot)
+            : static_cast<uint8_t>(255);
         uint8_t flags = 0;
         if (src.stop) flags |= 0x1u;
 
@@ -1410,25 +1355,31 @@ bool EmbedCompactTrackIntoExecutable(const ProjectData& project, const fs::path&
     return true;
 }
 
-std::string GetTransitionShaderSourceForBuild(TransitionType type) {
-    type = CanonicalTransitionShaderType(type);
+std::string GetTransitionShaderSourceForBuild(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionShaderStem(transitionPresetStem);
     std::string common = R"(
 float4 main(float2 fragCoord, float2 iResolution, float iTime) {
-    float2 uv = fragCoord / iResolution;
+    int2 dims = max(int2(iResolution) - int2(1, 1), int2(0, 0));
+    int2 pixel = clamp(int2(fragCoord), int2(0, 0), dims);
     float t = saturate(iTime);
-    float4 colA = iChannel0.Sample(iSampler0, uv);
-    float4 colB = iChannel1.Sample(iSampler1, uv);
+    float4 colA = iChannel0.Load(int3(pixel, 0));
+    float4 colB = iChannel1.Load(int3(pixel, 0));
 )";
-    switch (type) {
-        case TransitionType::Crossfade: return common + R"(
+    if (canonicalStem == "crossfade" || canonicalStem == "fade_in" || canonicalStem == "fade_out") {
+        return common + R"(
     return lerp(colA, colB, t);
 }
 )";
-        case TransitionType::DipToBlack: return common + R"(
+    }
+    if (canonicalStem == "dip_to_black") {
+        return common + R"(
     return (t < 0.5) ? lerp(colA, float4(0,0,0,1), t*2.0) : lerp(float4(0,0,0,1), colB, (t-0.5)*2.0);
 }
 )";
-        case TransitionType::Glitch: return common + R"(
+    }
+    if (canonicalStem == "glitch") {
+        return common + R"(
+    float2 uv = (float2(pixel) + 0.5) / iResolution;
     float offset = iTime * 10.0;
     float noise = frac(sin(dot(float2(floor(uv.y * 20.0) + offset, offset), float2(12.9898, 78.233))) * 43758.5453);
     float disp = (noise - 0.5) * 0.1 * sin(t * 3.14159);
@@ -1438,7 +1389,10 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
     return lerp(colA, colB, t);
 }
 )";
-        case TransitionType::Pixelate: return common + R"(
+    }
+    if (canonicalStem == "pixelate") {
+        return common + R"(
+    float2 uv = (float2(pixel) + 0.5) / iResolution;
     float p = sin(t * 3.14159);
     float n = 50.0 * (1.0 - p) + 1.0;
     float2 uvP = floor(uv * n) / n;
@@ -1447,23 +1401,28 @@ float4 main(float2 fragCoord, float2 iResolution, float iTime) {
     return lerp(colA, colB, t);
 }
 )";
-        default:
-            return common + R"(
+    }
+    return common + R"(
     return lerp(colA, colB, t);
 }
 )";
-    }
 }
 
-const char* GetTransitionPackedPath(TransitionType type) {
-    type = CanonicalTransitionShaderType(type);
-    switch (type) {
-        case TransitionType::Crossfade: return "assets/shaders/transition_fade_a_b.cso";
-        case TransitionType::DipToBlack: return "assets/shaders/transition_dip_to_black.cso";
-        case TransitionType::Glitch: return "assets/shaders/transition_glitch.cso";
-        case TransitionType::Pixelate: return "assets/shaders/transition_pixelate.cso";
-        default: return "";
+const char* GetTransitionPackedPath(const std::string& transitionPresetStem) {
+    const std::string canonicalStem = CanonicalTransitionShaderStem(transitionPresetStem);
+    if (canonicalStem == "crossfade" || canonicalStem == "fade_in" || canonicalStem == "fade_out") {
+        return "assets/shaders/transition_fade_a_b.cso";
     }
+    if (canonicalStem == "dip_to_black") {
+        return "assets/shaders/transition_dip_to_black.cso";
+    }
+    if (canonicalStem == "glitch") {
+        return "assets/shaders/transition_glitch.cso";
+    }
+    if (canonicalStem == "pixelate") {
+        return "assets/shaders/transition_pixelate.cso";
+    }
+    return "";
 }
 
 const char* GetPackedVertexShaderPath() {
@@ -2189,6 +2148,33 @@ std::vector<MicroUbershaderConflict> BuildPipeline::AnalyzeMicroUbershaderConfli
     return result;
 }
 
+bool BuildPipeline::GenerateMicroUbershaderSource(const std::string& projectPath,
+                                                  std::string& outSource,
+                                                  std::string& outError) {
+    outSource.clear();
+    outError.clear();
+
+    if (projectPath.empty()) {
+        outError = "Project path is empty.";
+        return false;
+    }
+
+    ProjectData project;
+    if (!Serializer::LoadProject(projectPath, project)) {
+        outError = "Failed to load project: " + projectPath;
+        return false;
+    }
+
+    const TinyModuleMap map = BuildTinyModuleMap(project, false);
+    outSource = BuildMicroUbershaderSource(map);
+    if (outSource.empty()) {
+        outError = "Generated ubershader source is empty.";
+        return false;
+    }
+
+    return true;
+}
+
 BuildResult BuildPipeline::BuildSelfContained(
     const BuildRequest& request,
     const std::function<void(const std::string&)>& log) {
@@ -2286,9 +2272,14 @@ BuildResult BuildPipeline::BuildSelfContained(
     std::string crinklerPath;
     const bool hasCrinkler = ResolveCrinklerPath(effectiveAppRoot, crinklerPath);
     const bool wantCrinkler = request.mode == BuildMode::ReleaseCrinkled;
-    bool useCrinkler = wantCrinkler && hasNinja && hasCrinkler;
+    bool useCrinkler = wantCrinkler && useMicroPlayer && hasNinja && hasCrinkler;
     bool useX86Target = useMicroPlayer;
     const bool useNinjaGenerator = useCrinkler;
+
+    if (wantCrinkler && !useMicroPlayer) {
+        log("Crinkled mode requested for non-micro runtime target.");
+        log("Crinkler polish is skipped for compatibility; using standard release linker.");
+    }
 
     if (useCrinkler && useX86Target) {
         fs::path currentCrinkler = fs::path(crinklerPath);
@@ -2330,7 +2321,7 @@ BuildResult BuildPipeline::BuildSelfContained(
         log("Runtime wrapper: ShaderLabScreenSaver (.scr contract)");
     }
 
-    if (wantCrinkler && !useCrinkler) {
+    if (wantCrinkler && useMicroPlayer && !useCrinkler) {
         if (!hasCrinkler) {
             log("Error: Release Crinkled requires Crinkler, but crinkler.exe was not found.");
         }
@@ -2409,7 +2400,13 @@ BuildResult BuildPipeline::BuildSelfContained(
         writeCacheBool("SHADERLAB_TINY_TRACE", tinyProfile && (microDeveloperBuild || request.runtimeDebugLog));
         writeCacheBool("SHADERLAB_STATIC_RUNTIME", staticRuntime);
         writeCacheBool("SHADERLAB_USE_CRINKLER", enableCrinkler);
-        writeCacheBool("SHADERLAB_CRINKLER_TINYIMPORT", enableCrinkler && !useMicroPlayer);
+        writeCacheBool("SHADERLAB_CRINKLER_TINYIMPORT", enableCrinkler && useMicroPlayer);
+
+        if (enableCrinkler && useMicroPlayer) {
+            writeCacheString("SHADERLAB_CRINKLER_COMPMODE", "SLOW");
+            writeCacheString("SHADERLAB_CRINKLER_HASH_TRIES", "32");
+            writeCacheString("SHADERLAB_CRINKLER_ORDER_TRIES", "120");
+        }
 
         if (enableCrinkler) {
             writeCacheString("CRINKLER_PATH", crinklerPath);
@@ -2879,6 +2876,62 @@ BuildResult BuildPipeline::BuildSelfContained(
         return result;
     }
 
+    std::vector<std::string> originalAudioPaths;
+    originalAudioPaths.reserve(project.audioLibrary.size());
+    for (const auto& clip : project.audioLibrary) {
+        originalAudioPaths.push_back(clip.path);
+    }
+
+    struct FileBindingPathSnapshot {
+        size_t sceneIndex = 0;
+        size_t bindingIndex = 0;
+        std::string path;
+    };
+    std::vector<FileBindingPathSnapshot> originalFileBindingPaths;
+    for (size_t sceneIndex = 0; sceneIndex < project.scenes.size(); ++sceneIndex) {
+        const auto& scene = project.scenes[sceneIndex];
+        for (size_t bindingIndex = 0; bindingIndex < scene.bindings.size(); ++bindingIndex) {
+            const auto& binding = scene.bindings[bindingIndex];
+            if (binding.bindingType == BindingType::File && !binding.filePath.empty()) {
+                originalFileBindingPaths.push_back({sceneIndex, bindingIndex, binding.filePath});
+            }
+        }
+    }
+
+    const fs::path projectRootDir = fs::path(request.projectPath).parent_path();
+    auto rebaseRelativePath = [&](std::string& pathValue) {
+        if (pathValue.empty()) {
+            return;
+        }
+
+        fs::path sourcePath(pathValue);
+        if (sourcePath.is_absolute()) {
+            return;
+        }
+
+        std::error_code existsError;
+        if (fs::exists(sourcePath, existsError)) {
+            return;
+        }
+
+        fs::path projectRelative = projectRootDir / sourcePath;
+        existsError.clear();
+        if (fs::exists(projectRelative, existsError)) {
+            pathValue = projectRelative.string();
+        }
+    };
+
+    for (auto& clip : project.audioLibrary) {
+        rebaseRelativePath(clip.path);
+    }
+    for (auto& scene : project.scenes) {
+        for (auto& binding : scene.bindings) {
+            if (binding.bindingType == BindingType::File) {
+                rebaseRelativePath(binding.filePath);
+            }
+        }
+    }
+
     fs::path packRoot = buildRootPath / "build_selfcontained_pack";
     std::error_code ec;
     fs::remove_all(packRoot, ec);
@@ -2887,6 +2940,55 @@ BuildResult BuildPipeline::BuildSelfContained(
     if (!Serializer::ConsolidateProject(project, packRoot.string())) {
         log("Error: Failed to consolidate assets for packaging.");
         return result;
+    }
+
+    log("Bundled asset staging summary:");
+    size_t audioStagedCount = 0;
+    size_t textureStagedCount = 0;
+    const size_t audioTotalCount = project.audioLibrary.size();
+    const size_t textureTotalCount = originalFileBindingPaths.size();
+    if (project.audioLibrary.empty()) {
+        log("  Audio: none");
+    } else {
+        for (size_t i = 0; i < project.audioLibrary.size(); ++i) {
+            const std::string sourcePath = (i < originalAudioPaths.size()) ? originalAudioPaths[i] : std::string();
+            const std::string stagedPath = project.audioLibrary[i].path;
+            const fs::path stagedAbsolute = packRoot / fs::path(stagedPath);
+            std::error_code existsEc;
+            const bool stagedExists = fs::exists(stagedAbsolute, existsEc);
+            if (stagedExists) {
+                ++audioStagedCount;
+            }
+            log("  Audio[" + std::to_string(i) + "]: " + sourcePath + " -> " + stagedPath + (stagedExists ? " [staged]" : " [missing]"));
+        }
+    }
+
+    if (originalFileBindingPaths.empty()) {
+        log("  Textures: none");
+    } else {
+        for (const auto& snapshot : originalFileBindingPaths) {
+            if (snapshot.sceneIndex >= project.scenes.size()) {
+                continue;
+            }
+            const auto& scene = project.scenes[snapshot.sceneIndex];
+            if (snapshot.bindingIndex >= scene.bindings.size()) {
+                continue;
+            }
+            const auto& binding = scene.bindings[snapshot.bindingIndex];
+            const fs::path stagedAbsolute = packRoot / fs::path(binding.filePath);
+            std::error_code existsEc;
+            const bool stagedExists = fs::exists(stagedAbsolute, existsEc);
+            if (stagedExists) {
+                ++textureStagedCount;
+            }
+            log("  Texture[scene " + std::to_string(snapshot.sceneIndex) + ", ch " + std::to_string(binding.channelIndex) + "]: " +
+                snapshot.path + " -> " + binding.filePath + (stagedExists ? " [staged]" : " [missing]"));
+        }
+    }
+    log("  Summary: audio staged " + std::to_string(audioStagedCount) + "/" + std::to_string(audioTotalCount) +
+        ", textures staged " + std::to_string(textureStagedCount) + "/" + std::to_string(textureTotalCount));
+    if (audioStagedCount != audioTotalCount || textureStagedCount != textureTotalCount) {
+        log("  WARNING: One or more assets were not staged. Check [missing] entries above.");
     }
 
     std::vector<Serializer::PackedExtraFile> extraFiles;
@@ -2906,32 +3008,7 @@ BuildResult BuildPipeline::BuildSelfContained(
             }
         };
 
-        const char* vertexShaderSource = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
-
-struct VSInput {
-    float3 pos : POSITION;
-    float2 uv : TEXCOORD0;
-};
-
-struct PSInput {
-    float4 pos : SV_POSITION;
-    float2 fragCoord : TEXCOORD0;
-};
-
-PSInput main(VSInput input) {
-    PSInput output;
-    output.pos = float4(input.pos, 1.0);
-    output.fragCoord = float2(input.uv.x, 1.0 - input.uv.y) * iResolution;
-    return output;
-}
-)";
+        const std::string vertexShaderSource = ShaderBase::BuildFullscreenQuadVertexShaderSource();
 
         auto vsResult = compiler.CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl", ShaderCompileMode::Build);
         if (!vsResult.success) {
@@ -3058,7 +3135,7 @@ PSInput main(VSInput input) {
             }
 
             log("Warning: Module-local compile failed at " + entrypoint + ". Using placeholder shader module.");
-            const std::string placeholderModule = "float4 main(float2 fragCoord, float2 iResolution, float iTime){ return float4(1.0, 0.0, 1.0, 1.0); }";
+            const std::string placeholderModule = ShaderBase::BuildPlaceholderFragmentModuleSource();
             const std::string wrappedPlaceholder = BuildPixelShaderSource(placeholderModule, {}, false, "main");
             if (tryCompile(wrappedPlaceholder, L"micro_ubershader_placeholder.hlsl", microModuleBytecode[moduleIndex])) {
                 log("Info: Placeholder shader module emitted for " + entrypoint + ".");
@@ -3075,13 +3152,6 @@ PSInput main(VSInput input) {
             return result;
         }
         extraFiles.push_back({ubershaderBytecodePath.string(), "assets/shaders/ubershader.bin"});
-
-        fs::path ubershaderPath = packRoot / "assets" / "shaders" / "ubershader.hlsl";
-        if (!WriteTextFile(ubershaderPath, BuildMicroUbershaderSource(tinyModuleMap), writeError)) {
-            log("Error: " + writeError);
-            return result;
-        }
-        extraFiles.push_back({ubershaderPath.string(), "assets/shaders/ubershader.hlsl"});
 
         for (auto& scene : project.scenes) {
             scene.precompiledPath.clear();
@@ -3103,32 +3173,7 @@ PSInput main(VSInput input) {
         };
 
         log("Precompiling vertex shader");
-        const char* vertexShaderSource = R"(
-cbuffer Constants : register(b0) {
-    float iTime;
-    float2 iResolution;
-    float iBeat;
-    float iBar;
-    float fBarBeat;
-};
-
-struct VSInput {
-    float3 pos : POSITION;
-    float2 uv : TEXCOORD0;
-};
-
-struct PSInput {
-    float4 pos : SV_POSITION;
-    float2 fragCoord : TEXCOORD0;
-};
-
-PSInput main(VSInput input) {
-    PSInput output;
-    output.pos = float4(input.pos, 1.0);
-    output.fragCoord = float2(input.uv.x, 1.0 - input.uv.y) * iResolution;
-    return output;
-}
-)";
+        const std::string vertexShaderSource = ShaderBase::BuildFullscreenQuadVertexShaderSource();
 
         auto vsResult = compiler.CompileFromSource(vertexShaderSource, "main", "vs_6_0", L"vertex.hlsl", ShaderCompileMode::Build);
         if (!vsResult.success) {
@@ -3144,36 +3189,27 @@ PSInput main(VSInput input) {
         }
         extraFiles.push_back({vertexPath.string(), GetPackedVertexShaderPath()});
 
-        bool usedTransitions[7] = {};
+        bool usedTransitions[kTransitionSlotCount] = {};
         for (const auto& row : project.track.rows) {
-            if (row.transition == TransitionType::None) {
+            if (row.transitionPresetStem.empty()) {
                 continue;
             }
-            const int idx = TransitionIndex(row.transition);
-            if (idx >= 0 && idx < 7) {
+            const int idx = TransitionSlotIndexFromStem(row.transitionPresetStem);
+            if (idx >= 0 && idx < static_cast<int>(kTransitionSlotCount)) {
                 usedTransitions[idx] = true;
             }
         }
 
         log("Precompiling used transitions");
-        const TransitionType transitions[] = {
-            TransitionType::Crossfade,
-            TransitionType::DipToBlack,
-            TransitionType::FadeOut,
-            TransitionType::FadeIn,
-            TransitionType::Glitch,
-            TransitionType::Pixelate
-        };
-
-        for (TransitionType type : transitions) {
-            const int transitionIdx = TransitionIndex(type);
-            if (transitionIdx < 0 || transitionIdx >= 7 || !usedTransitions[transitionIdx]) {
+        for (size_t transitionIdx = 0; transitionIdx < kTransitionSlotCount; ++transitionIdx) {
+            if (!usedTransitions[transitionIdx]) {
                 continue;
             }
-            const char* packedPath = GetTransitionPackedPath(type);
+            const std::string transitionStem = kTransitionSlotStems[transitionIdx];
+            const char* packedPath = GetTransitionPackedPath(transitionStem);
             if (!packedPath || !*packedPath) continue;
-            std::string shaderSource = GetTransitionShaderSourceForBuild(type);
-            std::vector<PreviewRenderer::TextureDecl> decls = { {0, "Texture2D"}, {1, "Texture2D"} };
+            std::string shaderSource = GetTransitionShaderSourceForBuild(transitionStem);
+            std::vector<ShaderBase::TextureBindingDecl> decls = { {0, "Texture2D"}, {1, "Texture2D"} };
             std::string wrapped = BuildPixelShaderSource(shaderSource, decls);
             auto psResult = compiler.CompileFromSource(wrapped, "PSMain", "ps_6_0", L"transition.hlsl", ShaderCompileMode::Build);
             if (!psResult.success) {
@@ -3193,10 +3229,10 @@ PSInput main(VSInput input) {
         for (size_t i = 0; i < project.scenes.size(); ++i) {
             auto& scene = project.scenes[i];
             log("Scene " + std::to_string(i) + ": " + scene.name);
-            std::vector<PreviewRenderer::TextureDecl> decls;
+            std::vector<ShaderBase::TextureBindingDecl> decls;
             for (const auto& b : scene.bindings) {
                 if (!b.enabled) continue;
-                PreviewRenderer::TextureDecl decl;
+                ShaderBase::TextureBindingDecl decl;
                 decl.slot = b.channelIndex;
                 if (b.type == TextureType::TextureCube) decl.type = "TextureCube";
                 else if (b.type == TextureType::Texture3D) decl.type = "Texture3D";

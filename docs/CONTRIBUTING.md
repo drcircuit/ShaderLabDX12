@@ -80,7 +80,7 @@ When changing build/export behavior, preserve and document:
 
 ## Boundary Rules (Required)
 
-When contributing to editor/UI code (`src/app/editor/*`, `src/ui/*`, `include/ShaderLab/UI/*`):
+When contributing to editor/UI code (`src/app/ShaderLabMain/*`, `src/ui/*`, `include/ShaderLab/UI/*`):
 
 - Use stable API surfaces only:
 	- `ShaderLab/DevKit/*`
