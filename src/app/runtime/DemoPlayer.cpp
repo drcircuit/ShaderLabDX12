@@ -1318,7 +1318,9 @@ void DemoPlayer::Shutdown() {
     // Device/Swapchain/Renderer are owned externally (except Renderer/Compiler now)
 }
 
-bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int width, int height) {
+bool DemoPlayer::Initialize(NativeWindowHandle hwnd, Device* device, Swapchain* swapchain, int width, int height) {
+    // Cast opaque handle to Win32 HWND for ImGui Win32 backend initialisation.
+    HWND nativeHwnd = reinterpret_cast<HWND>(hwnd);
     m_device = device;
     m_swapchain = swapchain;
 
@@ -1448,7 +1450,7 @@ bool DemoPlayer::Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         m_device->GetDevice()->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_imguiSrvHeap));
 
-        ImGui_ImplWin32_Init(hwnd);
+        ImGui_ImplWin32_Init(nativeHwnd);
         ImGui_ImplDX12_Init(m_device->GetDevice(), 2,
             DXGI_FORMAT_R8G8B8A8_UNORM, m_imguiSrvHeap.Get(),
             m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
@@ -2936,7 +2938,11 @@ void DemoPlayer::RenderScene(ID3D12GraphicsCommandList* cmd, int sceneIndex, dou
     m_renderStack.pop_back();
 }
 
-void DemoPlayer::Render(ID3D12GraphicsCommandList* cmd, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle) {
+void DemoPlayer::Render(const RenderContext& context) {
+    auto* cmd         = context.commandList;
+    auto* renderTarget = context.renderTarget;
+    auto  rtvHandle   = context.rtvHandle;
+
     if (renderTarget && (m_width <= 0 || m_height <= 0)) {
         const D3D12_RESOURCE_DESC rtDesc = renderTarget->GetDesc();
         if (rtDesc.Width > 0 && rtDesc.Height > 0) {

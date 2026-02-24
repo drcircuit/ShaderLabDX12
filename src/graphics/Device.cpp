@@ -158,6 +158,10 @@ void Device::Shutdown() {
     m_adapter.Reset();
 }
 
+bool Device::IsValid() const {
+    return m_device != nullptr;
+}
+
 Device::MemoryInfo Device::GetVideoMemoryInfo() const {
     MemoryInfo info = {};
     if (m_adapter) {

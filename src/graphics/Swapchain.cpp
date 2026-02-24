@@ -11,10 +11,13 @@ Swapchain::~Swapchain() {
 }
 
 bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
-                           HWND hwnd, uint32_t width, uint32_t height) {
+                           NativeWindowHandle hwnd, uint32_t width, uint32_t height) {
     if (!device || !device->IsValid() || !commandQueue || !hwnd) {
         return false;
     }
+
+    // Cast opaque platform handle to the concrete Win32 type used by DXGI.
+    HWND nativeHwnd = reinterpret_cast<HWND>(hwnd);
 
     m_device = device;
     m_commandQueue = commandQueue;
@@ -49,7 +52,7 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
     ComPtr<IDXGISwapChain1> swapchain1;
     HRESULT hr = device->GetFactory()->CreateSwapChainForHwnd(
         commandQueue->GetQueue(),
-        hwnd,
+        nativeHwnd,
         &swapchainDesc,
         nullptr,
         nullptr,
@@ -66,7 +69,7 @@ bool Swapchain::Initialize(Device* device, CommandQueue* commandQueue,
     }
 
     // Disable Alt+Enter fullscreen
-    device->GetFactory()->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+    device->GetFactory()->MakeWindowAssociation(nativeHwnd, DXGI_MWA_NO_ALT_ENTER);
 
     m_currentBackBuffer = m_swapchain->GetCurrentBackBufferIndex();
 

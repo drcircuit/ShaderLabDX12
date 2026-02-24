@@ -6,6 +6,7 @@
 #include "ShaderLab/Graphics/CommandQueue.h"
 #include "ShaderLab/Graphics/Device.h"
 #include "ShaderLab/Graphics/Swapchain.h"
+#include "ShaderLab/Graphics/RenderContext.h"
 
 #include <algorithm>
 #include <conio.h>
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <iostream>
 #endif
+#include <windows.h>
 #include <windowsx.h>
 
 #ifndef SHADERLAB_RUNTIME_IMGUI
@@ -69,7 +71,7 @@ struct RuntimeAppState {
     double fpsAccumSeconds = 0.0;
     int fpsAccumFrames = 0;
     std::string baseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - demo";
-    RECT windowedRect = { 0, 0, 1280, 720 };
+    WindowRect windowedRect;
     POINT lastMousePos = { 0, 0 };
     bool runtimeCursorHidden = false;
 };
@@ -173,9 +175,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_SYSKEYDOWN:
             if (!g_Runtime.screenSaverMode && wParam == VK_RETURN && (lParam & (1 << 29))) {
                 if (g_Runtime.windowed) {
-                    RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+                    RuntimeWindowPolicy::SetFullscreen(reinterpret_cast<NativeWindowHandle>(hwnd), g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                 } else {
-                    RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+                    RuntimeWindowPolicy::SetWindowed(reinterpret_cast<NativeWindowHandle>(hwnd), g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                 }
                 return 0;
             }
@@ -198,7 +200,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
 } // namespace
 
-int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
+int RunPlayerApp(NativeAppHandle appHandle, const PlayerLaunchOptions& options) {
+    HINSTANCE hInstance = reinterpret_cast<HINSTANCE>(appHandle);
     g_Runtime = RuntimeAppState{};
     g_Runtime.debugConsole = options.debugConsole;
     g_Runtime.screenSaverMode = options.screenSaverMode;
@@ -280,6 +283,9 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
         return 0;
     }
 
+    // Wrap the Win32 HWND in our opaque handle type for platform-neutral APIs.
+    NativeWindowHandle nativeHwnd = reinterpret_cast<NativeWindowHandle>(hwnd);
+
     const bool deferShowUntilFirstPresent = launchFullscreen;
     if (!deferShowUntilFirstPresent) {
         ShowWindow(hwnd, SW_SHOW);
@@ -343,7 +349,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     }
 
     g_Resources.swapchain = new Swapchain();
-    if (!g_Resources.swapchain->Initialize(g_Resources.device, g_Resources.commandQueue, hwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) {
+    if (!g_Resources.swapchain->Initialize(g_Resources.device, g_Resources.commandQueue, nativeHwnd, static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH))) {
 #if !SHADERLAB_TINY_PLAYER
         RuntimeStartupPolicy::EmitRuntimeError("E104", "swapchain init failed");
 #endif
@@ -352,9 +358,9 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
 
     if (!g_Runtime.screenSaverMode) {
         if (g_Runtime.startFullscreen) {
-            RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+            RuntimeWindowPolicy::SetFullscreen(nativeHwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
         } else {
-            RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+            RuntimeWindowPolicy::SetWindowed(nativeHwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
         }
     }
 
@@ -372,7 +378,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
     const int runtimeWidth = static_cast<int>(g_Resources.swapchain->GetWidth());
     const int runtimeHeight = static_cast<int>(g_Resources.swapchain->GetHeight());
     g_Resources.player = new DemoPlayer();
-    if (!g_Resources.player->Initialize(hwnd, g_Resources.device, g_Resources.swapchain, runtimeWidth, runtimeHeight)) {
+    if (!g_Resources.player->Initialize(nativeHwnd, g_Resources.device, g_Resources.swapchain, runtimeWidth, runtimeHeight)) {
 #if !SHADERLAB_TINY_PLAYER
         RuntimeStartupPolicy::EmitRuntimeError("E106", "demo player init failed");
 #endif
@@ -403,7 +409,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
 
     if (!g_Runtime.screenSaverMode) {
         g_Runtime.baseWindowTitle = "DrCiRCUiT's ShaderLab - For democoders, by a democoder - " + projectName;
-        RuntimeWindowPolicy::UpdateWindowTitleWithStats(hwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
+        RuntimeWindowPolicy::UpdateWindowTitleWithStats(nativeHwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
     }
 
     #if !SHADERLAB_TINY_PLAYER
@@ -431,9 +437,9 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
                     ToggleWindowVisibility(hwnd);
                 } else if (alt && msg.wParam == 'W') {
                     if (!g_Runtime.windowed) {
-                        RuntimeWindowPolicy::SetWindowed(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+                        RuntimeWindowPolicy::SetWindowed(nativeHwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                     } else {
-                        RuntimeWindowPolicy::SetFullscreen(hwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
+                        RuntimeWindowPolicy::SetFullscreen(nativeHwnd, g_Runtime.windowed, g_Runtime.windowedRect, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.screenSaverMode);
                     }
                 }
             }
@@ -460,7 +466,13 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
             cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
             cmdList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 
-            g_Resources.player->Render(cmdList, backBuffer, rtv);
+            RenderContext renderCtx;
+            renderCtx.commandList  = cmdList;
+            renderCtx.renderTarget = backBuffer;
+            renderCtx.rtvHandle    = rtv;
+            renderCtx.width  = g_Resources.swapchain->GetWidth();
+            renderCtx.height = g_Resources.swapchain->GetHeight();
+            g_Resources.player->Render(renderCtx);
 
             g_Runtime.vsyncEnabled = g_Resources.player->IsVsyncEnabled();
 
@@ -477,7 +489,7 @@ int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options) {
                 g_Runtime.lastMeasuredFps = static_cast<float>(g_Runtime.fpsAccumFrames / g_Runtime.fpsAccumSeconds);
                 g_Runtime.fpsAccumSeconds = 0.0;
                 g_Runtime.fpsAccumFrames = 0;
-                RuntimeWindowPolicy::UpdateWindowTitleWithStats(hwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
+                RuntimeWindowPolicy::UpdateWindowTitleWithStats(nativeHwnd, g_Runtime.baseWindowTitle, g_Runtime.lastMeasuredFps, g_Runtime.vsyncEnabled, g_Runtime.windowed, g_Runtime.screenSaverMode);
             }
         }
     }

@@ -1,8 +1,14 @@
 #pragma once
 
+#include "ShaderLab/Platform/Platform.h"
+#include "ShaderLab/Graphics/RenderContext.h"
+
+#ifdef SHADERLAB_GFX_D3D12
 #include <d3d12.h>
-#include <windows.h>
 #include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#endif
+
 #include <string>
 #include <vector>
 #include <functional>
@@ -15,8 +21,6 @@
 #include "TextEditor.h"
 #include "ShaderLab/DevKit/BuildPipeline.h"
 #include "ShaderLab/Core/ShaderLabData.h"
-
-using Microsoft::WRL::ComPtr;
 
 struct ImGuiContext;
 struct ImFont;
@@ -157,12 +161,16 @@ public:
     ShaderLabIDE();
     ~ShaderLabIDE();
 
-    bool Initialize(HWND hwnd, Device* device, Swapchain* swapchain);
+    bool Initialize(NativeWindowHandle hwnd, Device* device, Swapchain* swapchain);
     void Shutdown();
 
     void BeginFrame();
     void EndFrame();
+#ifdef SHADERLAB_GFX_D3D12
     void Render(ID3D12GraphicsCommandList* commandList);
+#else
+    void Render(const RenderContext& context);
+#endif
     
     void UpdateTransport(double wallNowSeconds, float dtSeconds);
     
