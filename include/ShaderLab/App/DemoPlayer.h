@@ -1,14 +1,18 @@
 #pragma once
 
 #include "ShaderLab/Core/ShaderLabData.h"
-#include <d3d12.h>
-#include <wrl/client.h>
+#include "ShaderLab/Platform/Platform.h"
+#include "ShaderLab/Graphics/RenderContext.h"
 #include <vector>
 #include <string>
 #include <array>
 #include <unordered_map>
 
+#ifdef SHADERLAB_GFX_D3D12
+#include <d3d12.h>
+#include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
+#endif
 
 namespace ShaderLab {
 
@@ -23,7 +27,8 @@ public:
     DemoPlayer();
     ~DemoPlayer();
 
-    bool Initialize(HWND hwnd, Device* device, Swapchain* swapchain, int width, int height);
+    // hwnd is a NativeWindowHandle (HWND on Win32, SDL_Window* on SDL2 builds).
+    bool Initialize(NativeWindowHandle hwnd, Device* device, Swapchain* swapchain, int width, int height);
     void LoadProject(const std::string& manifestPath);
     void SetLooping(bool enabled) { m_loopPlayback = enabled; }
     bool IsLooping() const { return m_loopPlayback; }
@@ -31,7 +36,10 @@ public:
     bool IsVsyncEnabled() const { return m_vsyncEnabled; }
     
     void Update(double wallTime, float dt);
-    void Render(ID3D12GraphicsCommandList* commandList, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle);
+
+    // Render a frame into the context provided by the platform layer.
+    void Render(const RenderContext& context);
+
     void OnResize(int width, int height);
     void Shutdown();
 
@@ -39,8 +47,11 @@ private:
     void SetActiveScene(int index);
     bool CompileScene(int sceneIndex);
     void EnsureSceneTexture(int sceneIndex);
-    void RenderScene(ID3D12GraphicsCommandList* commandList, int sceneIndex, double time);
     std::string GetTransitionShader(const std::string& transitionPresetStem);
+    bool EnsureTransitionPipeline(const std::string& transitionPresetStem);
+    void PrimeRuntimeResources();
+
+#ifdef SHADERLAB_GFX_D3D12
     void EnsurePostFxResources(Scene& scene);
     void EnsurePostFxHistory(Scene::PostFXEffect& effect);
     bool CompilePostFxEffect(Scene::PostFXEffect& effect, int sceneIndex, int fxIndex);
@@ -58,9 +69,9 @@ private:
     ID3D12Resource* GetSceneFinalTexture(ID3D12GraphicsCommandList* commandList,
                                         int sceneIndex,
                                         double timeSeconds);
-    bool EnsureTransitionPipeline(const std::string& transitionPresetStem);
-    void PrimeRuntimeResources();
-    
+    void RenderScene(ID3D12GraphicsCommandList* commandList, int sceneIndex, double time);
+#endif
+
     // Core Refs
     Device* m_device = nullptr;
     Swapchain* m_swapchain = nullptr;
@@ -96,12 +107,14 @@ private:
     // Render Resources
     uint32_t m_width = 0;
     uint32_t m_height = 0;
-    
+
+#ifdef SHADERLAB_GFX_D3D12    
     ComPtr<ID3D12Resource> m_dummyTexture;
     ComPtr<ID3D12DescriptorHeap> m_dummySrvHeap;
     ComPtr<ID3D12DescriptorHeap> m_dummyRtvHeap;
     bool m_dummyTextureInitialized = false;
     ComPtr<ID3D12DescriptorHeap> m_imguiSrvHeap; // Dedicated heap for ImGui
+#endif
     
     // Debug State
     bool m_showDebug = false;
@@ -125,12 +138,14 @@ private:
     std::string m_currentTransitionStem;
     int m_pendingActiveScene = -2;
     int m_transitionJustCompletedBeat = -1;
-    
+
+#ifdef SHADERLAB_GFX_D3D12
     ComPtr<ID3D12PipelineState> m_transitionPSO;
     ComPtr<ID3D12DescriptorHeap> m_transitionSrvHeap;
-    std::string m_compiledTransitionStem;
     std::unordered_map<std::string, ComPtr<ID3D12PipelineState>> m_transitionPsoCache;
+#endif
 
+    std::string m_compiledTransitionStem;
     std::vector<int> m_renderStack;
     std::vector<uint8_t> m_precompiledVertexShader;
     std::unordered_map<std::string, std::vector<uint8_t>> m_transitionBytecode;

@@ -98,9 +98,49 @@ option(SHADERLAB_TINY_TRACE "Enable lean tiny-player diagnostics via OutputDebug
 option(SHADERLAB_TINY_DEV_OVERLAY "Enable tiny-player on-screen diagnostic overlay" OFF)
 set(CRINKLER_PATH "" CACHE FILEPATH "Path to crinkler.exe")
 
-# Platform check
-if(NOT WIN32)
-    message(FATAL_ERROR "ShaderLab currently supports Windows only")
+# ---------------------------------------------------------------------------
+# Graphics and window backend selection
+# ---------------------------------------------------------------------------
+set(SHADERLAB_GRAPHICS_BACKEND "auto" CACHE STRING
+    "Graphics backend: auto (platform default), d3d12, or vulkan")
+set(SHADERLAB_WINDOW_BACKEND "auto" CACHE STRING
+    "Window backend: auto (platform default), win32, or sdl2")
+
+# Resolve "auto" to the platform default.
+if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "auto")
+    if(WIN32)
+        set(SHADERLAB_GRAPHICS_BACKEND "d3d12")
+    else()
+        set(SHADERLAB_GRAPHICS_BACKEND "vulkan")
+    endif()
+endif()
+
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "auto")
+    if(WIN32)
+        set(SHADERLAB_WINDOW_BACKEND "win32")
+    else()
+        set(SHADERLAB_WINDOW_BACKEND "sdl2")
+    endif()
+endif()
+
+message(STATUS "ShaderLab graphics backend : ${SHADERLAB_GRAPHICS_BACKEND}")
+message(STATUS "ShaderLab window backend   : ${SHADERLAB_WINDOW_BACKEND}")
+
+# Validate the combination.
+if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "d3d12" AND NOT WIN32)
+    message(FATAL_ERROR "The D3D12 backend is only available on Windows.")
+endif()
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "win32" AND NOT WIN32)
+    message(FATAL_ERROR "The Win32 window backend is only available on Windows.")
+endif()
+
+# Find external dependencies for the Vulkan/SDL2 path.
+if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "vulkan")
+    find_package(Vulkan REQUIRED)
+endif()
+
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "sdl2")
+    find_package(SDL2 REQUIRED)
 endif()
 
 if(MSVC AND SHADERLAB_STATIC_RUNTIME)
@@ -143,20 +183,75 @@ endfunction()
 add_subdirectory(third_party)
 
 # Core modules
+# Graphics-backend-specific sources
+if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "d3d12")
+    set(SHADERLAB_GFX_SOURCES
+        src/graphics/Device.cpp
+        src/graphics/Swapchain.cpp
+        src/graphics/CommandQueue.cpp
+        src/graphics/PreviewRenderer.cpp
+        src/graphics/EffectChainProcessor.cpp
+        src/graphics/Dx12ResourceService.cpp
+    )
+    set(SHADERLAB_SHADER_SOURCES
+        src/shader/ShaderCompiler.cpp
+    )
+elseif(SHADERLAB_GRAPHICS_BACKEND STREQUAL "vulkan")
+    set(SHADERLAB_GFX_SOURCES
+        src/graphics/vulkan/VulkanDevice.cpp
+        src/graphics/vulkan/VulkanSwapchain.cpp
+        src/graphics/vulkan/VulkanCommandQueue.cpp
+        src/graphics/vulkan/VulkanRenderer.cpp
+    )
+    set(SHADERLAB_SHADER_SOURCES
+        src/shader/ShaderCompiler_posix.cpp
+    )
+endif()
+
+# Window-backend-specific player sources
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "win32")
+    set(SHADERLAB_PLAYER_WINDOW_SOURCES
+        src/app/runtime/DemoPlayer.cpp
+        src/app/runtime/PlayerApp.cpp
+        src/app/runtime/RuntimeStartupPolicy.cpp
+        src/app/runtime/RuntimeWindowPolicy.cpp
+    )
+    set(SHADERLAB_EDITOR_MAIN_SOURCES
+        src/app/ShaderLabMain/main.cpp
+        src/app/ShaderLabMain/ShaderLabApp.cpp
+        src/app/ShaderLabMain/ShaderLabApp.rc
+    )
+    set(SHADERLAB_PLAYER_MAIN_SOURCES
+        src/app/runtime/main_player.cpp
+    )
+    set(SHADERLAB_SCREENSAVER_MAIN_SOURCES
+        src/app/runtime/main_screensaver.cpp
+    )
+elseif(SHADERLAB_WINDOW_BACKEND STREQUAL "sdl2")
+    set(SHADERLAB_PLAYER_WINDOW_SOURCES
+        src/app/runtime/PlayerApp_sdl2.cpp
+        src/app/runtime/RuntimeStartupPolicy_posix.cpp
+        src/app/runtime/RuntimeWindowPolicy_sdl2.cpp
+    )
+    set(SHADERLAB_EDITOR_MAIN_SOURCES
+        src/app/ShaderLabMain/main_sdl2.cpp
+        src/app/ShaderLabMain/ShaderLabApp.cpp
+    )
+    set(SHADERLAB_PLAYER_MAIN_SOURCES
+        src/app/runtime/main_player.cpp   # TODO: replace with main_player_sdl2.cpp
+    )
+    set(SHADERLAB_SCREENSAVER_MAIN_SOURCES "")  # No screensaver on POSIX
+endif()
+
 set(SHADERLAB_CORE_RUNTIME_SOURCES
-    src/graphics/Device.cpp
-    src/graphics/Swapchain.cpp
-    src/graphics/CommandQueue.cpp
-    src/graphics/PreviewRenderer.cpp
-    src/graphics/EffectChainProcessor.cpp
-    src/shader/ShaderCompiler.cpp
+    ${SHADERLAB_GFX_SOURCES}
+    ${SHADERLAB_SHADER_SOURCES}
     src/audio/BeatClock.cpp
     src/core/Serializer.cpp
     src/core/PackageManager.cpp
     src/core/PlaybackService.cpp
     src/core/DxcCompilationService.cpp
     src/audio/AudioSystem.cpp
-    src/graphics/Dx12ResourceService.cpp
 )
 
 
@@ -181,10 +276,7 @@ set(SHADERLAB_COREAPI_HEADER_SOURCES
 )
 
 set(SHADERLAB_PLAYER_RUNTIME_SOURCES
-    src/app/runtime/DemoPlayer.cpp
-    src/app/runtime/PlayerApp.cpp
-    src/app/runtime/RuntimeStartupPolicy.cpp
-    src/app/runtime/RuntimeWindowPolicy.cpp
+    ${SHADERLAB_PLAYER_WINDOW_SOURCES}
     include/ShaderLab/App/DemoPlayer.h
     include/ShaderLab/App/PlayerApp.h
     include/ShaderLab/Runtime/RuntimeStartupPolicy.h
@@ -279,12 +371,27 @@ target_include_directories(ShaderLabCoreApi PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
 )
 
-target_link_libraries(ShaderLabCoreApi PUBLIC
-    d3d12.lib
-    dxgi.lib
-    dxguid.lib
-    d3dcompiler.lib
-)
+# Backend-specific compile definitions and link libraries for ShaderLabCoreApi.
+if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "d3d12")
+    target_compile_definitions(ShaderLabCoreApi PUBLIC SHADERLAB_GFX_D3D12=1)
+    target_link_libraries(ShaderLabCoreApi PUBLIC
+        d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib
+    )
+elseif(SHADERLAB_GRAPHICS_BACKEND STREQUAL "vulkan")
+    target_compile_definitions(ShaderLabCoreApi PUBLIC SHADERLAB_GFX_VULKAN=1)
+    target_link_libraries(ShaderLabCoreApi PUBLIC Vulkan::Vulkan ${CMAKE_DL_LIBS})
+    target_include_directories(ShaderLabCoreApi PUBLIC
+        ${Vulkan_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/ShaderLab/Graphics/Vulkan
+    )
+endif()
+
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "win32")
+    target_compile_definitions(ShaderLabCoreApi PUBLIC SHADERLAB_WINDOW_WIN32=1)
+elseif(SHADERLAB_WINDOW_BACKEND STREQUAL "sdl2")
+    target_compile_definitions(ShaderLabCoreApi PUBLIC SHADERLAB_WINDOW_SDL2=1)
+    target_link_libraries(ShaderLabCoreApi PUBLIC SDL2::SDL2)
+endif()
 
 if(SHADERLAB_BUILD_EDITOR OR (SHADERLAB_BUILD_RUNTIME AND SHADERLAB_RUNTIME_IMGUI))
     target_link_libraries(ShaderLabCoreApi PUBLIC imgui)
@@ -300,12 +407,11 @@ target_include_directories(ShaderLabDevKit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
 )
 
-target_link_libraries(ShaderLabDevKit PUBLIC
-    d3d12.lib
-    dxgi.lib
-    dxguid.lib
-    d3dcompiler.lib
-)
+target_link_libraries(ShaderLabDevKit PUBLIC ShaderLabCoreApi)
+
+if(SHADERLAB_WINDOW_BACKEND STREQUAL "sdl2")
+    target_link_libraries(ShaderLabDevKit PUBLIC SDL2::SDL2)
+endif()
 
 if(SHADERLAB_BUILD_EDITOR OR (SHADERLAB_BUILD_RUNTIME AND SHADERLAB_RUNTIME_IMGUI))
     target_link_libraries(ShaderLabDevKit PUBLIC imgui)
@@ -382,13 +488,18 @@ if(SHADERLAB_BUILD_EDITOR)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
     )
 
-    target_link_libraries(ShaderLabEditorLib PUBLIC
-        d3d12.lib
-        dxgi.lib
-        dxguid.lib
-        d3dcompiler.lib
-        imgui
-    )
+    if(SHADERLAB_GRAPHICS_BACKEND STREQUAL "d3d12")
+        target_link_libraries(ShaderLabEditorLib PUBLIC
+            d3d12.lib dxgi.lib dxguid.lib d3dcompiler.lib imgui
+        )
+    elseif(SHADERLAB_GRAPHICS_BACKEND STREQUAL "vulkan")
+        target_link_libraries(ShaderLabEditorLib PUBLIC
+            Vulkan::Vulkan imgui
+        )
+        if(SHADERLAB_WINDOW_BACKEND STREQUAL "sdl2")
+            target_link_libraries(ShaderLabEditorLib PUBLIC SDL2::SDL2)
+        endif()
+    endif()
 endif()
 
 if(MSVC)
@@ -401,12 +512,17 @@ endif()
 
 # Editor executable
 if(SHADERLAB_BUILD_EDITOR)
-    add_executable(ShaderLabIIDE WIN32
-        src/app/ShaderLabMain/main.cpp
-        src/app/ShaderLabMain/ShaderLabApp.cpp
-        src/app/ShaderLabMain/ShaderLabApp.rc
-        include/ShaderLab/App/ShaderLabApp.h
-    )
+    if(WIN32)
+        add_executable(ShaderLabIIDE WIN32
+            ${SHADERLAB_EDITOR_MAIN_SOURCES}
+            include/ShaderLab/App/ShaderLabApp.h
+        )
+    else()
+        add_executable(ShaderLabIIDE
+            ${SHADERLAB_EDITOR_MAIN_SOURCES}
+            include/ShaderLab/App/ShaderLabApp.h
+        )
+    endif()
     
     target_link_libraries(ShaderLabIIDE PRIVATE ShaderLabEditorLib ShaderLabDevKitBuildTools ShaderLabCoreApi)
     
@@ -429,7 +545,7 @@ if(SHADERLAB_BUILD_EDITOR)
     )
     
     # Show console window in debug builds for error messages
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_link_options(ShaderLabIIDE PRIVATE "/SUBSYSTEM:CONSOLE" "/ENTRY:WinMainCRTStartup")
     endif()
 
@@ -523,10 +639,17 @@ endif()
 
 # Runtime executable
 if(SHADERLAB_BUILD_RUNTIME)
-    add_executable(ShaderLabPlayer WIN32
-        src/app/runtime/main_player.cpp
-        include/ShaderLab/App/PlayerApp.h
-    )
+    if(WIN32)
+        add_executable(ShaderLabPlayer WIN32
+            ${SHADERLAB_PLAYER_MAIN_SOURCES}
+            include/ShaderLab/App/PlayerApp.h
+        )
+    else()
+        add_executable(ShaderLabPlayer
+            ${SHADERLAB_PLAYER_MAIN_SOURCES}
+            include/ShaderLab/App/PlayerApp.h
+        )
+    endif()
     
     target_link_libraries(ShaderLabPlayer PRIVATE ShaderLabDevKit ShaderLabCoreApi)
     
@@ -541,7 +664,7 @@ if(SHADERLAB_BUILD_RUNTIME)
         "ShaderLabPlayer.exe"
     )
 
-    if(MSVC AND SHADERLAB_TINY_PLAYER)
+    if(WIN32 AND MSVC AND SHADERLAB_TINY_PLAYER)
         if(SHADERLAB_USE_CRINKLER)
             target_link_options(ShaderLabPlayer PRIVATE
                 /INCREMENTAL:NO
@@ -563,48 +686,51 @@ if(SHADERLAB_BUILD_RUNTIME)
         endif()
     endif()
 
-    add_executable(ShaderLabScreenSaver WIN32
-        src/app/runtime/main_screensaver.cpp
-        include/ShaderLab/App/PlayerApp.h
-    )
+    # ShaderLabScreenSaver is Windows-only (Win32 .scr format).
+    if(WIN32 AND SHADERLAB_SCREENSAVER_MAIN_SOURCES)
+        add_executable(ShaderLabScreenSaver WIN32
+            ${SHADERLAB_SCREENSAVER_MAIN_SOURCES}
+            include/ShaderLab/App/PlayerApp.h
+        )
 
-    target_link_libraries(ShaderLabScreenSaver PRIVATE ShaderLabDevKit ShaderLabCoreApi)
+        target_link_libraries(ShaderLabScreenSaver PRIVATE ShaderLabDevKit ShaderLabCoreApi)
 
-    target_include_directories(ShaderLabScreenSaver PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
+        target_include_directories(ShaderLabScreenSaver PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
 
-    set_target_properties(ShaderLabScreenSaver PROPERTIES SUFFIX ".scr")
+        set_target_properties(ShaderLabScreenSaver PROPERTIES SUFFIX ".scr")
 
-    shaderlab_add_version_resource(
-        ShaderLabScreenSaver
-        "ShaderLab Screen Saver"
-        "ShaderLabScreenSaver"
-        "ShaderLabScreenSaver.scr"
-    )
+        shaderlab_add_version_resource(
+            ShaderLabScreenSaver
+            "ShaderLab Screen Saver"
+            "ShaderLabScreenSaver"
+            "ShaderLabScreenSaver.scr"
+        )
 
-    if(MSVC AND SHADERLAB_TINY_PLAYER)
-        if(SHADERLAB_USE_CRINKLER)
-            target_link_options(ShaderLabScreenSaver PRIVATE
-                /INCREMENTAL:NO
-                /MANIFEST:NO
-                /RELEASE
-                /COMPMODE:SLOW
-                /ORDERTRIES:80
-                /UNALIGNCODE
-            )
-        else()
-            target_link_options(ShaderLabScreenSaver PRIVATE
-                /INCREMENTAL:NO
-                /OPT:REF
-                /OPT:ICF
-                /LTCG
-                /MANIFEST:NO
-                /RELEASE
-            )
+        if(MSVC AND SHADERLAB_TINY_PLAYER)
+            if(SHADERLAB_USE_CRINKLER)
+                target_link_options(ShaderLabScreenSaver PRIVATE
+                    /INCREMENTAL:NO
+                    /MANIFEST:NO
+                    /RELEASE
+                    /COMPMODE:SLOW
+                    /ORDERTRIES:80
+                    /UNALIGNCODE
+                )
+            else()
+                target_link_options(ShaderLabScreenSaver PRIVATE
+                    /INCREMENTAL:NO
+                    /OPT:REF
+                    /OPT:ICF
+                    /LTCG
+                    /MANIFEST:NO
+                    /RELEASE
+                )
+            endif()
         endif()
     endif()
-endif()
+endif() # SHADERLAB_BUILD_RUNTIME
 
 if(SHADERLAB_BUILD_MICRO_PLAYER)
     add_subdirectory(src/app/tiny)

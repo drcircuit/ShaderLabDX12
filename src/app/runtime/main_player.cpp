@@ -161,5 +161,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     options.vsyncEnabled = vsyncEnabled;
     options.startFullscreen = startFullscreen;
 
-    return ShaderLab::RunPlayerApp(hInstance, options);
+    return ShaderLab::RunPlayerApp(reinterpret_cast<ShaderLab::NativeAppHandle>(hInstance), options);
 }

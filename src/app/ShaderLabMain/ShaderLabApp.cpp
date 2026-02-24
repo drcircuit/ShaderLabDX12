@@ -3,6 +3,7 @@
 #include "ShaderLab/Graphics/CommandQueue.h"
 #include "ShaderLab/Graphics/Swapchain.h"
 #include "ShaderLab/Graphics/PreviewRenderer.h"
+#include "ShaderLab/Platform/Platform.h"
 #include "ShaderLab/UI/ShaderLabIDE.h"
 #include "ShaderLab/Audio/AudioSystem.h"
 #include "ShaderLab/Audio/BeatClock.h"
@@ -22,6 +23,10 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 namespace ShaderLab {
 
 namespace {
+
+// Cast the opaque NativeWindowHandle back to HWND for Win32 API calls.
+inline HWND ToHwnd(NativeWindowHandle h) { return reinterpret_cast<HWND>(h); }
+
 std::wstring ToWide(const std::string& value) {
     if (value.empty()) {
         return std::wstring();
@@ -55,12 +60,13 @@ std::string GetShaderLabLogPath() {
 ShaderLabApp::ShaderLabApp() = default;
 ShaderLabApp::~ShaderLabApp() = default;
 
-bool ShaderLabApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
-    m_width = width;
+bool ShaderLabApp::Initialize(NativeWindowHandle hwnd, uint32_t width, uint32_t height) {
+    m_width  = width;
     m_height = height;
-    m_hwnd = hwnd;
-    
-    SetWindowTextW(m_hwnd, L"DrCiRCUiT's ShaderLab - For democoders, by a democoder - untitled");
+    m_hwnd   = hwnd;
+
+    HWND nativeHwnd = reinterpret_cast<HWND>(hwnd);
+    SetWindowTextW(nativeHwnd, L"DrCiRCUiT's ShaderLab - For democoders, by a democoder - untitled");
 
     if (m_useCustomTitlebar) {
         ConfigureCustomTitlebar();
@@ -81,14 +87,14 @@ bool ShaderLabApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
 
     m_swapchain = std::make_unique<Swapchain>();
     if (!m_swapchain->Initialize(m_device.get(), m_commandQueue.get(), hwnd, width, height)) {
-        MessageBoxW(hwnd, L"Failed to initialize Swapchain", L"Initialization Error", MB_OK | MB_ICONERROR);
+        MessageBoxW(nativeHwnd, L"Failed to initialize Swapchain", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
 
     // Initialize UI
     m_ui = std::make_unique<ShaderLabIDE>();
     if (!m_ui->Initialize(hwnd, m_device.get(), m_swapchain.get())) {
-        MessageBoxW(hwnd, L"Failed to initialize UI System", L"Initialization Error", MB_OK | MB_ICONERROR);
+        MessageBoxW(nativeHwnd, L"Failed to initialize UI System", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
 
@@ -138,11 +144,12 @@ bool ShaderLabApp::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
 }
 
 void ShaderLabApp::ConfigureCustomTitlebar() {
+    HWND nativeHwnd = ToHwnd(m_hwnd);
     BOOL enableDark = TRUE;
-    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enableDark, sizeof(enableDark));
+    DwmSetWindowAttribute(nativeHwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enableDark, sizeof(enableDark));
 
     MARGINS margins = {0, 0, 1, 0};
-    DwmExtendFrameIntoClientArea(m_hwnd, &margins);
+    DwmExtendFrameIntoClientArea(nativeHwnd, &margins);
 }
 
 void ShaderLabApp::Shutdown() {
@@ -414,25 +421,25 @@ void ShaderLabApp::UpdateWindowTitle() {
     }
     if (wtitle != m_lastWindowTitle) {
         SetLastError(0);
-        BOOL okW = SetWindowTextW(m_hwnd, wtitle.c_str());
+        BOOL okW = SetWindowTextW(ToHwnd(m_hwnd), wtitle.c_str());
         DWORD errW = GetLastError();
 
         SetLastError(0);
-        BOOL okA = SetWindowTextA(m_hwnd, title.c_str());
+        BOOL okA = SetWindowTextA(ToHwnd(m_hwnd), title.c_str());
         DWORD errA = GetLastError();
-        int length = GetWindowTextLengthW(m_hwnd);
+        int length = GetWindowTextLengthW(ToHwnd(m_hwnd));
         std::wstring readback;
         if (length > 0) {
             readback.resize(static_cast<size_t>(length));
-            int readLen = GetWindowTextW(m_hwnd, readback.data(), length + 1);
+            int readLen = GetWindowTextW(ToHwnd(m_hwnd), readback.data(), length + 1);
             if (readLen >= 0 && readLen < length) {
                 readback.resize(static_cast<size_t>(readLen));
             }
         }
 
         if (length <= 1) {
-            SetWindowTextW(m_hwnd, wtitle.c_str());
-            SetWindowTextA(m_hwnd, title.c_str());
+            SetWindowTextW(ToHwnd(m_hwnd), wtitle.c_str());
+            SetWindowTextA(ToHwnd(m_hwnd), title.c_str());
         }
 
         FILE* f = nullptr;

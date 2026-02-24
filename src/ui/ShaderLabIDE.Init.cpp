@@ -19,12 +19,14 @@ namespace ShaderLab {
 
 namespace fs = std::filesystem;
 
-bool ShaderLabIDE::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
+bool ShaderLabIDE::Initialize(NativeWindowHandle hwnd, Device* device, Swapchain* swapchain) {
     if (!device || !device->IsValid() || !swapchain || !hwnd) {
         return false;
     }
 
-    m_hwnd = hwnd;
+    // Cast opaque handle to Win32 HWND for D3D12/Win32 ImGui backend.
+    HWND nativeHwnd = reinterpret_cast<HWND>(hwnd);
+    m_hwnd = nativeHwnd;
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -35,7 +37,7 @@ bool ShaderLabIDE::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    float dpiScale = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd);
+    float dpiScale = ImGui_ImplWin32_GetDpiScaleForHwnd(nativeHwnd);
     if (dpiScale < 1.0f) {
         dpiScale = 1.0f;
     }
@@ -147,7 +149,7 @@ bool ShaderLabIDE::Initialize(HWND hwnd, Device* device, Swapchain* swapchain) {
     CreateDescriptorHeap(device);
 
     // Setup platform/renderer backends
-    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplWin32_Init(nativeHwnd);
     ImGui_ImplDX12_Init(
         device->GetDevice(),
         Swapchain::BUFFER_COUNT,
