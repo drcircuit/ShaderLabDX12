@@ -1,10 +1,11 @@
 #pragma once
 
+#include "ShaderLab/Platform/Platform.h"
 #include <cstdint>
 
+#ifdef SHADERLAB_GFX_D3D12
 #include <d3d12.h>
 #include <wrl/client.h>
-
 using Microsoft::WRL::ComPtr;
 
 namespace ShaderLab {
@@ -47,3 +48,46 @@ public:
 };
 
 } // namespace ShaderLab
+
+#elif defined(SHADERLAB_GFX_VULKAN)
+#include <vulkan/vulkan.h>
+
+namespace ShaderLab {
+
+struct TextureAllocationRequest {
+    uint32_t width  = 1;
+    uint32_t height = 1;
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+};
+
+struct TextureResourceAllocationRequest : TextureAllocationRequest {
+    uint32_t depth       = 1;
+    uint32_t mipLevels   = 1;
+    uint32_t arrayLayers = 1;
+};
+
+struct ResourceBufferAllocationRequest {
+    uint64_t sizeBytes = 0;
+    VkBufferUsageFlags    usage   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    VkMemoryPropertyFlags memFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+};
+
+class IResourceService {
+public:
+    virtual ~IResourceService() = default;
+    // Vulkan-specific allocation methods TBD with chosen allocator (e.g. VMA)
+};
+
+} // namespace ShaderLab
+
+#else
+
+namespace ShaderLab {
+struct TextureAllocationRequest { uint32_t width = 1; uint32_t height = 1; };
+struct TextureResourceAllocationRequest : TextureAllocationRequest {};
+struct ResourceBufferAllocationRequest { uint64_t sizeBytes = 0; };
+class IResourceService { public: virtual ~IResourceService() = default; };
+} // namespace ShaderLab
+
+#endif

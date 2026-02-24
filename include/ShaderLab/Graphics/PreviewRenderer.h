@@ -1,12 +1,15 @@
 #pragma once
 
-#include <d3d12.h>
-#include <wrl/client.h>
+#include "ShaderLab/Platform/Platform.h"
 #include <cstddef>
 #include <string>
 #include <vector>
 
+#ifdef SHADERLAB_GFX_D3D12
+#include <d3d12.h>
+#include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
+#endif
 
 namespace ShaderLab {
 
@@ -19,14 +22,14 @@ public:
     PreviewRenderer();
     ~PreviewRenderer();
 
-    bool Initialize(Device* device, ShaderCompiler* compiler, DXGI_FORMAT renderTargetFormat, const std::vector<uint8_t>* precompiledVertexShader = nullptr);
-    void Shutdown();
-
-
     struct TextureDecl {
         int slot;
         std::string type; // "Texture2D", "TextureCube", "Texture3D"
     };
+
+#ifdef SHADERLAB_GFX_D3D12
+    bool Initialize(Device* device, ShaderCompiler* compiler, DXGI_FORMAT renderTargetFormat, const std::vector<uint8_t>* precompiledVertexShader = nullptr);
+    void Shutdown();
 
     // Compile and return pipeline state.
     ComPtr<ID3D12PipelineState> CompileShader(const std::string& shaderSource, const std::vector<TextureDecl>& textureDecls, std::vector<std::string>& outErrors);
@@ -55,32 +58,40 @@ public:
                 float fBarBeat = 0.0f);
 
     bool IsValid(ID3D12PipelineState* pso) const { return pso != nullptr; }
+#else
+    bool Initialize(Device* device, ShaderCompiler* compiler, uint32_t renderTargetFormat, const std::vector<uint8_t>* precompiledVertexShader = nullptr);
+    void Shutdown();
+    bool IsValid(void* pso) const { return pso != nullptr; }
+#endif
 
-    float GetLastGPUTimeMs() const { return m_lastGPUTimeMs; }
+    float  GetLastGPUTimeMs()              const { return m_lastGPUTimeMs; }
     size_t GetLastCompiledPixelShaderSize() const { return m_lastCompiledPixelShaderSize; }
 
 private:
+#ifdef SHADERLAB_GFX_D3D12
     bool CreateRootSignature();
     bool CreatePipelineState(const std::vector<uint8_t>& pixelShaderBytecode, ComPtr<ID3D12PipelineState>& outPso);
     void CreateFullscreenQuadVertices();
 
-    Device* m_device = nullptr;
+    Device*      m_device  = nullptr;
     ShaderCompiler* m_compiler = nullptr;
-    DXGI_FORMAT m_renderTargetFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    DXGI_FORMAT  m_renderTargetFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     ComPtr<ID3D12RootSignature> m_rootSignature;
     
     // Fullscreen quad
-    ComPtr<ID3D12Resource> m_vertexBuffer;
-    D3D12_VERTEX_BUFFER_VIEW m_vertexBufferView{};
+    ComPtr<ID3D12Resource>    m_vertexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW  m_vertexBufferView{};
     
     std::vector<uint8_t> m_vertexShaderBytecode;
 
     // Timestamp queries
     ComPtr<ID3D12QueryHeap> m_queryHeap;
-    ComPtr<ID3D12Resource> m_queryResultBuffer;
+    ComPtr<ID3D12Resource>  m_queryResultBuffer;
     uint64_t m_gpuFrequency = 0;
-    float m_lastGPUTimeMs = 0.0f;
+#endif
+
+    float  m_lastGPUTimeMs = 0.0f;
     size_t m_lastCompiledPixelShaderSize = 0;
 };
 

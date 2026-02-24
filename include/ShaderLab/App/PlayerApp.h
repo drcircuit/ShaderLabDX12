@@ -1,6 +1,6 @@
 #pragma once
 
-#include <windows.h>
+#include "ShaderLab/Platform/Platform.h"
 
 namespace ShaderLab {
 
@@ -12,6 +12,7 @@ struct PlayerLaunchOptions {
     bool startFullscreen = true;
 };
 
-int RunPlayerApp(HINSTANCE hInstance, const PlayerLaunchOptions& options);
+// appHandle maps to HINSTANCE on Windows, or nullptr on POSIX platforms.
+int RunPlayerApp(NativeAppHandle appHandle, const PlayerLaunchOptions& options);
 
 } // namespace ShaderLab

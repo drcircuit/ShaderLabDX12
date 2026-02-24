@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string>
-#include <windows.h>
+#include "ShaderLab/Platform/Platform.h"
 
 namespace ShaderLab {
 class CommandQueue;
@@ -10,8 +10,9 @@ class Swapchain;
 
 namespace ShaderLab::RuntimeWindowPolicy {
 
+// hwnd is a NativeWindowHandle (HWND on Win32, SDL_Window* on SDL2 builds).
 void UpdateWindowTitleWithStats(
-    HWND hwnd,
+    NativeWindowHandle hwnd,
     const std::string& baseWindowTitle,
     float lastMeasuredFps,
     bool vsyncEnabled,
@@ -21,18 +22,18 @@ void UpdateWindowTitleWithStats(
 bool PresentInitialBlackFrame(CommandQueue* commandQueue, Swapchain* swapchain);
 
 void SetFullscreen(
-    HWND hwnd,
+    NativeWindowHandle hwnd,
     bool& windowed,
-    RECT& windowedRect,
+    WindowRect& windowedRect,
     const std::string& baseWindowTitle,
     float lastMeasuredFps,
     bool vsyncEnabled,
     bool screenSaverMode);
 
 void SetWindowed(
-    HWND hwnd,
+    NativeWindowHandle hwnd,
     bool& windowed,
-    RECT& windowedRect,
+    WindowRect& windowedRect,
     const std::string& baseWindowTitle,
     float lastMeasuredFps,
     bool vsyncEnabled,
