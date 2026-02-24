@@ -41,8 +41,14 @@ void VulkanSwapchain::Shutdown() {
     VkDevice vkDevice = m_device->GetDevice();
     vkDeviceWaitIdle(vkDevice);
 
-    if (m_renderFinishedSemaphore) { vkDestroySemaphore(vkDevice, m_renderFinishedSemaphore, nullptr); m_renderFinishedSemaphore = VK_NULL_HANDLE; }
-    if (m_imageAvailableSemaphore) { vkDestroySemaphore(vkDevice, m_imageAvailableSemaphore, nullptr); m_imageAvailableSemaphore = VK_NULL_HANDLE; }
+    if (m_renderFinishedSemaphore) {
+        vkDestroySemaphore(vkDevice, m_renderFinishedSemaphore, nullptr);
+        m_renderFinishedSemaphore = VK_NULL_HANDLE;
+    }
+    if (m_imageAvailableSemaphore) {
+        vkDestroySemaphore(vkDevice, m_imageAvailableSemaphore, nullptr);
+        m_imageAvailableSemaphore = VK_NULL_HANDLE;
+    }
 
     DestroySwapchainObjects();
     m_device = nullptr;
@@ -235,13 +241,19 @@ void VulkanSwapchain::CreateFramebuffers() {
 
 void VulkanSwapchain::DestroySwapchainObjects() {
     VkDevice vkDevice = m_device->GetDevice();
-    for (auto fb : m_framebuffers) vkDestroyFramebuffer(vkDevice, fb, nullptr);
+    for (auto fb : m_framebuffers) { vkDestroyFramebuffer(vkDevice, fb, nullptr); }
     m_framebuffers.clear();
-    if (m_renderPass) { vkDestroyRenderPass(vkDevice, m_renderPass, nullptr); m_renderPass = VK_NULL_HANDLE; }
-    for (auto iv : m_imageViews) vkDestroyImageView(vkDevice, iv, nullptr);
+    if (m_renderPass) {
+        vkDestroyRenderPass(vkDevice, m_renderPass, nullptr);
+        m_renderPass = VK_NULL_HANDLE;
+    }
+    for (auto iv : m_imageViews) { vkDestroyImageView(vkDevice, iv, nullptr); }
     m_imageViews.clear();
     m_images.clear();
-    if (m_swapchain) { vkDestroySwapchainKHR(vkDevice, m_swapchain, nullptr); m_swapchain = VK_NULL_HANDLE; }
+    if (m_swapchain) {
+        vkDestroySwapchainKHR(vkDevice, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
 }
 
 } // namespace ShaderLab

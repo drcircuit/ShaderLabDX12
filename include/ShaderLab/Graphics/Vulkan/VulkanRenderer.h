@@ -81,9 +81,10 @@ private:
     bool CreateVertexBuffer();
     VkShaderModule CreateShaderModule(const std::vector<uint8_t>& spirv);
 
-    VulkanDevice*   m_device   = nullptr;
-    ShaderCompiler* m_compiler = nullptr;
-    VkFormat        m_format   = VK_FORMAT_B8G8R8A8_UNORM;
+    VulkanDevice*   m_device     = nullptr;
+    ShaderCompiler* m_compiler   = nullptr;
+    VkFormat        m_format     = VK_FORMAT_B8G8R8A8_UNORM;
+    VkRenderPass    m_renderPass = VK_NULL_HANDLE; // Stored from Initialize()
 
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkBuffer         m_vertexBuffer   = VK_NULL_HANDLE;

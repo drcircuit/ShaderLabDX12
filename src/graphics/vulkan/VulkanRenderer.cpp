@@ -52,9 +52,10 @@ bool VulkanRenderer::Initialize(VulkanDevice*             device,
                                  VkRenderPass              renderPass,
                                  const std::vector<uint8_t>* precompiledVertexShader) {
     if (!device || !device->IsValid()) return false;
-    m_device   = device;
-    m_compiler = compiler;
-    m_format   = renderTargetFormat;
+    m_device     = device;
+    m_compiler   = compiler;
+    m_format     = renderTargetFormat;
+    m_renderPass = renderPass; // Store for pipeline creation
 
     if (precompiledVertexShader && !precompiledVertexShader->empty()) {
         m_vertexSpirV = *precompiledVertexShader;
@@ -199,8 +200,7 @@ VkPipeline VulkanRenderer::CreatePipelineFromSpirV(const std::vector<uint8_t>& s
     pipelineCi.pColorBlendState    = &blend;
     pipelineCi.pDynamicState       = &dyn;
     pipelineCi.layout              = m_pipelineLayout;
-    // renderPass is set by the caller in VulkanRenderer::Initialize; stored if needed.
-    pipelineCi.renderPass          = VK_NULL_HANDLE; // TODO: store render pass
+    pipelineCi.renderPass          = m_renderPass;  // Use stored render pass from Initialize()
     pipelineCi.subpass             = 0;
 
     VkPipeline pipeline = VK_NULL_HANDLE;

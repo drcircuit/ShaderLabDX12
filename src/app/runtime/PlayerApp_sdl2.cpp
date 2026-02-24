@@ -28,6 +28,7 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <limits.h>   // PATH_MAX (POSIX)
 
 #ifndef SHADERLAB_TINY_PLAYER
 #define SHADERLAB_TINY_PLAYER 0

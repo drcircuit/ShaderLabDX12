@@ -44,10 +44,13 @@ namespace ShaderLab {
 // ---------------------------------------------------------------------------
 // NativeWindowHandle
 //
-// Opaque platform window handle.  Implementation files cast to/from the
-// real platform type:
-//   Windows  – HWND        (reinterpret_cast<HWND>(handle))
-//   SDL2     – SDL_Window* (reinterpret_cast<SDL_Window*>(handle))
+// Opaque platform window handle.  NativeWindowHandleTag is an intentionally
+// incomplete (forward-declared) struct, which makes NativeWindowHandle a
+// distinct pointer type that cannot be accidentally converted to/from void* or
+// other unrelated pointer types at compile time.  Implementation files cast to
+// the concrete platform type at the boundary:
+//   Windows  – reinterpret_cast<HWND>(handle)
+//   SDL2     – reinterpret_cast<SDL_Window*>(handle)
 // ---------------------------------------------------------------------------
 struct NativeWindowHandleTag;
 using NativeWindowHandle = NativeWindowHandleTag*;
@@ -55,8 +58,8 @@ using NativeWindowHandle = NativeWindowHandleTag*;
 // ---------------------------------------------------------------------------
 // NativeAppHandle
 //
-// Opaque platform application/instance handle.
-//   Windows  – HINSTANCE
+// Opaque platform application/instance handle.  Same incomplete-type trick.
+//   Windows  – reinterpret_cast<HINSTANCE>(handle)
 //   POSIX    – not used (pass nullptr)
 // ---------------------------------------------------------------------------
 struct NativeAppHandleTag;

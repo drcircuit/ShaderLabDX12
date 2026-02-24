@@ -86,15 +86,15 @@ bool ShaderLabApp::Initialize(NativeWindowHandle hwnd, uint32_t width, uint32_t 
     }
 
     m_swapchain = std::make_unique<Swapchain>();
-    if (!m_swapchain->Initialize(m_device.get(), m_commandQueue.get(), reinterpret_cast<NativeWindowHandle>(hwnd), width, height)) {
-        MessageBoxW(hwnd, L"Failed to initialize Swapchain", L"Initialization Error", MB_OK | MB_ICONERROR);
+    if (!m_swapchain->Initialize(m_device.get(), m_commandQueue.get(), hwnd, width, height)) {
+        MessageBoxW(nativeHwnd, L"Failed to initialize Swapchain", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
 
     // Initialize UI
     m_ui = std::make_unique<ShaderLabIDE>();
-    if (!m_ui->Initialize(reinterpret_cast<NativeWindowHandle>(hwnd), m_device.get(), m_swapchain.get())) {
-        MessageBoxW(hwnd, L"Failed to initialize UI System", L"Initialization Error", MB_OK | MB_ICONERROR);
+    if (!m_ui->Initialize(hwnd, m_device.get(), m_swapchain.get())) {
+        MessageBoxW(nativeHwnd, L"Failed to initialize UI System", L"Initialization Error", MB_OK | MB_ICONERROR);
         return false;
     }
 

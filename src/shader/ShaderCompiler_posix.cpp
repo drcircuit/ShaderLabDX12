@@ -78,12 +78,16 @@ std::string WideToUtf8(const std::wstring& value) {
     std::string out;
     out.reserve(value.size());
     for (wchar_t c : value) {
-        if (c < 0x80)      out += static_cast<char>(c);
-        else if (c < 0x800){ out += static_cast<char>(0xC0 | (c >> 6));
-                              out += static_cast<char>(0x80 | (c & 0x3F)); }
-        else               { out += static_cast<char>(0xE0 | (c >> 12));
-                              out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-                              out += static_cast<char>(0x80 | (c & 0x3F)); }
+        if (c < 0x80) {
+            out += static_cast<char>(c);
+        } else if (c < 0x800) {
+            out += static_cast<char>(0xC0 | (c >> 6));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        } else {
+            out += static_cast<char>(0xE0 | (c >> 12));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
     }
     return out;
 }
