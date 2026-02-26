@@ -73,6 +73,13 @@ experiments/
 
 # Local/diagnostic artifacts not intended for source control
 preprocessed.txt
+
+# Generated complexity reports (run tools/complexity_report.ps1 to regenerate)
+reports/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
 _codeql_detected_source_root
 .tmp_*.bat
 *.shaderlab.user.json
